@@ -90,9 +90,9 @@ called decks, and **you will not see any sign of them until you make a second on
 one deck looks exactly like an app that has never heard of decks.
 
 Once there are two, a numbered rail appears down the edge of the canvas. In the sidebar, a
-deck you are not looking at shows a dot when an agent on it is working or has finished. `Alt+Shift+1…9` jumps straight to one.
+deck you are not looking at shows a dot when an agent on it is working or has finished. `Ctrl+1…9` jumps straight to one.
 
-`Alt+Shift+Space` opens the **overview**: every deck at once, drawn to scale from its
+`Ctrl+O` opens the **overview**: every deck at once, drawn to scale from its
 real layout in the agents' colours. Click one to enter it, double-click its name to
 rename it, or **drag a terminal from one deck onto another** — the process keeps
 running, only the rectangle it is drawn in changes.
@@ -105,24 +105,32 @@ that brightens when the pane is focused.
 Everything the app has to explain lives behind **Project / View / Help** rather than as
 text parked next to the terminals.
 
-Keyboard, all on `Alt+Shift` so terminal programs never swallow them:
+Keyboard, like a browser. `Ctrl+T` adds terminals, `Ctrl+W` closes one, `Ctrl+1…9`
+jumps to a deck. Shift is only added when a bare Ctrl chord would steal a key the
+terminal actually uses (`Ctrl+D` is EOF, `Ctrl+S` is XOFF).
 
 | Keys | Does |
 |---|---|
-| `Alt+Shift+←/→/↑/↓` | Move the focused pane to another side |
-| `Alt+Shift+F` | Fullscreen the focused pane, and back |
-| `Alt+Shift+D` / `Alt+Shift+S` | Split right / split down |
-| `Alt+Shift+W` | Close the focused pane |
-| `Alt+Shift+E` | Even out every split |
-| `Alt+Shift+Tab` | Focus the next pane |
-| `Alt+Shift+T` | Add terminals |
-| `Alt+Shift+Space` | Overview of every deck |
-| `Alt+Shift+Enter` | New deck |
-| `Alt+Shift+1…9` | Jump to a deck |
+| `Ctrl+P` | Go to a terminal, deck or action |
+| `F8` | Next waiting agent |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Focus the next / previous pane |
+| `Ctrl+1…9` | Jump to a deck |
+| `Ctrl+T` | Add terminals |
+| `Ctrl+W` | Close the focused pane |
+| `Ctrl+Shift+D` / `Ctrl+Shift+S` | Split right / split down |
+| `F11` | Fullscreen the focused pane, and back |
+| `Ctrl+Shift+E` | Even out every split |
+| `Ctrl+Shift+←/→/↑/↓` | Move the focused pane to another side |
+| `Ctrl+N` | New deck |
+| `Ctrl+O` | Overview of every deck |
+| `Ctrl+B` | Show or hide the sidebar |
+| `F2` | Rename |
 
 These are handled in the **capture phase**, ahead of xterm. xterm calls
 `stopPropagation()` on any chord it turns into an escape sequence, so a normal
-listener would never see the arrow keys at all.
+listener would never see the arrow keys at all. They are also ignored when a real
+text field (rename, a dialog) has focus, so `Ctrl+W` in an input still deletes a
+word.
 
 **Add terminals** asks how many of each agent you want, previews the exact grid you are
 about to get, and can start them in a subdirectory of the project rather than its root.
