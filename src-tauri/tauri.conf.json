@@ -5,9 +5,9 @@
   "version": "0.1.0",
   "identifier": "com.alede.keel",
   "build": {
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "pnpm vite",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "pnpm vite build",
     "frontendDist": "../dist"
   },
   "app": {
