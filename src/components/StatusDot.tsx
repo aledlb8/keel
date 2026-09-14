@@ -2,7 +2,7 @@
  * What an agent is doing, in six pixels.
  *
  * This is the only place in the app that spends colour on status, and it only
- * appears in the sidebar: blue while an agent is working, green once it has
+ * appears in the sidebar: amber while an agent is working, green once it has
  * finished and you have not been back to it. Everything else — idle agents and
  * plain shells alike — is a neutral grey.
  */

@@ -1,7 +1,8 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import "@fontsource-variable/geist";
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/jetbrains-mono";
 @import "@xterm/xterm/css/xterm.css";
 
 @custom-variant dark (&:is(.dark *));
@@ -24,15 +25,16 @@
  *    show — full-bleed square rows were what made the sidebar read as a file
  *    tree rather than as a list of places.
  *
- * 3. **The chrome has no hue.** Hover, selection and pressed are white at three
- *    fixed alphas. With eight agent colours and four status colours already in
+ * 3. **The chrome has no hue.** The surfaces are pure graphite, not blue-black,
+ *    and hover, selection and pressed are white at three fixed alphas. With eight agent colours and four status colours already in
  *    play, an accent on the chrome is the thing that turns the screen to noise.
  *    Colour here answers exactly two questions: which agent, and what is it
  *    doing.
  */
 
 @theme inline {
-    --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+    --font-sans: "Inter Variable", ui-sans-serif, system-ui, "Segoe UI",
+        sans-serif;
     --font-heading: var(--font-sans);
     --font-mono: var(--keel-font-mono);
 
@@ -95,12 +97,18 @@
      *   term-solid   a terminal — lighter than the ground, because it floats
      *   chrome-strong dialogs and menus, the top of the stack
      */
-    --keel-void: #0a0c12;
+    /*
+     * True neutrals — zero chroma. A blue-tinted dark reads as "default dark
+     * theme"; a pure graphite ladder reads as a tool, and it lets the agent
+     * accents be the only colour on screen. Steps follow Radix Gray (dark).
+     */
+    --keel-void: #0a0a0a;
     /* Opaque. Translucent chrome + backdrop-filter sampled the canvas (and
      * the black outside the window) so the footer went darker at the bottom
-     * edge and the whole frame flashed when a deck switched. */
-    --keel-chrome: #151922;
-    --keel-chrome-strong: #181c26;
+     * edge and the whole frame flashed when a deck switched. Mirrored as the
+     * window `backgroundColor` in tauri.conf.json. */
+    --keel-chrome: #161616;
+    --keel-chrome-strong: #1b1b1b;
 
     /* The three states of every interactive surface. No hue, on purpose. */
     --keel-veil-1: rgba(255, 255, 255, 0.04);
@@ -115,7 +123,7 @@
      * inset shadow.
      */
     --keel-sheen: rgba(255, 255, 255, 0.07);
-    --keel-scrim: rgba(6, 7, 11, 0.66);
+    --keel-scrim: rgba(0, 0, 0, 0.62);
 
     /* ---- Type ---------------------------------------------------------- */
     /*
@@ -123,31 +131,23 @@
      * comfortably readable — it carries every unselected row in the sidebar —
      * so the drop to `faint` does the work of pushing counters and paths back.
      */
-    --keel-text: #eaecf2;
-    --keel-text-dim: #a3abbe;
-    --keel-text-faint: #6b7385;
+    --keel-text: #ededed;
+    --keel-text-dim: #a1a1a1;
+    --keel-text-faint: #707070;
 
     /* ---- State (opaque, and the only colour in the chrome) -------------- */
-    /* Agent status, spent only on the sidebar dot. */
-    --keel-working: #6fa4ee;
-    --keel-done: #56cf92;
-    --keel-idle: #6b7385;
-    --keel-dead: #f2777d;
+    /*
+     * Agent status, spent only on the sidebar dot. The deploy-status idiom:
+     * amber is in progress, green is ready, grey is at rest, red is broken.
+     */
+    --keel-working: #e9a23b;
+    --keel-done: #4cc38a;
+    --keel-idle: #707070;
+    --keel-dead: #ec5d5e;
 
     /* ---- Agent identity ------------------------------------------------- */
-    /*
-     * Muted a step from the raw catalogue hues so eight of them can share a
-     * screen without any one of them shouting.
-     */
-    --keel-agent-fallback: #838b9c;
-    --keel-agent-1: #6fa4ee;
-    --keel-agent-2: #6fd39c;
-    --keel-agent-3: #e5bd6c;
-    --keel-agent-4: #dd8fbc;
-    --keel-agent-5: #9a8ff0;
-    --keel-agent-6: #5fc7d4;
-    --keel-agent-7: #e2977a;
-    --keel-agent-8: #b6c1d2;
+    /* Accents come from the catalogue; this is the one an agent without one gets. */
+    --keel-agent-fallback: #8f8f8f;
 
     /* ---- Terminal ------------------------------------------------------- */
     /*
@@ -159,32 +159,38 @@
      */
     --keel-term-bg: var(--keel-term-solid);
     --keel-term-bg-focus: var(--keel-term-solid);
-    --keel-term-solid: #10131b;
+    --keel-term-solid: #111111;
     /* One hairline, brighter when the pane is focused. That difference plus the
      * lift is the whole focus cue — no colour, no fill change. */
     --keel-term-border: rgba(255, 255, 255, 0.07);
     --keel-term-border-focus: rgba(255, 255, 255, 0.19);
-    --keel-term-fg: #e2e5ed;
-    --keel-term-cursor: #eaecf2;
+    --keel-term-fg: #e6e6e6;
+    --keel-term-cursor: var(--keel-text);
     --keel-term-selection: rgba(255, 255, 255, 0.16);
 
-    /* ANSI 0-15. Locked hex — agents rely on these reading true. */
-    --keel-ansi-black: #10131b;
-    --keel-ansi-red: #f2777d;
-    --keel-ansi-green: #56cf92;
-    --keel-ansi-yellow: #f2b544;
-    --keel-ansi-blue: #6fa4ee;
-    --keel-ansi-magenta: #dd8fbc;
-    --keel-ansi-cyan: #5fc7d4;
-    --keel-ansi-white: #b6c1d2;
-    --keel-ansi-bright-black: #3f4759;
-    --keel-ansi-bright-red: #ff8f95;
-    --keel-ansi-bright-green: #74e8ae;
-    --keel-ansi-bright-yellow: #ffd070;
-    --keel-ansi-bright-blue: #8fbcff;
-    --keel-ansi-bright-magenta: #f0aed4;
-    --keel-ansi-bright-cyan: #7fe0ec;
-    --keel-ansi-bright-white: #eef0f6;
+    /*
+     * ANSI 0-15. Locked hex — agents rely on these reading true. Every hue
+     * keeps its name (blue is still blue) but sits at an even lightness, so
+     * no one colour jumps out of a diff; black and white are neutral greys.
+     * Red, green and yellow reuse the status colours, so a green check in a
+     * TUI and a green dot in the sidebar are the same green.
+     */
+    --keel-ansi-black: #111111;
+    --keel-ansi-red: #ec5d5e;
+    --keel-ansi-green: #4cc38a;
+    --keel-ansi-yellow: #e9a23b;
+    --keel-ansi-blue: #6c9bf5;
+    --keel-ansi-magenta: #b48cf2;
+    --keel-ansi-cyan: #3fc1b0;
+    --keel-ansi-white: #c7c7c7;
+    --keel-ansi-bright-black: #5c5c5c;
+    --keel-ansi-bright-red: #ff8589;
+    --keel-ansi-bright-green: #70dba6;
+    --keel-ansi-bright-yellow: #ffc466;
+    --keel-ansi-bright-blue: #93b6ff;
+    --keel-ansi-bright-magenta: #cdb0ff;
+    --keel-ansi-bright-cyan: #6ddccb;
+    --keel-ansi-bright-white: #f5f5f5;
 
     /* ---- Geometry ------------------------------------------------------- */
     --keel-r-window: 12px;
@@ -201,9 +207,11 @@
     --keel-lift: 0 10px 30px -12px rgba(0, 0, 0, 0.75);
     --keel-lift-strong: 0 28px 64px -18px rgba(0, 0, 0, 0.85);
 
-    --keel-font-mono: "JetBrainsMono Nerd Font", "CaskaydiaCove Nerd Font",
-        "FiraCode Nerd Font", "Hack Nerd Font", "Cascadia Mono", "Consolas",
-        "DejaVu Sans Mono", ui-monospace, monospace;
+    /* A Nerd Font first, when one is installed, so agent TUIs keep their icons;
+     * the bundled JetBrains Mono guarantees the same letterforms without one. */
+    --keel-font-mono: "JetBrainsMono Nerd Font", "JetBrains Mono Variable",
+        "CaskaydiaCove Nerd Font", "Cascadia Mono", "Consolas", ui-monospace,
+        monospace;
 
     /* ---- shadcn bridge -------------------------------------------------- */
     --background: var(--keel-void);
@@ -213,8 +221,8 @@
     --popover: var(--keel-chrome-strong);
     --popover-foreground: var(--keel-text);
     /* "Primary" is light, not blue: the chrome has no hue to spend. */
-    --primary: #eaecf2;
-    --primary-foreground: #0a0c12;
+    --primary: var(--keel-text);
+    --primary-foreground: var(--keel-void);
     --secondary: var(--keel-veil-2);
     --secondary-foreground: var(--keel-text);
     --muted: var(--keel-veil-1);
@@ -252,6 +260,10 @@
         /* The whole app is one fixed surface; nothing outside a pane scrolls. */
         overscroll-behavior: none;
         font-size: 13px;
+        letter-spacing: -0.006em;
+        /* Inter's open digits, single-storey a and flat-sided 6/9: calmer at
+         * small sizes and closer to a modern system face. */
+        font-feature-settings: "cv01", "cv05", "cv08", "cv11", "ss03";
         -webkit-font-smoothing: antialiased;
         text-rendering: optimizeLegibility;
     }
@@ -337,6 +349,41 @@
         box-shadow: inset 0 1px 0 0 var(--keel-sheen);
     }
 
+    /*
+     * Drag and drop in the sidebar. The row being carried fades; the place it
+     * would land is a bright rule between rows, indented to the level it will
+     * sit at, or a ring around a deck it would drop into.
+     */
+    .k-row[data-dragging="true"] {
+        opacity: 0.35;
+    }
+
+    .k-row[data-drop="before"]::before,
+    .k-row[data-drop="after"]::after {
+        content: "";
+        position: absolute;
+        left: var(--drop-indent, 8px);
+        right: 6px;
+        height: 2px;
+        border-radius: 1px;
+        background: var(--keel-text);
+        box-shadow: 0 0 0 2px var(--keel-chrome);
+        pointer-events: none;
+    }
+
+    .k-row[data-drop="before"]::before {
+        top: -2px;
+    }
+
+    .k-row[data-drop="after"]::after {
+        bottom: -2px;
+    }
+
+    .k-row[data-drop="inside"] {
+        background: var(--keel-veil-2);
+        box-shadow: inset 0 0 0 1px var(--keel-line-strong);
+    }
+
     /* Quiet heading over a group of rows. Sentence case, never tracked-out caps. */
     .k-label {
         padding-inline: calc(var(--keel-inset) + 8px);
@@ -365,6 +412,132 @@
     .k-icon-btn[data-danger="true"]:hover {
         background: color-mix(in srgb, var(--keel-dead) 20%, transparent);
         color: var(--keel-dead);
+    }
+
+    /*
+     * The launcher's stage. A pane that was just added grows into its row from
+     * nothing, so its neighbours visibly make room — the same reflow the canvas
+     * is about to do. flex-grow animates where a width in a flex row cannot.
+     */
+    .k-pane-in {
+        animation: k-pane-in 240ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+    }
+
+    /* The caret in the newest pane on the stage. */
+    .k-caret {
+        animation: k-caret 1.1s steps(1, end) infinite;
+    }
+
+    /*
+     * The island in the top bar. Its width follows whatever it is saying, so a
+     * new message reads as the same object stretching rather than as one label
+     * swapped for another. The curve starts quickly and lands softly, with no
+     * overshoot: a tool settling, not a toy bouncing.
+     */
+    .k-island {
+        box-shadow: inset 0 1px 0 0 var(--keel-sheen);
+        transition:
+            width 560ms cubic-bezier(0.32, 0.72, 0, 1),
+            background-color 220ms ease;
+    }
+
+    /* What it says comes into focus as the shape arrives. */
+    .k-island-swap {
+        animation: k-island-swap 420ms cubic-bezier(0.2, 0.8, 0.2, 1) 60ms both;
+    }
+
+    /* An agent finishing lights the rim in its colour, then lets it settle. */
+    .k-island-glow {
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        pointer-events: none;
+        box-shadow: inset 0 0 0 1px
+            color-mix(in srgb, var(--island-accent) 38%, transparent);
+        animation: k-island-glow 1800ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+    }
+
+    /* Agents still working: a quiet light moving along the bottom edge. */
+    .k-island-scan {
+        position: absolute;
+        left: 14px;
+        right: 14px;
+        bottom: 0;
+        height: 1px;
+        overflow: hidden;
+        pointer-events: none;
+    }
+
+    .k-island-scan::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        width: 40%;
+        background: linear-gradient(
+            90deg,
+            transparent,
+            color-mix(in srgb, var(--keel-working) 85%, transparent),
+            transparent
+        );
+        animation: k-island-scan 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+    }
+
+    /* Asked for something that is not there: a short shake of the head. */
+    .k-island-shake {
+        animation: k-island-shake 440ms cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+    }
+}
+
+@keyframes k-island-swap {
+    from {
+        opacity: 0;
+        filter: blur(6px);
+        transform: scale(0.94);
+    }
+}
+
+@keyframes k-island-glow {
+    0% {
+        box-shadow:
+            inset 0 0 0 1px var(--island-accent),
+            inset 0 0 20px -6px var(--island-accent);
+    }
+}
+
+@keyframes k-island-scan {
+    from {
+        transform: translateX(-100%);
+    }
+    to {
+        transform: translateX(250%);
+    }
+}
+
+@keyframes k-island-shake {
+    20% {
+        transform: translateX(-4px);
+    }
+    40% {
+        transform: translateX(4px);
+    }
+    60% {
+        transform: translateX(-2px);
+    }
+    80% {
+        transform: translateX(1px);
+    }
+}
+
+@keyframes k-pane-in {
+    from {
+        flex-grow: 0;
+        opacity: 0;
+    }
+}
+
+@keyframes k-caret {
+    50% {
+        opacity: 0;
     }
 }
 
@@ -411,5 +584,12 @@
     *::after {
         animation-duration: 0.01ms !important;
         transition-duration: 0.01ms !important;
+    }
+
+    /* A still bar says "working" without anything moving. */
+    .k-island-scan::after {
+        animation: none;
+        left: 30%;
+        opacity: 0.6;
     }
 }
