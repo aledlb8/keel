@@ -4,7 +4,6 @@
     "name": "Claude Code",
     "command": "claude",
     "session": {
-      "start": "--session-id {id}",
       "resume": "--resume {id}",
       "store": "claude"
     },
@@ -86,7 +85,6 @@
     "name": "Grok Build",
     "command": "grok",
     "session": {
-      "start": "--session-id {id}",
       "resume": "--resume {id}",
       "store": "grok"
     },
