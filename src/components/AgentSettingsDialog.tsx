@@ -1,31 +1,49 @@
 /**
  * Agents & profiles.
  *
- * The catalogue used to be a JSON file behind a Help menu item, and profiles
- * could be created from a pane's header but never renamed or removed. This is
- * the one place for both.
+ * Built out of the same pieces as the rest of the window, so it reads as part of
+ * Keel rather than as a settings form bolted onto it:
+ *
+ *  - **The rail** is a sidebar. Same inset rows, same darker chrome, grouped by
+ *    whether the agent can actually be launched.
+ *  - **The pane** is a scale model of the terminal this agent opens as, lit in
+ *    its colour. The command is edited on its prompt line, so what you type is
+ *    shown exactly where it will be typed.
+ *  - **Profiles** are a list of sign-ins, renamed and removed the way sidebar
+ *    rows are: double-click, or the ⋯ that appears on hover.
  *
  * Agents save themselves: an edit is written a moment after you stop typing, as
- * soon as the entry is valid, so there is no Save button to forget. Profiles
+ * soon as every entry is valid, so there is no Save button to forget. Profiles
  * live in app state and change immediately.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { openPath } from "@tauri-apps/plugin-opener";
 import {
   Check,
+  ChevronDown,
   ChevronRight,
+  CircleCheck,
+  Ellipsis,
   Eye,
   EyeOff,
   FileJson,
+  LoaderCircle,
+  Maximize2,
+  Pencil,
   Pipette,
   Plus,
+  RefreshCw,
   RotateCcw,
+  SplitSquareHorizontal,
   Trash2,
   UserRound,
+  UsersRound,
   X,
 } from "lucide-react";
 
+import { AgentMark } from "@/components/AgentMark";
+import { InlineRename } from "@/components/InlineRename";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -33,6 +51,13 @@ import {
   DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { agentCatalogueDefaults, agentCataloguePath } from "@/lib/backend";
 import { agentAccent } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
@@ -42,24 +67,27 @@ import { nextProfileName, useKeel } from "@/state/store";
 /** How long after the last keystroke an agent edit is written to disk. */
 const SAVE_DELAY_MS = 500;
 
+/** Tuned to sit on the neutral chrome; the brand accents from the catalogue are included as-is. */
 const SWATCHES = [
   "#d97757",
-  "#e5bd6c",
-  "#6fd39c",
+  "#e9a23b",
+  "#4cc38a",
   "#10a37f",
-  "#5fc7d4",
-  "#6fa4ee",
+  "#3fc1b0",
+  "#6c9bf5",
   "#4285f4",
-  "#9a8ff0",
-  "#dd8fbc",
-  "#b6c1d2",
+  "#b48cf2",
+  "#e07fb7",
+  "#a1a1a1",
 ];
+
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 type Field = "name" | "command" | "short" | "accent" | "accountEnv";
 type Problems = Partial<Record<Field, string>>;
 
-const INPUT =
-  "h-8 w-full min-w-0 rounded-[var(--keel-r-control)] border border-line-strong bg-veil px-2.5 text-[13px] text-foreground outline-none transition-colors placeholder:text-faint hover:border-foreground/20 focus:border-foreground/40 focus:bg-veil-2 aria-invalid:border-[color:var(--keel-dead)]/70";
+const FIELD =
+  "w-full min-w-0 rounded-[var(--keel-r-control)] border border-line-strong bg-veil px-2.5 text-[12px] text-foreground outline-none transition-colors placeholder:text-faint hover:border-foreground/20 focus:border-foreground/40 focus:bg-veil-2 aria-invalid:border-[color:var(--keel-dead)]/70";
 
 function expandHex(value: string): string | null {
   const match = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(value.trim());
@@ -83,36 +111,25 @@ function inkOn(colour: string): string {
   const r = (value >> 16) & 255;
   const g = (value >> 8) & 255;
   const b = value & 255;
-  return 0.299 * r + 0.587 * g + 0.114 * b > 150 ? "#0a0c12" : "#ffffff";
-}
-
-function initials(name: string): string {
-  return (
-    name
-      .split(/\s+/)
-      .filter(Boolean)
-      .map((word) => word[0])
-      .join("")
-      .slice(0, 2)
-      .toUpperCase() || "··"
-  );
+  return 0.299 * r + 0.587 * g + 0.114 * b > 150 ? "#0a0a0a" : "#ffffff";
 }
 
 function problemsOf(agent: AgentSpec): Problems {
   const problems: Problems = {};
   if (!agent.name.trim()) problems.name = "Give it a name.";
   if (!agent.command.trim()) {
-    problems.command = "What should be typed into the shell?";
+    problems.command = "Enter the command that starts this agent.";
   } else if (/[\r\n]/.test(agent.command)) {
     problems.command = "One line only.";
   }
   if (agent.short.trim().length > 3) problems.short = "Up to three characters.";
   if (agent.accent.trim() && !expandHex(agent.accent)) {
-    problems.accent = "Use a hex colour, like #6fa4ee.";
+    problems.accent = "Use a hex colour, like #6c9bf5.";
   }
   const key = agent.accountEnv?.trim();
-  if (key && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
-    problems.accountEnv = "Letters, digits and underscores, not starting with a digit.";
+  if (key && !ENV_NAME.test(key)) {
+    problems.accountEnv =
+      "Letters, digits and underscores, not starting with a digit.";
   }
   return problems;
 }
@@ -139,6 +156,10 @@ function specOf(agent: Agent): AgentSpec {
   };
 }
 
+function plural(count: number, one: string, many: string): string {
+  return `${count} ${count === 1 ? one : many}`;
+}
+
 type SaveState = "idle" | "saving" | "saved" | "error";
 
 export function AgentSettingsDialog() {
@@ -151,6 +172,7 @@ export function AgentSettingsDialog() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [scanning, setScanning] = useState(false);
   const draftsRef = useRef<Agent[]>([]);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
@@ -167,8 +189,8 @@ export function AgentSettingsDialog() {
     setSaveError(null);
   }, [open, agentId]);
 
-  // After a save, pick up what detection found without touching anything the
-  // user may be halfway through typing.
+  // After a save or a scan, pick up what detection found without touching
+  // anything the user may be halfway through typing.
   useEffect(() => {
     if (!open) return;
     const next = draftsRef.current.map((draft) => {
@@ -283,6 +305,15 @@ export function AgentSettingsDialog() {
     });
   }
 
+  async function scan() {
+    setScanning(true);
+    try {
+      await useKeel.getState().refreshAgents();
+    } finally {
+      setScanning(false);
+    }
+  }
+
   function close() {
     if (saveTimer.current !== undefined) void persist();
     useKeel.getState().closeAgentSettings();
@@ -292,71 +323,135 @@ export function AgentSettingsDialog() {
     drafts.find((draft) => draft.id === selectedId) ?? drafts[0] ?? null;
   const blocked = drafts.some(hasProblems);
 
+  const groups: { label: string; agents: Agent[] }[] = [
+    {
+      label: "Ready",
+      agents: drafts.filter((draft) => !draft.hidden && draft.installed),
+    },
+    {
+      label: "Not installed",
+      agents: drafts.filter((draft) => !draft.hidden && !draft.installed),
+    },
+    { label: "Hidden", agents: drafts.filter((draft) => draft.hidden) },
+  ];
+
   return (
     <Dialog open={open} onOpenChange={(next) => !next && close()}>
       <DialogContent
         showCloseButton={false}
-        className="h-[min(680px,86vh)] max-w-4xl grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0 sm:max-w-4xl"
+        className="h-[min(720px,88vh)] w-[min(980px,calc(100vw-2rem))] max-w-none grid-cols-[236px_minmax(0,1fr)] gap-0 overflow-hidden p-0 sm:max-w-none"
+        // Focus the dialog itself: landing on the rail's first button drew a
+        // ring on it every time the dialog opened.
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          (event.currentTarget as HTMLElement).focus();
+        }}
         // Escape in a field being renamed reverts the field, not the dialog.
         onEscapeKeyDown={(event) => {
           const target = document.activeElement;
           if (
             target instanceof HTMLElement &&
-            target.dataset.escapeReverts !== undefined
+            target.closest("[data-escape-reverts]")
           ) {
             event.preventDefault();
           }
         }}
       >
-        <header className="flex items-center justify-between gap-4 border-b border-line pl-5">
-          <div className="min-w-0 py-3.5">
-            <DialogTitle className="text-[15px] font-medium">
-              Agents & profiles
+        <aside className="flex min-h-0 flex-col bg-[color:var(--keel-chrome)] shadow-[inset_-1px_0_0_0_var(--keel-line)]">
+          <div className="flex h-[52px] shrink-0 items-center gap-2 pl-4 pr-2">
+            <DialogTitle className="text-[13px] font-semibold">
+              Agents
             </DialogTitle>
-            <DialogDescription className="mt-0.5 text-[13px] text-dim">
-              What each agent is called, how it starts, and who it is signed in
-              as.
+            <DialogDescription className="sr-only">
+              Choose how each agent starts, how it looks, and which sign-ins it
+              can use.
             </DialogDescription>
+            <span className="text-[12px] tabular-nums text-faint">
+              {drafts.length}
+            </span>
+            <span className="flex-1" />
+            <button
+              type="button"
+              title="New agent"
+              aria-label="New agent"
+              onClick={addAgent}
+              className="k-icon-btn size-7"
+            >
+              <Plus className="size-4" />
+            </button>
           </div>
-          <div className="flex items-center self-stretch">
-            <SaveIndicator state={saveState} error={saveError} blocked={blocked} />
+
+          <nav
+            aria-label="Agents"
+            className="min-h-0 flex-1 overflow-y-auto pb-3"
+          >
+            {groups.map((group) =>
+              group.agents.length > 0 ? (
+                <div key={group.label} className="pb-2">
+                  <h3 className="k-label pb-1 pt-2">{group.label}</h3>
+                  {group.agents.map((draft) => (
+                    <RailRow
+                      key={draft.id}
+                      agent={draft}
+                      selected={draft.id === selected?.id}
+                      invalid={hasProblems(draft)}
+                      onSelect={() => setSelectedId(draft.id)}
+                    />
+                  ))}
+                </div>
+              ) : null,
+            )}
+          </nav>
+
+          <div className="flex shrink-0 items-center gap-0.5 px-2 pb-2 pt-1">
+            <RailAction
+              onClick={() => void scan()}
+              disabled={scanning}
+              title="Look for installed agents again"
+            >
+              <RefreshCw className={cn("size-3.5", scanning && "animate-spin")} />
+              Scan again
+            </RailAction>
+            <RailAction
+              onClick={() => void agentCataloguePath().then(openPath)}
+              title="Edit the catalogue by hand"
+            >
+              <FileJson className="size-3.5" />
+              agents.json
+            </RailAction>
+          </div>
+        </aside>
+
+        <main className="flex min-h-0 flex-col">
+          <div className="flex h-[52px] shrink-0 items-center gap-1 pl-8 pr-2">
+            <SaveIndicator
+              state={saveState}
+              error={saveError}
+              blocked={blocked}
+            />
+            <span className="flex-1" />
+            {selected ? (
+              <AgentMenu
+                agent={selected}
+                onToggleHidden={() =>
+                  update(selected.id, { hidden: !selected.hidden })
+                }
+                onReset={() => void resetAgent(selected.id)}
+                onDelete={() => deleteAgent(selected.id)}
+                openPanes={usage.byAgent[selected.id] ?? 0}
+              />
+            ) : null}
             <button
               type="button"
               aria-label="Close"
               onClick={close}
-              className="k-icon-btn w-[52px] self-stretch rounded-none"
+              className="k-icon-btn size-8"
             >
               <X className="size-4" />
             </button>
           </div>
-        </header>
 
-        <div className="grid min-h-0 grid-cols-[232px_minmax(0,1fr)]">
-          <nav className="flex min-h-0 flex-col border-r border-line">
-            <div className="min-h-0 flex-1 space-y-px overflow-y-auto p-2">
-              {drafts.map((draft) => (
-                <AgentListRow
-                  key={draft.id}
-                  agent={draft}
-                  selected={draft.id === selected?.id}
-                  invalid={hasProblems(draft)}
-                  onSelect={() => setSelectedId(draft.id)}
-                />
-              ))}
-            </div>
-            <div className="border-t border-line p-2">
-              <button
-                type="button"
-                onClick={addAgent}
-                className="flex w-full items-center gap-2 rounded-[var(--keel-r-control)] px-2.5 py-2 text-[13px] text-dim transition-colors hover:bg-veil hover:text-foreground"
-              >
-                <Plus className="size-3.5" />
-                New agent
-              </button>
-            </div>
-          </nav>
-
-          <div className="min-h-0 overflow-y-auto">
+          <div className="min-h-0 flex-1 overflow-y-auto">
             {selected ? (
               <AgentEditor
                 key={selected.id}
@@ -366,94 +461,32 @@ export function AgentSettingsDialog() {
                   (account) => account.agentId === selected.id,
                 )}
                 accountUsage={usage.byAccount}
-                openPanes={usage.byAgent[selected.id] ?? 0}
                 onChange={(change) => update(selected.id, change)}
-                onDelete={() => deleteAgent(selected.id)}
-                onReset={() => void resetAgent(selected.id)}
               />
             ) : (
-              <div className="grid h-full place-items-center text-[13px] text-faint">
-                No agents yet.
+              <div className="grid h-full place-items-center pb-16">
+                <button
+                  type="button"
+                  onClick={addAgent}
+                  className="flex flex-col items-center gap-3 rounded-[var(--keel-r-window)] border border-dashed border-line-strong px-10 py-8 text-[13px] text-dim transition-colors hover:border-foreground/25 hover:bg-veil hover:text-foreground"
+                >
+                  <span className="grid size-9 place-items-center rounded-full bg-veil-2">
+                    <Plus className="size-4" />
+                  </span>
+                  Add an agent
+                </button>
               </div>
             )}
           </div>
-        </div>
-
-        <footer className="flex items-center justify-between border-t border-line px-5 py-2.5">
-          <button
-            type="button"
-            onClick={() => void agentCataloguePath().then(openPath)}
-            className="flex items-center gap-1.5 rounded-[var(--keel-r-control)] px-1.5 py-1 text-[12px] text-faint transition-colors hover:text-foreground"
-          >
-            <FileJson className="size-3.5" />
-            Open agents.json
-          </button>
-          <Button size="sm" onClick={close}>
-            Done
-          </Button>
-        </footer>
+        </main>
       </DialogContent>
     </Dialog>
   );
 }
 
-function SaveIndicator({
-  state,
-  error,
-  blocked,
-}: {
-  state: SaveState;
-  error: string | null;
-  blocked: boolean;
-}) {
-  const content = blocked ? (
-    <span className="text-faint">Fix the highlighted fields to save</span>
-  ) : state === "saving" ? (
-    <span className="text-faint">Saving…</span>
-  ) : state === "saved" ? (
-    <span className="flex items-center gap-1 text-dim">
-      <Check className="size-3.5" />
-      Saved
-    </span>
-  ) : state === "error" ? (
-    <span className="text-[color:var(--keel-dead)]" title={error ?? undefined}>
-      Couldn&apos;t save
-    </span>
-  ) : null;
+// ---- Rail ------------------------------------------------------------------
 
-  return content ? (
-    <span className="mr-2 text-[12px] animate-in fade-in-0">{content}</span>
-  ) : null;
-}
-
-function Badge({
-  short,
-  accent,
-  size,
-  muted,
-}: {
-  short: string;
-  accent: string;
-  size: number;
-  muted?: boolean;
-}) {
-  return (
-    <span
-      className="grid shrink-0 place-items-center rounded-[var(--keel-r-chip)] bg-[color:var(--keel-term-solid)] font-mono font-medium shadow-[inset_0_0_0_1px_var(--keel-line)] transition-colors"
-      style={{
-        width: size,
-        height: size,
-        color: accent,
-        fontSize: size >= 40 ? 15 : 11,
-        opacity: muted ? 0.45 : 1,
-      }}
-    >
-      {short}
-    </span>
-  );
-}
-
-function AgentListRow({
+function RailRow({
   agent,
   selected,
   invalid,
@@ -467,37 +500,29 @@ function AgentListRow({
   return (
     <button
       type="button"
+      data-selected={selected}
+      aria-current={selected ? "true" : undefined}
       onClick={onSelect}
-      className={cn(
-        "flex w-full items-center gap-2.5 rounded-[var(--keel-r-control)] px-2 py-1.5 text-left transition-colors",
-        selected ? "bg-veil-2" : "hover:bg-veil",
-      )}
+      className="k-row h-[34px] gap-2.5 pl-2 pr-2.5"
     >
-      <Badge
-        short={agent.short.trim() || initials(agent.name)}
+      <AgentMark
+        agentId={agent.id}
+        name={agent.name}
         accent={agentAccent(agent.accent)}
-        size={28}
-        muted={agent.hidden}
+        size={20}
+        muted={agent.hidden || !agent.installed}
       />
-      <span className="min-w-0 flex-1">
-        <span
-          className={cn(
-            "block truncate text-[13px] leading-tight",
-            selected ? "text-foreground" : "text-dim",
-          )}
-        >
-          {agent.name.trim() || "Untitled"}
-        </span>
-        <span className="mt-0.5 block truncate text-[11px] text-faint">
-          {agent.hidden
-            ? "Hidden"
-            : agent.installed
-              ? "Installed"
-              : "Not found"}
-        </span>
+      <span
+        className={cn(
+          "min-w-0 flex-1 truncate",
+          selected ? "text-foreground" : "text-dim",
+        )}
+      >
+        {agent.name.trim() || "Untitled"}
       </span>
       {invalid ? (
         <span
+          title="Needs attention"
           aria-label="Needs attention"
           className="size-1.5 shrink-0 rounded-full bg-[color:var(--keel-dead)]"
         />
@@ -506,262 +531,891 @@ function AgentListRow({
   );
 }
 
+function RailAction({
+  onClick,
+  disabled,
+  title,
+  children,
+}: {
+  onClick: () => void;
+  disabled?: boolean;
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      disabled={disabled}
+      className="flex h-7 items-center gap-1.5 rounded-[var(--keel-r-chip)] px-2 text-[12px] text-faint transition-colors hover:bg-veil-2 hover:text-foreground disabled:pointer-events-none"
+    >
+      {children}
+    </button>
+  );
+}
+
+function SaveIndicator({
+  state,
+  error,
+  blocked,
+}: {
+  state: SaveState;
+  error: string | null;
+  blocked: boolean;
+}) {
+  const [icon, text, tone] = blocked
+    ? [null, "Fix the highlighted fields to save", "text-[color:var(--keel-dead)]"]
+    : state === "saving"
+      ? [<LoaderCircle key="i" className="size-3.5 animate-spin" />, "Saving", "text-faint"]
+      : state === "saved"
+        ? [<Check key="i" className="size-3.5" />, "Saved", "text-dim"]
+        : state === "error"
+          ? [null, "Couldn't save", "text-[color:var(--keel-dead)]"]
+          : [null, "Changes save automatically", "text-faint"];
+
+  return (
+    <span
+      role="status"
+      title={state === "error" ? (error ?? undefined) : undefined}
+      className={cn(
+        "flex items-center gap-1.5 text-[12px] animate-in fade-in-0",
+        tone,
+      )}
+    >
+      {icon}
+      {text}
+    </span>
+  );
+}
+
+function AgentMenu({
+  agent,
+  openPanes,
+  onToggleHidden,
+  onReset,
+  onDelete,
+}: {
+  agent: Agent;
+  openPanes: number;
+  onToggleHidden: () => void;
+  onReset: () => void;
+  onDelete: () => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+
+  useEffect(() => setConfirming(false), [agent.id]);
+
+  if (confirming) {
+    return (
+      <span className="mr-1 flex items-center gap-2 animate-in fade-in-0">
+        <span className="text-[12px] text-dim">
+          Delete {agent.name.trim() || "this agent"}?
+          {openPanes > 0 ? (
+            <span className="text-faint">
+              {" "}
+              {plural(openPanes, "terminal uses", "terminals use")} it.
+            </span>
+          ) : null}
+        </span>
+        <Button size="xs" variant="ghost" onClick={() => setConfirming(false)}>
+          Cancel
+        </Button>
+        <Button size="xs" variant="destructive" onClick={onDelete}>
+          Delete
+        </Button>
+      </span>
+    );
+  }
+
+  return (
+    <DropdownMenu modal={false}>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label="Agent actions"
+          title="More"
+          className="k-icon-btn size-8 data-[state=open]:bg-veil-2 data-[state=open]:text-foreground"
+        >
+          <Ellipsis className="size-4" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuItem onSelect={onToggleHidden}>
+          {agent.hidden ? (
+            <Eye className="size-3.5" />
+          ) : (
+            <EyeOff className="size-3.5" />
+          )}
+          {agent.hidden ? "Show in the launcher" : "Hide from the launcher"}
+        </DropdownMenuItem>
+        {agent.builtin ? (
+          <DropdownMenuItem onSelect={onReset}>
+            <RotateCcw className="size-3.5" />
+            Reset to defaults
+          </DropdownMenuItem>
+        ) : (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              variant="destructive"
+              onSelect={() => setConfirming(true)}
+            >
+              <Trash2 className="size-3.5" />
+              Delete agent
+            </DropdownMenuItem>
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+// ---- Editor ----------------------------------------------------------------
+
 function AgentEditor({
   agent,
   problems,
   accounts,
   accountUsage,
-  openPanes,
   onChange,
-  onDelete,
-  onReset,
 }: {
   agent: Agent;
   problems: Problems;
   accounts: AgentAccount[];
   accountUsage: Record<string, number>;
-  openPanes: number;
   onChange: (change: Partial<AgentSpec>) => void;
-  onDelete: () => void;
-  onReset: () => void;
 }) {
-  const [confirmDelete, setConfirmDelete] = useState(false);
   const accent = agentAccent(agent.accent);
-  const profilesEnabled = Boolean(agent.accountEnv?.trim());
+  const env = agent.accountEnv?.trim() ?? "";
+  const profilesOn = env !== "" && !problems.accountEnv;
 
   return (
-    <div className="flex flex-col gap-8 px-7 pb-8 pt-6 animate-in fade-in-0 duration-150">
-      <div className="flex items-start gap-4">
-        <Badge
-          short={agent.short.trim() || initials(agent.name)}
+    <div className="mx-auto flex w-full max-w-[680px] flex-col gap-10 px-8 pb-12 pt-1 animate-in fade-in-0 duration-150">
+      <header className="flex items-center gap-4">
+        <AgentMark
+          agentId={agent.id}
+          name={agent.name}
           accent={accent}
           size={48}
           muted={agent.hidden}
         />
-        <div className="min-w-0 flex-1 pt-0.5">
+        <div className="min-w-0 flex-1">
           <input
             value={agent.name}
             onChange={(event) => onChange({ name: event.target.value })}
             placeholder="Agent name"
             aria-label="Name"
             aria-invalid={Boolean(problems.name)}
-            className="-ml-1.5 h-8 w-full rounded-[var(--keel-r-control)] bg-transparent px-1.5 text-[19px] font-medium tracking-[-0.01em] text-foreground outline-none transition-colors placeholder:text-faint hover:bg-veil focus:bg-veil-2"
+            spellCheck={false}
+            className="-ml-1.5 h-9 w-full rounded-[var(--keel-r-control)] bg-transparent px-1.5 text-[22px] font-semibold tracking-[-0.02em] text-foreground outline-none transition-colors placeholder:text-faint hover:bg-veil focus:bg-veil-2"
           />
-          <p
-            className="mt-0.5 truncate font-mono text-[11px] text-faint"
-            title={agent.path ?? undefined}
-          >
-            {agent.installed ? agent.path : "Not found on this machine"}
-          </p>
-          <FieldError message={problems.name} />
-        </div>
-
-        <div className="flex shrink-0 items-center gap-1">
-          <Button
-            size="xs"
-            variant="outline"
-            onClick={() => onChange({ hidden: !agent.hidden })}
-            title={
-              agent.hidden
-                ? "Show this agent in the launcher"
-                : "Keep this agent out of the launcher"
-            }
-          >
-            {agent.hidden ? <Eye /> : <EyeOff />}
-            {agent.hidden ? "Show" : "Hide"}
-          </Button>
-          {agent.builtin ? (
-            <Button
-              size="xs"
-              variant="outline"
-              onClick={onReset}
-              title="Restore the name, command, colour and detection this agent shipped with"
-            >
-              <RotateCcw />
-              Reset
-            </Button>
-          ) : confirmDelete ? (
-            <>
-              <Button size="xs" variant="destructive" onClick={onDelete}>
-                Delete
-                {openPanes > 0 ? ` · ${openPanes} open` : ""}
-              </Button>
-              <button
-                type="button"
-                aria-label="Keep"
-                onClick={() => setConfirmDelete(false)}
-                className="k-icon-btn size-6"
-              >
-                <X className="size-3.5" />
-              </button>
-            </>
+          {problems.name ? (
+            <FieldError message={problems.name} />
           ) : (
-            <Button
-              size="xs"
-              variant="outline"
-              onClick={() => setConfirmDelete(true)}
-            >
-              <Trash2 />
-              Delete
-            </Button>
+            <Availability agent={agent} />
           )}
         </div>
-      </div>
+      </header>
 
-      <Section title="Launch" hint="Typed into a fresh shell whenever a terminal opens.">
-        <FieldBlock label="Command" error={problems.command}>
-          <input
-            value={agent.command}
-            onChange={(event) => onChange({ command: event.target.value })}
-            placeholder="claude --model opus"
-            spellCheck={false}
-            aria-invalid={Boolean(problems.command)}
-            className={cn(INPUT, "font-mono text-[12px]")}
-          />
-        </FieldBlock>
-      </Section>
+      <section className="flex flex-col gap-3">
+        <PanePreview
+          agent={agent}
+          accent={accent}
+          invalid={Boolean(problems.command)}
+          profileName={
+            profilesOn
+              ? (accounts.find((account) => account.isDefault)?.name ??
+                "Default")
+              : null
+          }
+          onCommand={(command) => onChange({ command })}
+        />
+        {problems.command ? (
+          <FieldError message={problems.command} />
+        ) : (
+          <p className="text-[12px] text-faint">
+            Typed into a new shell each time one of these terminals opens.
+          </p>
+        )}
+        <ColourPicker
+          value={agent.accent}
+          problem={problems.accent}
+          onChange={(value) => onChange({ accent: value })}
+        />
+      </section>
 
-      <Section title="Appearance">
-        <div className="grid grid-cols-[96px_minmax(0,1fr)] gap-5">
-          <FieldBlock label="Badge" error={problems.short}>
-            <input
-              value={agent.short}
-              maxLength={3}
-              onChange={(event) =>
-                onChange({ short: event.target.value.toUpperCase() })
-              }
-              placeholder={initials(agent.name)}
-              spellCheck={false}
-              aria-invalid={Boolean(problems.short)}
-              className={cn(INPUT, "text-center font-mono text-[12px] tracking-[0.08em]")}
-            />
-          </FieldBlock>
-          <FieldBlock label="Colour" error={problems.accent}>
-            <ColourPicker
-              value={agent.accent}
-              invalid={Boolean(problems.accent)}
-              onChange={(accent) => onChange({ accent })}
-            />
-          </FieldBlock>
-        </div>
-      </Section>
-
-      <Section
-        title="Profiles"
-        hint="Separate sign-ins for the same agent. Each profile gets its own config folder, handed to the CLI through an environment variable."
-      >
-        <FieldBlock label="Profile variable" error={problems.accountEnv}>
-          <input
-            value={agent.accountEnv ?? ""}
-            onChange={(event) => onChange({ accountEnv: event.target.value })}
-            placeholder="e.g. CLAUDE_CONFIG_DIR"
-            spellCheck={false}
-            aria-invalid={Boolean(problems.accountEnv)}
-            className={cn(INPUT, "max-w-[280px] font-mono text-[12px]")}
-          />
-        </FieldBlock>
-
-        {profilesEnabled ? (
+      <section className="flex flex-col gap-3">
+        <SectionHeading
+          title="Profiles"
+          detail={
+            profilesOn
+              ? "Separate sign-ins. New terminals start on the marked one; any terminal can switch from its header."
+              : undefined
+          }
+        />
+        {profilesOn ? (
           <ProfileList
-            agentId={agent.id}
+            agent={agent}
+            accent={accent}
+            env={env}
             accounts={accounts}
             usage={accountUsage}
           />
         ) : (
-          <p className="rounded-[var(--keel-r-control)] border border-dashed border-line-strong px-3 py-2.5 text-[12px] leading-relaxed text-faint">
-            Set the variable this CLI reads its config folder from, and profiles
-            become available here and in each pane&apos;s header.
-          </p>
+          <ProfilesOff
+            agentName={agent.name.trim() || "this agent"}
+            example={`${agent.id.replace(/^custom-/, "agent").replace(/[^A-Za-z0-9]+/g, "_").toUpperCase()}_HOME`}
+            onEnable={(value) => onChange({ accountEnv: value })}
+          />
         )}
-      </Section>
+      </section>
 
-      <Disclosure title="Detection">
-        <FieldBlock
-          label="Executables"
-          hint="Names looked for on PATH, one per line. Leave empty to use the command's first word."
-        >
-          <textarea
-            value={agent.bins.join("\n")}
-            onChange={(event) => onChange({ bins: event.target.value.split("\n") })}
-            rows={2}
-            spellCheck={false}
-            className={cn(INPUT, "h-auto resize-none py-2 font-mono text-[12px] leading-relaxed")}
-          />
-        </FieldBlock>
-        <FieldBlock
-          label="Search folders"
-          hint="Extra places to look, one per line. {home} is your home folder."
-        >
-          <textarea
-            value={agent.paths.join("\n")}
-            onChange={(event) =>
-              onChange({ paths: event.target.value.split("\n") })
-            }
-            rows={4}
-            spellCheck={false}
-            className={cn(INPUT, "h-auto resize-none py-2 font-mono text-[12px] leading-relaxed")}
-          />
-        </FieldBlock>
-      </Disclosure>
+      <Advanced
+        agent={agent}
+        problems={problems}
+        onChange={onChange}
+        defaultOpen={Boolean(problems.accountEnv)}
+      />
     </div>
   );
 }
 
-function Section({
-  title,
-  hint,
-  children,
-}: {
-  title: string;
-  hint?: string;
-  children: React.ReactNode;
-}) {
+function Availability({ agent }: { agent: Agent }) {
+  const colour = agent.installed ? "var(--keel-done)" : "var(--keel-idle)";
   return (
-    <section className="flex flex-col gap-3.5">
-      <div>
-        <h3 className="text-[11px] font-medium text-faint">{title}</h3>
-        {hint ? (
-          <p className="mt-1 max-w-[520px] text-[12px] leading-relaxed text-dim">
-            {hint}
-          </p>
-        ) : null}
-      </div>
-      {children}
-    </section>
+    <p className="mt-0.5 flex min-w-0 items-center gap-2 text-[12px]">
+      <span
+        aria-hidden
+        className="size-1.5 shrink-0 rounded-full"
+        style={{
+          background: colour,
+          boxShadow: agent.installed
+            ? `0 0 0 3px color-mix(in srgb, ${colour} 20%, transparent)`
+            : undefined,
+        }}
+      />
+      <span className="shrink-0 text-dim">
+        {agent.installed ? "Installed" : "Not found on this machine"}
+      </span>
+      {agent.installed && agent.path ? (
+        <span
+          className="min-w-0 truncate font-mono text-[11px] text-faint"
+          title={agent.path}
+        >
+          {agent.path}
+        </span>
+      ) : null}
+      {agent.hidden ? (
+        <span className="shrink-0 rounded-full bg-veil-2 px-2 py-0.5 text-[11px] leading-none text-dim">
+          Hidden from the launcher
+        </span>
+      ) : null}
+    </p>
   );
 }
 
-function Disclosure({
+function SectionHeading({
   title,
+  detail,
   children,
 }: {
   title: string;
-  children: React.ReactNode;
+  detail?: string;
+  children?: ReactNode;
 }) {
-  const [open, setOpen] = useState(false);
   return (
-    <section className="flex flex-col gap-3.5">
+    <div className="flex items-end gap-3">
+      <div className="min-w-0 flex-1">
+        <h3 className="text-[13px] font-medium text-foreground">{title}</h3>
+        {detail ? (
+          <p className="mt-0.5 text-[12px] text-faint">{detail}</p>
+        ) : null}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function FieldError({ message }: { message?: string }) {
+  if (!message) return null;
+  return (
+    <p className="mt-0.5 text-[12px] text-[color:var(--keel-dead)] animate-in fade-in-0">
+      {message}
+    </p>
+  );
+}
+
+/**
+ * The terminal this agent opens as, drawn the way the canvas draws it: a slab
+ * lifted off the ground, a header strip, and a prompt. The prompt line is the
+ * command field.
+ */
+function PanePreview({
+  agent,
+  accent,
+  invalid,
+  profileName,
+  onCommand,
+}: {
+  agent: Agent;
+  accent: string;
+  invalid: boolean;
+  profileName: string | null;
+  onCommand: (command: string) => void;
+}) {
+  const [focused, setFocused] = useState(false);
+  const ring = invalid
+    ? "color-mix(in srgb, var(--keel-dead) 70%, transparent)"
+    : `color-mix(in srgb, ${accent} ${focused ? 60 : 30}%, transparent)`;
+
+  return (
+    <div
+      className="overflow-hidden rounded-[var(--keel-r-window)] transition-shadow duration-150"
+      style={{
+        background: `color-mix(in srgb, ${accent} 6%, var(--keel-term-solid))`,
+        boxShadow: `inset 0 0 0 1px ${ring}, var(--keel-lift)`,
+      }}
+    >
+      <div aria-hidden className="flex h-8 items-center gap-1.5 pl-2.5 pr-1.5">
+        <AgentMark
+          agentId={agent.id}
+          name={agent.name}
+          accent={accent}
+          size={16}
+        />
+        <span className="min-w-0 truncate text-[12px] text-dim">
+          {agent.name.trim() || "Untitled"}
+        </span>
+        {profileName ? (
+          <span className="flex h-5 shrink-0 items-center gap-1 px-1.5 text-[11px] text-faint">
+            {profileName}
+            <ChevronDown className="size-3" />
+          </span>
+        ) : null}
+        <span className="flex-1" />
+        <span className="flex items-center gap-px text-faint opacity-60">
+          <span className="grid size-6 place-items-center">
+            <SplitSquareHorizontal className="size-3.5" />
+          </span>
+          <span className="grid size-6 place-items-center">
+            <Maximize2 className="size-3.5" />
+          </span>
+          <span className="grid size-6 place-items-center">
+            <X className="size-3.5" />
+          </span>
+        </span>
+      </div>
+
+      <label className="flex cursor-text items-center gap-2.5 px-4 pb-8 pt-3 font-mono text-[13px]">
+        <span aria-hidden style={{ color: accent }}>
+          ❯
+        </span>
+        <input
+          value={agent.command}
+          onChange={(event) => onCommand(event.target.value)}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
+          placeholder="command to start the agent"
+          aria-label="Command"
+          aria-invalid={invalid}
+          spellCheck={false}
+          autoComplete="off"
+          className="min-w-0 flex-1 bg-transparent text-[color:var(--keel-term-fg)] caret-[color:var(--keel-term-cursor)] outline-none placeholder:text-faint"
+        />
+      </label>
+    </div>
+  );
+}
+
+function ColourPicker({
+  value,
+  problem,
+  onChange,
+}: {
+  value: string;
+  problem?: string;
+  onChange: (value: string) => void;
+}) {
+  const current = expandHex(value);
+  const custom = current !== null && !SWATCHES.includes(current);
+  const ring =
+    "ring-2 ring-foreground/70 ring-offset-2 ring-offset-[color:var(--keel-chrome-strong)]";
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex flex-wrap items-center gap-2">
+        <div
+          role="group"
+          aria-label="Colour"
+          className="flex flex-wrap items-center gap-2"
+        >
+          {SWATCHES.map((swatch) => {
+            const active = current === swatch;
+            return (
+              <button
+                key={swatch}
+                type="button"
+                title={swatch}
+                aria-label={`Colour ${swatch}`}
+                aria-pressed={active}
+                onClick={() => onChange(swatch)}
+                className={cn(
+                  "grid size-5 place-items-center rounded-full outline-none transition-transform duration-100 hover:scale-110 focus-visible:ring-2 focus-visible:ring-foreground/50",
+                  active && ring,
+                )}
+                style={{ background: swatch }}
+              >
+                {active ? (
+                  <Check
+                    className="size-3"
+                    strokeWidth={3}
+                    style={{ color: inkOn(swatch) }}
+                  />
+                ) : null}
+              </button>
+            );
+          })}
+
+          <label
+            title="Custom colour"
+            className={cn(
+              "relative grid size-5 cursor-pointer place-items-center rounded-full text-faint transition-colors hover:text-foreground",
+              custom ? ring : "border border-dashed border-line-strong",
+            )}
+            style={custom ? { background: current } : undefined}
+          >
+            {custom ? (
+              <Check
+                className="size-3"
+                strokeWidth={3}
+                style={{ color: inkOn(current) }}
+              />
+            ) : (
+              <Pipette className="size-3" />
+            )}
+            <input
+              type="color"
+              value={current ?? "#8f8f8f"}
+              onChange={(event) => onChange(event.target.value)}
+              className="absolute inset-0 cursor-pointer opacity-0"
+              aria-label="Pick a custom colour"
+            />
+          </label>
+        </div>
+
+        <span className="flex-1" />
+        <input
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder="#6c9bf5"
+          spellCheck={false}
+          aria-label="Hex colour"
+          aria-invalid={Boolean(problem)}
+          className="h-7 w-[84px] rounded-[var(--keel-r-chip)] bg-transparent px-2 text-right font-mono text-[12px] text-dim outline-none transition-colors placeholder:text-faint hover:bg-veil focus:bg-veil-2 focus:text-foreground aria-invalid:text-[color:var(--keel-dead)]"
+        />
+      </div>
+      <FieldError message={problem} />
+    </div>
+  );
+}
+
+// ---- Profiles --------------------------------------------------------------
+
+function ProfilesOff({
+  agentName,
+  example,
+  onEnable,
+}: {
+  agentName: string;
+  /** A plausible variable name, shown as the placeholder. */
+  example: string;
+  onEnable: (env: string) => void;
+}) {
+  // Kept local until it is turned on: the moment the agent has a variable this
+  // whole panel is replaced by the list, and focus would go with it.
+  const [draft, setDraft] = useState("");
+  const clean = draft.trim();
+  const valid = ENV_NAME.test(clean);
+
+  return (
+    <div className="flex gap-3.5 rounded-[var(--keel-r-window)] bg-veil p-4 shadow-[inset_0_1px_0_0_var(--keel-sheen)]">
+      <span className="grid size-8 shrink-0 place-items-center rounded-[var(--keel-r-control)] bg-veil-2 text-dim">
+        <UsersRound className="size-4" />
+      </span>
+      <div className="flex min-w-0 flex-1 flex-col gap-3">
+        <div>
+          <p className="text-[13px] font-medium text-foreground">
+            Use more than one sign-in
+          </p>
+          <p className="mt-1 max-w-[460px] text-[12px] leading-relaxed text-faint">
+            Profiles point {agentName} at a separate config folder. Enter the
+            environment variable it reads that folder from to turn them on.
+          </p>
+        </div>
+        <form
+          className="flex items-center gap-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (valid) onEnable(clean);
+          }}
+        >
+          <input
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            placeholder={example}
+            aria-label="Profile variable"
+            aria-invalid={clean !== "" && !valid}
+            spellCheck={false}
+            className={cn(FIELD, "h-8 max-w-[260px] font-mono")}
+          />
+          <Button type="submit" size="sm" variant="secondary" disabled={!valid}>
+            Turn on
+          </Button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function ProfileList({
+  agent,
+  accent,
+  env,
+  accounts,
+  usage,
+}: {
+  agent: Agent;
+  accent: string;
+  env: string;
+  accounts: AgentAccount[];
+  usage: Record<string, number>;
+}) {
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const chosen = accounts.find((account) => account.isDefault) ?? null;
+
+  function add() {
+    const id = useKeel
+      .getState()
+      .addAccount(agent.id, nextProfileName(accounts));
+    if (id) setRenamingId(id);
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-px rounded-[var(--keel-r-window)] bg-veil p-1 shadow-[inset_0_1px_0_0_var(--keel-sheen)]">
+        <div className="group flex h-12 items-center gap-3 rounded-[var(--keel-r-control)] px-2.5 transition-colors hover:bg-veil">
+          <span className="grid size-7 shrink-0 place-items-center rounded-full bg-veil-2 text-dim">
+            <UserRound className="size-3.5" />
+          </span>
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="flex min-w-0 items-center gap-2">
+              <span className="truncate text-[13px] text-foreground">
+                Default
+              </span>
+              {chosen ? null : <NewTerminalsBadge />}
+            </span>
+            <span className="text-[11px] text-faint">
+              The CLI&apos;s own sign-in
+            </span>
+          </span>
+          {chosen ? (
+            <RowMenu label="Actions for Default">
+              <DropdownMenuItem
+                onSelect={() =>
+                  useKeel.getState().setDefaultAccount(agent.id, null)
+                }
+              >
+                <CircleCheck className="size-3.5" />
+                Use for new terminals
+              </DropdownMenuItem>
+            </RowMenu>
+          ) : null}
+        </div>
+
+        {accounts.map((account) => (
+          <ProfileRow
+            key={account.id}
+            account={account}
+            accent={accent}
+            usage={usage[account.id] ?? 0}
+            renaming={renamingId === account.id}
+            onMakeDefault={() =>
+              useKeel.getState().setDefaultAccount(agent.id, account.id)
+            }
+            onStartRename={() => setRenamingId(account.id)}
+            onStopRename={() => setRenamingId(null)}
+          />
+        ))}
+
+        <button
+          type="button"
+          onClick={add}
+          className="flex h-10 items-center gap-3 rounded-[var(--keel-r-control)] px-2.5 text-[13px] text-dim transition-colors hover:bg-veil-2 hover:text-foreground"
+        >
+          <span className="grid size-7 shrink-0 place-items-center rounded-full border border-dashed border-line-strong">
+            <Plus className="size-3.5" />
+          </span>
+          Add profile
+        </button>
+      </div>
+      <p className="px-1 text-[11px] text-faint">
+        Each profile gets its own folder, handed to the CLI as{" "}
+        <code className="font-mono text-dim">{env}</code>.
+      </p>
+    </div>
+  );
+}
+
+function ProfileRow({
+  account,
+  accent,
+  usage,
+  renaming,
+  onMakeDefault,
+  onStartRename,
+  onStopRename,
+}: {
+  account: AgentAccount;
+  accent: string;
+  usage: number;
+  renaming: boolean;
+  onMakeDefault: () => void;
+  onStartRename: () => void;
+  onStopRename: () => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const initial = (account.name.trim()[0] ?? "?").toUpperCase();
+
+  if (confirming) {
+    return (
+      <div className="flex h-12 items-center gap-3 rounded-[var(--keel-r-control)] bg-[color:color-mix(in_srgb,var(--keel-dead)_8%,transparent)] px-2.5 animate-in fade-in-0">
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[13px] text-foreground">
+            Remove {account.name}?
+          </span>
+          <span className="block text-[11px] text-faint">
+            {usage > 0
+              ? `${plural(usage, "terminal restarts", "terminals restart")} on Default.`
+              : "Its sign-in folder stays on disk."}
+          </span>
+        </span>
+        <Button size="xs" variant="ghost" onClick={() => setConfirming(false)}>
+          Cancel
+        </Button>
+        <Button
+          size="xs"
+          variant="destructive"
+          onClick={() => useKeel.getState().removeAccount(account.id)}
+        >
+          Remove
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="group flex h-12 items-center gap-3 rounded-[var(--keel-r-control)] px-2.5 transition-colors hover:bg-veil animate-in fade-in-0 duration-150"
+      onDoubleClick={() => !renaming && onStartRename()}
+    >
+      <span
+        aria-hidden
+        className="grid size-7 shrink-0 place-items-center rounded-full text-[12px] font-semibold"
+        style={{
+          color: accent,
+          background: `color-mix(in srgb, ${accent} 14%, transparent)`,
+          boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${accent} 22%, transparent)`,
+        }}
+      >
+        {initial}
+      </span>
+      <span className="flex min-w-0 flex-1 flex-col">
+        {renaming ? (
+          <span data-escape-reverts className="-ml-1.5 flex">
+            <InlineRename
+              value={account.name}
+              className="h-6 max-w-64 flex-initial"
+              onCommit={(name) =>
+                useKeel.getState().renameAccount(account.id, name)
+              }
+              onDone={onStopRename}
+            />
+          </span>
+        ) : (
+          <span className="flex min-w-0 items-center gap-2">
+            <span
+              className="truncate text-[13px] text-foreground"
+              title="Double-click to rename"
+            >
+              {account.name}
+            </span>
+            {account.isDefault ? <NewTerminalsBadge /> : null}
+          </span>
+        )}
+        <span className="text-[11px] text-faint">
+          {usage > 0
+            ? `Open in ${plural(usage, "terminal", "terminals")}`
+            : "Not in use"}
+        </span>
+      </span>
+
+      <RowMenu label={`Actions for ${account.name}`}>
+          {account.isDefault ? null : (
+            <DropdownMenuItem onSelect={onMakeDefault}>
+              <CircleCheck className="size-3.5" />
+              Use for new terminals
+            </DropdownMenuItem>
+          )}
+          <DropdownMenuItem onSelect={onStartRename}>
+            <Pencil className="size-3.5" />
+            Rename
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            variant="destructive"
+            onSelect={() => setConfirming(true)}
+          >
+            <Trash2 className="size-3.5" />
+            Remove profile
+          </DropdownMenuItem>
+      </RowMenu>
+    </div>
+  );
+}
+
+/** Marks the sign-in new terminals of this agent start on. */
+function NewTerminalsBadge() {
+  return (
+    <span
+      title="New terminals start on this profile"
+      className="shrink-0 rounded-full bg-veil-2 px-2 py-[3px] text-[10px] font-medium leading-none text-dim"
+    >
+      New terminals
+    </span>
+  );
+}
+
+/** The ⋯ on a profile row: hidden until the row is hovered or focused. */
+function RowMenu({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <DropdownMenu modal={false}>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={label}
+          className="k-icon-btn size-7 opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100 data-[state=open]:bg-veil-2 data-[state=open]:text-foreground data-[state=open]:opacity-100"
+        >
+          <Ellipsis className="size-4" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        className="w-52"
+        // Let a rename field keep the focus it is about to take.
+        onCloseAutoFocus={(event) => event.preventDefault()}
+      >
+        {children}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+// ---- Advanced --------------------------------------------------------------
+
+function Advanced({
+  agent,
+  problems,
+  onChange,
+  defaultOpen,
+}: {
+  agent: Agent;
+  problems: Problems;
+  onChange: (change: Partial<AgentSpec>) => void;
+  defaultOpen: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+
+  useEffect(() => {
+    if (defaultOpen) setOpen(true);
+  }, [defaultOpen]);
+
+  return (
+    <section className="flex flex-col gap-4 border-t border-line pt-5">
       <button
         type="button"
         onClick={() => setOpen((previous) => !previous)}
         aria-expanded={open}
-        className="flex w-fit items-center gap-1 text-[11px] font-medium text-faint transition-colors hover:text-foreground"
+        className="-ml-1 flex w-fit items-center gap-1.5 rounded-[var(--keel-r-chip)] px-1 py-0.5 text-[13px] font-medium text-dim transition-colors hover:text-foreground"
       >
         <ChevronRight
-          className={cn("size-3 transition-transform duration-150", open && "rotate-90")}
+          className={cn(
+            "size-3.5 transition-transform duration-150",
+            open && "rotate-90",
+          )}
         />
-        {title}
+        Advanced
       </button>
+
       {open ? (
-        <div className="flex flex-col gap-4 animate-in fade-in-0 slide-in-from-top-1 duration-150">
-          {children}
+        <div className="flex flex-col gap-5 animate-in fade-in-0 slide-in-from-top-1 duration-150">
+          <SettingRow
+            label="Profile variable"
+            hint="Where this CLI reads its config folder from. Clear it to turn profiles off."
+            error={problems.accountEnv}
+          >
+            <input
+              value={agent.accountEnv ?? ""}
+              onChange={(event) => onChange({ accountEnv: event.target.value })}
+              placeholder="None"
+              spellCheck={false}
+              aria-label="Profile variable"
+              aria-invalid={Boolean(problems.accountEnv)}
+              className={cn(FIELD, "h-8 font-mono")}
+            />
+          </SettingRow>
+          <SettingRow
+            label="Executables"
+            hint="Looked for on PATH, one per line. Empty uses the command's first word."
+          >
+            <textarea
+              value={agent.bins.join("\n")}
+              onChange={(event) =>
+                onChange({ bins: event.target.value.split("\n") })
+              }
+              rows={2}
+              spellCheck={false}
+              aria-label="Executables"
+              className={cn(FIELD, "resize-none py-2 font-mono leading-relaxed")}
+            />
+          </SettingRow>
+          <SettingRow
+            label="Search folders"
+            hint="Extra places to look, one per line. {home} is your home folder."
+          >
+            <textarea
+              value={agent.paths.join("\n")}
+              onChange={(event) =>
+                onChange({ paths: event.target.value.split("\n") })
+              }
+              rows={4}
+              spellCheck={false}
+              aria-label="Search folders"
+              className={cn(FIELD, "resize-none py-2 font-mono leading-relaxed")}
+            />
+          </SettingRow>
+          <SettingRow label="Catalogue id" hint="How saved layouts refer to it.">
+            <code className="flex h-8 items-center font-mono text-[12px] text-dim">
+              {agent.id}
+            </code>
+          </SettingRow>
         </div>
       ) : null}
     </section>
   );
 }
 
-function FieldBlock({
+function SettingRow({
   label,
   hint,
   error,
@@ -770,234 +1424,22 @@ function FieldBlock({
   label: string;
   hint?: string;
   error?: string;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
-  // A div, not a <label>: some fields hold several controls (the colour row is
-  // eleven buttons), and a label forwards clicks on its text to the first one.
+  // A div, not a <label>: the control carries its own aria-label, and a label
+  // would forward clicks on the hint to it.
   return (
-    <div className="flex min-w-0 flex-col gap-1.5">
-      <span className="text-[12px] text-dim">{label}</span>
-      {children}
-      {hint && !error ? (
-        <span className="text-[11px] leading-relaxed text-faint">{hint}</span>
-      ) : null}
-      <FieldError message={error} />
-    </div>
-  );
-}
-
-function FieldError({ message }: { message?: string }) {
-  if (!message) return null;
-  return (
-    <span className="text-[11px] text-[color:var(--keel-dead)] animate-in fade-in-0">
-      {message}
-    </span>
-  );
-}
-
-function ColourPicker({
-  value,
-  invalid,
-  onChange,
-}: {
-  value: string;
-  invalid: boolean;
-  onChange: (value: string) => void;
-}) {
-  const current = expandHex(value);
-  const custom = current !== null && !SWATCHES.includes(current);
-
-  return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      {SWATCHES.map((swatch) => {
-        const active = current === swatch;
-        return (
-          <button
-            key={swatch}
-            type="button"
-            title={swatch}
-            aria-label={`Colour ${swatch}`}
-            aria-pressed={active}
-            onClick={() => onChange(swatch)}
-            className={cn(
-              "grid size-6 place-items-center rounded-full outline-none transition-transform duration-100 hover:scale-110 focus-visible:ring-2 focus-visible:ring-foreground/50",
-              active && "ring-2 ring-foreground/70 ring-offset-2 ring-offset-[color:var(--keel-chrome-strong)]",
-            )}
-            style={{ background: swatch }}
-          >
-            {active ? (
-              <Check className="size-3" strokeWidth={3} style={{ color: inkOn(swatch) }} />
-            ) : null}
-          </button>
-        );
-      })}
-
-      <label
-        title="Custom colour"
-        className={cn(
-          "relative grid size-6 cursor-pointer place-items-center rounded-full border text-faint transition-colors hover:text-foreground",
-          custom
-            ? "border-transparent ring-2 ring-foreground/70 ring-offset-2 ring-offset-[color:var(--keel-chrome-strong)]"
-            : "border-dashed border-line-strong",
-        )}
-        style={custom ? { background: current } : undefined}
-      >
-        {custom ? (
-          <Check className="size-3" strokeWidth={3} style={{ color: inkOn(current) }} />
-        ) : (
-          <Pipette className="size-3" />
-        )}
-        <input
-          type="color"
-          value={current ?? "#6fa4ee"}
-          onChange={(event) => onChange(event.target.value)}
-          className="absolute inset-0 cursor-pointer opacity-0"
-          aria-label="Pick a custom colour"
-        />
-      </label>
-
-      <input
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder="#6fa4ee"
-        spellCheck={false}
-        aria-label="Hex colour"
-        aria-invalid={invalid}
-        className={cn(INPUT, "ml-1.5 h-7 w-[88px] font-mono text-[12px]")}
-      />
-    </div>
-  );
-}
-
-function ProfileList({
-  agentId,
-  accounts,
-  usage,
-}: {
-  agentId: string;
-  accounts: AgentAccount[];
-  usage: Record<string, number>;
-}) {
-  const [justAdded, setJustAdded] = useState<string | null>(null);
-
-  return (
-    <div className="flex flex-col gap-2">
-      <div className="divide-y divide-line overflow-hidden rounded-[var(--keel-r-control)] border border-line">
-        <div className="flex h-10 items-center gap-2.5 px-3">
-          <UserRound className="size-3.5 shrink-0 text-faint" />
-          <span className="min-w-0 flex-1 text-[13px] text-dim">Default</span>
-          <span className="shrink-0 text-[11px] text-faint">
-            The CLI&apos;s own sign-in
-          </span>
-        </div>
-        {accounts.map((account) => (
-          <ProfileRow
-            key={account.id}
-            account={account}
-            usage={usage[account.id] ?? 0}
-            autoFocus={account.id === justAdded}
-          />
-        ))}
+    <div className="grid grid-cols-[180px_minmax(0,1fr)] gap-x-6">
+      <div className="pt-1.5">
+        <p className="text-[12px] text-dim">{label}</p>
+        {hint ? (
+          <p className="mt-1 text-[11px] leading-relaxed text-faint">{hint}</p>
+        ) : null}
       </div>
-
-      <button
-        type="button"
-        onClick={() =>
-          setJustAdded(
-            useKeel.getState().addAccount(agentId, nextProfileName(accounts)),
-          )
-        }
-        className="flex w-fit items-center gap-1.5 rounded-[var(--keel-r-control)] px-2 py-1.5 text-[12px] text-dim transition-colors hover:bg-veil hover:text-foreground"
-      >
-        <Plus className="size-3.5" />
-        Add profile
-      </button>
-    </div>
-  );
-}
-
-function ProfileRow({
-  account,
-  usage,
-  autoFocus,
-}: {
-  account: AgentAccount;
-  usage: number;
-  autoFocus: boolean;
-}) {
-  const [name, setName] = useState(account.name);
-  const [confirming, setConfirming] = useState(false);
-
-  useEffect(() => setName(account.name), [account.name]);
-
-  const commitName = () => {
-    const clean = name.trim();
-    if (!clean) {
-      setName(account.name);
-      return;
-    }
-    if (clean !== account.name) {
-      useKeel.getState().renameAccount(account.id, clean);
-    }
-  };
-
-  return (
-    <div className="group flex h-10 items-center gap-2.5 px-3 animate-in fade-in-0 duration-150">
-      <UserRound className="size-3.5 shrink-0 text-faint" />
-      <input
-        value={name}
-        autoFocus={autoFocus}
-        onFocus={(event) => autoFocus && event.currentTarget.select()}
-        onChange={(event) => setName(event.target.value)}
-        onBlur={commitName}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") event.currentTarget.blur();
-          if (event.key === "Escape") {
-            setName(account.name);
-            // Let the blur commit the reverted value, not the edited one.
-            requestAnimationFrame(() => (event.target as HTMLInputElement).blur());
-          }
-        }}
-        data-escape-reverts
-        aria-label="Profile name"
-        spellCheck={false}
-        className="-ml-1.5 h-7 min-w-0 flex-1 rounded-[var(--keel-r-chip)] bg-transparent px-1.5 text-[13px] text-foreground outline-none transition-colors hover:bg-veil focus:bg-veil-2"
-      />
-
-      {usage > 0 && !confirming ? (
-        <span className="shrink-0 text-[11px] text-faint">{usage} open</span>
-      ) : null}
-
-      {confirming ? (
-        <span className="flex shrink-0 items-center gap-1 animate-in fade-in-0">
-          <Button
-            size="xs"
-            variant="destructive"
-            onClick={() => useKeel.getState().removeAccount(account.id)}
-          >
-            {usage > 0 ? `Remove · restarts ${usage}` : "Remove"}
-          </Button>
-          <button
-            type="button"
-            aria-label="Keep profile"
-            onClick={() => setConfirming(false)}
-            className="k-icon-btn size-6"
-          >
-            <X className="size-3.5" />
-          </button>
-        </span>
-      ) : (
-        <button
-          type="button"
-          title="Remove profile"
-          aria-label="Remove profile"
-          data-danger="true"
-          onClick={() => setConfirming(true)}
-          className="k-icon-btn size-6 opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100"
-        >
-          <Trash2 className="size-3.5" />
-        </button>
-      )}
+      <div className="min-w-0">
+        {children}
+        <FieldError message={error} />
+      </div>
     </div>
   );
 }
