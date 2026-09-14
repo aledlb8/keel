@@ -14,8 +14,15 @@ export type LayoutNode =
       sizes: number[];
     };
 
-/** What a pane's agent is doing, inferred from output timing alone. */
-export type PaneStatus = "idle" | "working" | "waiting" | "exited";
+/**
+ * What a pane's agent is doing, inferred from output timing alone. Plain shells
+ * are always `idle`; `done` means an agent finished working and you have not
+ * been back to it since.
+ */
+export type PaneStatus = "idle" | "working" | "done";
+
+/** Things a terminal reports that explain the output that follows them. */
+export type PaneActivity = "input" | "resize" | "spawn";
 
 export interface Pane {
   id: string;
@@ -62,16 +69,33 @@ export interface Project {
   collapsed: boolean;
 }
 
-export interface Agent {
+/** One entry of the agent catalogue, exactly as it is saved. */
+export interface AgentSpec {
+  /** Stable key. Saved layouts reference agents by this. */
   id: string;
   name: string;
+  /** Typed into a fresh shell. */
   command: string;
+  /** Up to three characters, shown wherever the agent is drawn small. */
   short: string;
+  /** Hex colour, or empty for the neutral fallback. */
   accent: string;
   /** Environment variable that points this CLI at an alternate config home. */
   accountEnv?: string | null;
+  /** Executable names looked for on PATH. Empty uses the command's first word. */
+  bins: string[];
+  /** Extra folders searched; `{home}` expands to the home directory. */
+  paths: string[];
+  /** Kept out of the launcher. */
+  hidden?: boolean;
+}
+
+/** A catalogue entry plus what detection found. */
+export interface Agent extends AgentSpec {
   path: string | null;
   installed: boolean;
+  /** Ships with Keel: can be reset to defaults, but not deleted. */
+  builtin: boolean;
 }
 
 /** A named login slot. Credentials stay in the agent's own isolated config dir. */

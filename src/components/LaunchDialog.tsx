@@ -8,8 +8,14 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { openPath } from "@tauri-apps/plugin-opener";
-import { ChevronDown, Folder, Minus, Plus, X } from "lucide-react";
+import {
+  ChevronDown,
+  Folder,
+  Minus,
+  Plus,
+  SlidersHorizontal,
+  X,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -19,7 +25,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { agentCataloguePath, listSubdirectories } from "@/lib/backend";
+import { listSubdirectories } from "@/lib/backend";
 import { KEEL_AGENT_FALLBACK, agentAccent } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 import type { Project } from "@/lib/types";
@@ -68,11 +74,11 @@ export function LaunchDialog({
   }, [open, project]);
 
   const installed = useMemo(
-    () => agents.filter((agent) => agent.installed),
+    () => agents.filter((agent) => agent.installed && !agent.hidden),
     [agents],
   );
   const missing = useMemo(
-    () => agents.filter((agent) => !agent.installed),
+    () => agents.filter((agent) => !agent.installed && !agent.hidden),
     [agents],
   );
 
@@ -126,7 +132,8 @@ export function LaunchDialog({
   }
 
   function editCatalogue() {
-    void agentCataloguePath().then(openPath);
+    onOpenChange(false);
+    useKeel.getState().openAgentSettings(null);
   }
 
   const catalogueEmpty = agents.length === 0;
@@ -153,14 +160,25 @@ export function LaunchDialog({
               Each one is a fresh shell with the agent typed into it.
             </DialogDescription>
           </div>
-          <button
-            type="button"
-            aria-label="Close"
-            onClick={() => onOpenChange(false)}
-            className="k-icon-btn w-[52px] self-stretch rounded-none"
-          >
-            <X className="size-4" />
-          </button>
+          <div className="flex self-stretch">
+            <button
+              type="button"
+              title="Customize agents"
+              aria-label="Customize agents"
+              onClick={editCatalogue}
+              className="k-icon-btn w-[52px] self-stretch rounded-none"
+            >
+              <SlidersHorizontal className="size-4" />
+            </button>
+            <button
+              type="button"
+              aria-label="Close"
+              onClick={() => onOpenChange(false)}
+              className="k-icon-btn w-[52px] self-stretch rounded-none"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
         </DialogHeader>
 
         <div className="grid grid-cols-[1fr_320px] items-stretch">
@@ -176,7 +194,7 @@ export function LaunchDialog({
                     Refresh
                   </Button>
                   <Button size="sm" onClick={editCatalogue}>
-                    Edit catalogue
+                    Customize agents
                   </Button>
                 </div>
               </div>
@@ -194,7 +212,7 @@ export function LaunchDialog({
                         Retry
                       </Button>
                       <Button size="sm" onClick={editCatalogue}>
-                        Edit catalogue
+                        Customize agents
                       </Button>
                     </div>
                   </div>

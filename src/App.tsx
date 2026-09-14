@@ -17,8 +17,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { open as openFolder } from "@tauri-apps/plugin-dialog";
-import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
+import { AgentSettingsDialog } from "@/components/AgentSettingsDialog";
 import { Canvas } from "@/components/Canvas";
 import { LaunchDialog } from "@/components/LaunchDialog";
 import { Overview } from "@/components/Overview";
@@ -29,7 +30,7 @@ import { StatusBar } from "@/components/StatusBar";
 import { Titlebar, type TitlebarActions } from "@/components/Titlebar";
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
-import { agentCataloguePath, statePath } from "@/lib/backend";
+import { statePath } from "@/lib/backend";
 import { onHostLost } from "@/lib/invoke";
 import { deckIndexOf, isKeelChord, MOVES } from "@/lib/keymap";
 import { onPtyExit } from "@/lib/pty";
@@ -37,7 +38,8 @@ import { listPanes } from "@/lib/tree";
 import { activeDeck, startAttentionTracking, useKeel } from "@/state/store";
 
 export default function App() {
-  const [launching, setLaunching] = useState(false);
+  const launching = useKeel((state) => state.launcher);
+  const setLaunching = useKeel((state) => state.setLauncher);
   const [shortcuts, setShortcuts] = useState(false);
   const [overview, setOverview] = useState(false);
   const [sidebar, setSidebar] = useState(true);
@@ -45,7 +47,6 @@ export default function App() {
   const ready = useKeel((state) => state.ready);
   const projects = useKeel((state) => state.projects);
   const agents = useKeel((state) => state.agents);
-  const status = useKeel((state) => state.status);
   const activeProjectId = useKeel((state) => state.activeProjectId);
 
   useEffect(() => {
@@ -55,17 +56,16 @@ export default function App() {
       useKeel.getState().notePaneExit(paneId),
     );
     const stopHost = onHostLost(() => useKeel.getState().noteHostLost());
+    // No browser context menu anywhere: "Reload" and "Inspect" have no business
+    // in a desktop app. Every surface with something to offer opens its own.
+    const blockNativeMenu = (event: MouseEvent) => event.preventDefault();
+    window.addEventListener("contextmenu", blockNativeMenu);
     return () => {
       stopTracking();
       stopHost();
+      window.removeEventListener("contextmenu", blockNativeMenu);
       void unlisten.then((stop) => stop());
     };
-  }, []);
-
-  /** Opening the launcher from the sidebar selects that project on the way in. */
-  const openLauncher = useCallback((projectId?: string) => {
-    if (projectId) useKeel.getState().selectProject(projectId);
-    setLaunching(true);
   }, []);
 
   const pickFolder = useCallback(async () => {
@@ -88,6 +88,34 @@ export default function App() {
    */
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      // F2 renames the focused terminal — but only when the keystroke comes
+      // from a terminal (or from nowhere in particular). Sidebar rows and text
+      // fields handle their own F2.
+      if (
+        event.key === "F2" &&
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.shiftKey
+      ) {
+        const target = event.target as HTMLElement | null;
+        const fromTerminal =
+          !target ||
+          target === document.body ||
+          target.classList.contains("xterm-helper-textarea");
+        const state = useKeel.getState();
+        const project = state.projects.find(
+          (item) => item.id === state.activeProjectId,
+        );
+        const focused = activeDeck(project)?.focused;
+        if (fromTerminal && focused) {
+          event.preventDefault();
+          event.stopPropagation();
+          state.startRename({ kind: "pane", id: focused, where: "pane" });
+        }
+        return;
+      }
+
       if (!isKeelChord(event)) return;
 
       const state = useKeel.getState();
@@ -180,11 +208,6 @@ export default function App() {
   const deck = activeDeck(project);
   const hasPanes = listPanes(deck?.tree ?? null).length > 0;
 
-  // The status bar counts every terminal in the app, not just the visible deck —
-  // the whole point of the counters is what is happening where you are not.
-  const paneIds = projects.flatMap((item) =>
-    item.decks.flatMap((candidate) => listPanes(candidate.tree)),
-  );
   const focusedPane = deck?.focused ? (deck.panes[deck.focused] ?? null) : null;
   const statusCwd = focusedPane?.cwd ?? project?.path ?? null;
   const statusAgentName = focusedPane
@@ -207,7 +230,7 @@ export default function App() {
     nextPane: () => project && useKeel.getState().cyclePane(project.id, 1),
     toggleSidebar: () => setSidebar((previous) => !previous),
     showShortcuts: () => setShortcuts(true),
-    openCatalogue: () => void agentCataloguePath().then(openPath),
+    openCatalogue: () => useKeel.getState().openAgentSettings(null),
     // Reveal rather than open: the interesting thing is the folder it sits in.
     openConfig: () => void statePath().then(revealItemInDir),
   };
@@ -230,7 +253,6 @@ export default function App() {
         {sidebar ? (
           <Sidebar
             activeProjectId={activeProjectId}
-            onAddTerminals={openLauncher}
             // Going somewhere from the sidebar has to lift the overview, which
             // is an opaque sheet over the canvas — otherwise the deck really
             // does change underneath and the click looks like it was ignored.
@@ -272,7 +294,6 @@ export default function App() {
             <Overview
               project={project}
               agents={agents}
-              status={status}
               onClose={() => setOverview(false)}
             />
           ) : null}
@@ -283,8 +304,6 @@ export default function App() {
         project={project}
         cwd={statusCwd}
         agentName={statusAgentName}
-        status={status}
-        paneIds={paneIds}
         // Same as the sidebar: the status bar stays clickable while the
         // overview covers the canvas, so anything that moves you has to lift it.
         onSelectDeck={(deckId) => {
@@ -306,6 +325,7 @@ export default function App() {
         project={project}
       />
       <ShortcutsDialog open={shortcuts} onOpenChange={setShortcuts} />
+      <AgentSettingsDialog />
       <Toaster />
     </div>
   );

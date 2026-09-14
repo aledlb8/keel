@@ -2,8 +2,7 @@
  * Every deck in the project, at once.
  *
  * The canvas can only ever show one arrangement. This is the other view: all of
- * them side by side, drawn to scale from the real layout trees, with each
- * terminal's live state on it.
+ * them side by side, drawn to scale from the real layout trees.
  *
  * You can pick a running terminal up out of one deck and drop it on another. The
  * process is never touched — only which rectangle it is drawn in changes, because
@@ -17,17 +16,16 @@ import { Plus, X } from "lucide-react";
 import { LayoutSchematic } from "@/components/LayoutSchematic";
 import { listPanes } from "@/lib/tree";
 import { cn } from "@/lib/utils";
-import type { Agent, PaneStatus, Project } from "@/lib/types";
+import type { Agent, Project } from "@/lib/types";
 import { useKeel } from "@/state/store";
 
 export interface OverviewProps {
   project: Project;
   agents: Agent[];
-  status: Record<string, PaneStatus>;
   onClose: () => void;
 }
 
-export function Overview({ project, agents, status, onClose }: OverviewProps) {
+export function Overview({ project, agents, onClose }: OverviewProps) {
   const [dragging, setDragging] = useState<string | null>(null);
   const [over, setOver] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -157,7 +155,6 @@ export function Overview({ project, agents, status, onClose }: OverviewProps) {
                 <LayoutSchematic
                   deck={deck}
                   agents={agents}
-                  status={status}
                   draggingPaneId={dragging}
                   onPaneDragStart={setDragging}
                   onPaneDragEnd={() => {

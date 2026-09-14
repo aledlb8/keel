@@ -28,9 +28,11 @@ import {
 import type {
   Agent,
   AgentAccount,
+  AgentSpec,
   Deck,
   Direction,
   Pane,
+  PaneActivity,
   PaneStatus,
   PersistedState,
   Project,
@@ -40,17 +42,59 @@ import type {
 export type RestoreStatus = "idle" | "restoring" | "partial" | "failed";
 
 /**
- * Output timestamps live outside the store on purpose: a busy agent writes
- * hundreds of times a second and none of that should re-render React.
+ * Per-pane output bookkeeping. Lives outside the store on purpose: a busy agent
+ * writes hundreds of times a second and none of that should re-render React.
  */
-const lastOutput = new Map<string, number>();
+interface Activity {
+  /** When the current process was started. */
+  spawnedAt: number;
+  /** Last keystroke (or mouse / focus report) sent to the process. */
+  lastInput: number;
+  /** Last time the grid changed size, which makes a TUI repaint. */
+  lastResize: number;
+  lastOutput: number;
+  /** Start of the current burst of unprompted output; `null` between bursts. */
+  runStart: number | null;
+}
+const activity = new Map<string, Activity>();
 /** Pane ids that already reported a post-reopen spawn settle. */
 const restoreSettled = new Set<string>();
 
-/** Producing output within this window counts as actively working. */
-const WORKING_MS = 700;
-/** Quiet for longer than this and the agent has stopped needing the CPU. */
-const WAITING_MS = 45_000;
+function activityOf(paneId: string): Activity {
+  let entry = activity.get(paneId);
+  if (!entry) {
+    entry = {
+      spawnedAt: 0,
+      lastInput: 0,
+      lastResize: 0,
+      lastOutput: 0,
+      runStart: null,
+    };
+    activity.set(paneId, entry);
+  }
+  return entry;
+}
+
+/*
+ * "Working" is read off output alone, so these thresholds are all about telling
+ * an agent at work apart from everything else that makes a terminal print.
+ */
+/** Output this soon after a keystroke or resize is the terminal answering it. */
+const REPLY_MS = 300;
+/** An agent's launch banner and first paint are not work. */
+const STARTUP_MS = 6_000;
+/** A burst has to keep going this long to be work rather than a redraw. */
+const MIN_RUN_MS = 1_200;
+/** Silence this long ends a burst: the agent was working and is now done. */
+const QUIET_MS = 3_000;
+
+/** A name being edited in place, and which copy of it on screen is the editor. */
+export interface RenameTarget {
+  kind: "project" | "deck" | "pane";
+  id: string;
+  /** A pane's name shows in both the sidebar and its own header. */
+  where: "sidebar" | "pane";
+}
 
 /** What a caller needs to describe a terminal it wants opened. */
 export interface PaneSpec {
@@ -68,6 +112,8 @@ export interface KeelState {
   activeProjectId: string | null;
   /** Recomputed on a timer from output timing, never written to disk. */
   status: Record<string, PaneStatus>;
+  /** Panes whose shell has exited. Not persisted. */
+  exited: Record<string, true>;
   /** Session reopen chrome — not persisted. */
   restoreStatus: RestoreStatus;
   /** Panes still settling after a layout reopen. */
@@ -92,6 +138,37 @@ export interface KeelState {
     paneId: string,
     accountId: string | null,
   ) => void;
+  renameAccount: (accountId: string, name: string) => void;
+  /** Panes signed in with it fall back to the default login and restart. */
+  removeAccount: (accountId: string) => void;
+  /** Replace the agent catalogue on disk and re-detect. Rejects invalid input. */
+  saveAgents: (agents: AgentSpec[]) => Promise<void>;
+
+  /** Bumped to respawn a pane's process in the same terminal. Not persisted. */
+  generations: Record<string, number>;
+  restartPane: (paneId: string) => void;
+
+  /** The agents & profiles dialog; `agentId` preselects an agent. */
+  agentSettings: { open: boolean; agentId: string | null };
+  openAgentSettings: (agentId?: string | null) => void;
+  closeAgentSettings: () => void;
+
+  /** The Add terminals dialog. */
+  launcher: boolean;
+  setLauncher: (open: boolean) => void;
+
+  /** Which name is being edited in place, if any. */
+  renaming: RenameTarget | null;
+  startRename: (target: RenameTarget) => void;
+  stopRename: () => void;
+
+  renameProject: (projectId: string, name: string) => void;
+  renamePane: (projectId: string, paneId: string, title: string) => void;
+  /** Shift a project one place up or down the sidebar. */
+  moveProject: (projectId: string, delta: -1 | 1) => void;
+  /** Shift a deck one place; its number follows its position. */
+  moveDeck: (projectId: string, deckId: string, delta: -1 | 1) => void;
+  setAllCollapsed: (collapsed: boolean) => void;
 
   addProject: (path: string, name?: string) => Project;
   removeProject: (projectId: string) => void;
@@ -136,6 +213,7 @@ export interface KeelState {
   toggleZoom: (projectId: string, paneId: string) => void;
 
   noteOutput: (paneId: string) => void;
+  noteActivity: (paneId: string, kind: PaneActivity) => void;
   notePaneExit: (paneId: string) => void;
 }
 
@@ -151,6 +229,26 @@ function defaultTitle(agents: Agent[], agentId: string | null): string {
 export function basename(path: string): string {
   const parts = path.split(/[\\/]+/).filter(Boolean);
   return parts[parts.length - 1] ?? path;
+}
+
+/** Move the first matching item one place along, clamped to the ends. */
+function shift<T>(items: T[], match: (item: T) => boolean, delta: -1 | 1): T[] {
+  const from = items.findIndex(match);
+  const to = from + delta;
+  if (from < 0 || to < 0 || to >= items.length) return items;
+  const next = [...items];
+  [next[from], next[to]] = [next[to], next[from]];
+  return next;
+}
+
+/** "Profile N" with the lowest N none of these profiles is already using. */
+export function nextProfileName(accounts: AgentAccount[]): string {
+  const taken = new Set(
+    accounts.map((account) => account.name.toLocaleLowerCase()),
+  );
+  for (let index = 1; ; index += 1) {
+    if (!taken.has(`profile ${index}`)) return `Profile ${index}`;
+  }
 }
 
 export function emptyDeck(name: string): Deck {
@@ -228,18 +326,17 @@ export function activeDeck(project: Project | null | undefined): Deck | null {
   );
 }
 
-/** Whether anything on a deck is asking to be looked at. Never "idle". */
+/** The most notable agent state on a deck. Never "idle". */
 export type Attention = Exclude<PaneStatus, "idle">;
 
 export function deckAttention(
   deck: Deck,
   status: Record<string, PaneStatus>,
 ): Attention | null {
-  // Aggregate: waiting > working > dead (exited) > idle
+  // Aggregate: working > done > idle
   const rank: Record<Attention, number> = {
-    waiting: 3,
     working: 2,
-    exited: 1,
+    done: 1,
   };
   let best: Attention | null = null;
   for (const paneId of Object.keys(deck.panes)) {
@@ -349,6 +446,12 @@ export const useKeel = create<KeelState>((set, get) => {
     updateDeck(projectId, deck.id, change);
   }
 
+  /** Looking at a finished agent — focusing it, typing into it — clears "done". */
+  function acknowledge(paneId: string) {
+    if (get().status[paneId] !== "done") return;
+    set((state) => ({ status: { ...state.status, [paneId]: "idle" } }));
+  }
+
   return {
     ready: false,
     agents: [],
@@ -356,6 +459,11 @@ export const useKeel = create<KeelState>((set, get) => {
     projects: [],
     activeProjectId: null,
     status: {},
+    exited: {},
+    generations: {},
+    agentSettings: { open: false, agentId: null },
+    launcher: false,
+    renaming: null,
     restoreStatus: "restoring",
     restoreLeft: 0,
     hostLost: false,
@@ -384,6 +492,7 @@ export const useKeel = create<KeelState>((set, get) => {
           restoreStatus: "failed",
           restoreLeft: 0,
           status: {},
+          exited: {},
         });
         return;
       }
@@ -412,6 +521,7 @@ export const useKeel = create<KeelState>((set, get) => {
         restoreStatus: paneCount > 0 ? "restoring" : "idle",
         restoreLeft: paneCount,
         status: {},
+        exited: {},
       });
 
       // Safety: never leave Restoring… forever if a pane never settles.
@@ -419,9 +529,7 @@ export const useKeel = create<KeelState>((set, get) => {
         window.setTimeout(() => {
           const current = get();
           if (current.restoreStatus !== "restoring") return;
-          const anyDead = Object.values(current.status).some(
-            (value) => value === "exited",
-          );
+          const anyDead = Object.keys(current.exited).length > 0;
           set({
             restoreStatus: anyDead ? "partial" : "idle",
             restoreLeft: 0,
@@ -440,7 +548,7 @@ export const useKeel = create<KeelState>((set, get) => {
         for (const deck of project.decks) {
           for (const paneId of Object.keys(deck.panes)) {
             void killPty(paneId).catch(() => {});
-            lastOutput.delete(paneId);
+            activity.delete(paneId);
           }
         }
       }
@@ -449,6 +557,7 @@ export const useKeel = create<KeelState>((set, get) => {
         projects: [],
         activeProjectId: null,
         status: {},
+        exited: {},
         restoreStatus: "idle",
         restoreLeft: 0,
         ready: true,
@@ -457,12 +566,7 @@ export const useKeel = create<KeelState>((set, get) => {
     },
 
     settleRestore(paneId, ok) {
-      if (!ok) {
-        lastOutput.delete(paneId);
-        set((state) => ({
-          status: { ...state.status, [paneId]: "exited" },
-        }));
-      }
+      if (!ok) get().notePaneExit(paneId);
 
       const state = get();
       if (state.restoreStatus !== "restoring") return;
@@ -470,9 +574,7 @@ export const useKeel = create<KeelState>((set, get) => {
       restoreSettled.add(paneId);
 
       const left = Math.max(0, state.restoreLeft - 1);
-      const anyDead =
-        !ok ||
-        Object.values(get().status).some((value) => value === "exited");
+      const anyDead = !ok || Object.keys(get().exited).length > 0;
 
       set({
         restoreLeft: left,
@@ -533,6 +635,118 @@ export const useKeel = create<KeelState>((set, get) => {
       }));
     },
 
+    renameAccount(accountId, name) {
+      const clean = name.trim();
+      if (!clean) return;
+      set((state) => ({
+        accounts: state.accounts.map((account) =>
+          account.id === accountId ? { ...account, name: clean } : account,
+        ),
+      }));
+      persist();
+    },
+
+    removeAccount(accountId) {
+      const affected: string[] = [];
+      set((state) => ({
+        accounts: state.accounts.filter((account) => account.id !== accountId),
+        projects: state.projects.map((project) => ({
+          ...project,
+          decks: project.decks.map((deck) => {
+            let touched = false;
+            const panes = Object.fromEntries(
+              Object.entries(deck.panes).map(([id, pane]) => {
+                if (pane.accountId !== accountId) return [id, pane];
+                touched = true;
+                affected.push(id);
+                return [id, { ...pane, accountId: null }];
+              }),
+            );
+            return touched ? { ...deck, panes } : deck;
+          }),
+        })),
+      }));
+      persist();
+      // Those agents are still signed in with a profile that no longer exists;
+      // start them again on the default login so the header tells the truth.
+      for (const paneId of affected) get().restartPane(paneId);
+    },
+
+    async saveAgents(agents) {
+      const detected = await backend.saveAgentCatalogue(agents);
+      set({ agents: detected });
+    },
+
+    restartPane(paneId) {
+      set((state) => ({
+        generations: {
+          ...state.generations,
+          [paneId]: (state.generations[paneId] ?? 0) + 1,
+        },
+      }));
+    },
+
+    openAgentSettings(agentId = null) {
+      set({ agentSettings: { open: true, agentId } });
+    },
+
+    closeAgentSettings() {
+      set((state) => ({
+        agentSettings: { ...state.agentSettings, open: false },
+      }));
+    },
+
+    setLauncher(open) {
+      set({ launcher: open });
+    },
+
+    startRename(target) {
+      set({ renaming: target });
+    },
+
+    stopRename() {
+      set({ renaming: null });
+    },
+
+    renameProject(projectId, name) {
+      const clean = name.trim();
+      if (!clean) return;
+      updateProject(projectId, (project) => ({ ...project, name: clean }));
+    },
+
+    renamePane(projectId, paneId, title) {
+      const clean = title.trim();
+      if (!clean) return;
+      updateDeckOfPane(projectId, paneId, (deck) => ({
+        ...deck,
+        panes: {
+          ...deck.panes,
+          [paneId]: { ...deck.panes[paneId], title: clean },
+        },
+      }));
+    },
+
+    moveProject(projectId, delta) {
+      set((state) => ({
+        projects: shift(state.projects, (item) => item.id === projectId, delta),
+      }));
+      persist();
+    },
+
+    moveDeck(projectId, deckId, delta) {
+      updateProject(projectId, (project) => ({
+        ...project,
+        decks: shift(project.decks, (deck) => deck.id === deckId, delta),
+      }));
+    },
+
+    setAllCollapsed(collapsed) {
+      set((state) => ({
+        projects: state.projects.map((project) => ({ ...project, collapsed })),
+      }));
+      persist();
+    },
+
     addProject(path, name) {
       const existing = get().projects.find((project) => project.path === path);
       if (existing) {
@@ -564,7 +778,7 @@ export const useKeel = create<KeelState>((set, get) => {
       for (const deck of project?.decks ?? []) {
         for (const paneId of Object.keys(deck.panes)) {
           void killPty(paneId).catch(() => {});
-          lastOutput.delete(paneId);
+          activity.delete(paneId);
         }
       }
       set((state) => {
@@ -613,7 +827,7 @@ export const useKeel = create<KeelState>((set, get) => {
 
       for (const paneId of Object.keys(deck.panes)) {
         void killPty(paneId).catch(() => {});
-        lastOutput.delete(paneId);
+        activity.delete(paneId);
       }
 
       updateProject(projectId, (current) => {
@@ -772,7 +986,7 @@ export const useKeel = create<KeelState>((set, get) => {
 
     closePane(projectId, paneId) {
       void killPty(paneId).catch(() => {});
-      lastOutput.delete(paneId);
+      activity.delete(paneId);
       updateDeckOfPane(projectId, paneId, (deck) => {
         const tree = closeInTree(deck.tree, paneId);
         const panes = { ...deck.panes };
@@ -790,7 +1004,9 @@ export const useKeel = create<KeelState>((set, get) => {
       set((state) => {
         const status = { ...state.status };
         delete status[paneId];
-        return { status };
+        const exited = { ...state.exited };
+        delete exited[paneId];
+        return { status, exited };
       });
     },
 
@@ -798,6 +1014,7 @@ export const useKeel = create<KeelState>((set, get) => {
       const project = get().projects.find((item) => item.id === projectId);
       const deck = project ? deckOfPane(project, paneId) : null;
       if (!project || !deck) return;
+      acknowledge(paneId);
       if (deck.focused === paneId && project.activeDeckId === deck.id) return;
 
       // Reaching for a terminal brings its deck forward with it.
@@ -853,21 +1070,68 @@ export const useKeel = create<KeelState>((set, get) => {
     },
 
     noteOutput(paneId) {
-      lastOutput.set(paneId, Date.now());
+      const entry = activityOf(paneId);
+      const now = Date.now();
+      // Echo, a repaint after a resize, or a launch banner: the terminal is
+      // answering something, not doing work on its own.
+      const reply =
+        now - entry.lastInput < REPLY_MS ||
+        now - entry.lastResize < REPLY_MS ||
+        now - entry.spawnedAt < STARTUP_MS;
+      if (entry.runStart === null && !reply) entry.runStart = now;
+      entry.lastOutput = now;
+    },
+
+    noteActivity(paneId, kind) {
+      const entry = activityOf(paneId);
+      const now = Date.now();
+
+      if (kind === "spawn") {
+        entry.spawnedAt = now;
+        entry.runStart = null;
+        // A fresh process starts with a clean slate: not dead, not done.
+        set((state) => {
+          if (!(paneId in state.exited) && !(paneId in state.status)) {
+            return state;
+          }
+          const exited = { ...state.exited };
+          delete exited[paneId];
+          const status = { ...state.status };
+          delete status[paneId];
+          return { exited, status };
+        });
+        return;
+      }
+
+      if (kind === "resize") {
+        entry.lastResize = now;
+        return;
+      }
+
+      entry.lastInput = now;
+      // Typing breaks up a burst of echo that would otherwise pass for work —
+      // unless the agent is already working, which typing does not stop.
+      if (get().status[paneId] !== "working") entry.runStart = null;
+      acknowledge(paneId);
     },
 
     notePaneExit(paneId) {
-      lastOutput.delete(paneId);
-      set((state) => ({ status: { ...state.status, [paneId]: "exited" } }));
+      activity.delete(paneId);
+      set((state) => ({
+        exited: { ...state.exited, [paneId]: true },
+        status: { ...state.status, [paneId]: "idle" },
+      }));
     },
   };
 });
 
 /**
- * Attention tracking. One timer for the whole app derives every pane's status
+ * Agent status tracking. One timer for the whole app derives every pane's status
  * from output timing, and only writes to the store when something changed.
  *
- * This is what lets a deck you are not looking at tell you its agent went quiet.
+ * idle → working once an agent has produced unprompted output for a sustained
+ * stretch; working → done once it has gone quiet; done → idle when you focus or
+ * type into it. Plain shells and exited panes stay idle.
  */
 export function startAttentionTracking(): () => void {
   const timer = setInterval(() => {
@@ -875,28 +1139,33 @@ export function startAttentionTracking(): () => void {
     const next: Record<string, PaneStatus> = {};
     let changed = false;
 
+    const now = Date.now();
+
     for (const project of state.projects) {
       for (const deck of project.decks) {
-        for (const paneId of Object.keys(deck.panes)) {
-          const previous = state.status[paneId];
-          if (previous === "exited") {
-            next[paneId] = "exited";
-          } else {
-            const seen = lastOutput.get(paneId);
-            const since = seen ? Date.now() - seen : Number.POSITIVE_INFINITY;
-            // "Waiting" means an agent went quiet mid-task and probably wants an
-            // answer. A plain shell that has printed a prompt and stopped is not
-            // waiting for anything — it is just a prompt. Without this every
-            // fresh shell spent its first 45 seconds flying an amber flag.
-            const canWait = deck.panes[paneId]?.agentId != null;
-            next[paneId] =
-              since < WORKING_MS
-                ? "working"
-                : since < WAITING_MS && canWait
-                  ? "waiting"
-                  : "idle";
+        for (const [paneId, pane] of Object.entries(deck.panes)) {
+          const previous = state.status[paneId] ?? "idle";
+          const entry = activity.get(paneId);
+          let current: PaneStatus = "idle";
+
+          if (pane.agentId !== null && entry && !(paneId in state.exited)) {
+            if (entry.runStart !== null && now - entry.lastOutput >= QUIET_MS) {
+              entry.runStart = null;
+            }
+            const sustained =
+              entry.runStart !== null &&
+              entry.lastOutput - entry.runStart >= MIN_RUN_MS;
+            if (sustained || (previous === "working" && entry.runStart !== null)) {
+              current = "working";
+            } else if (previous === "working") {
+              current = "done";
+            } else {
+              current = previous;
+            }
           }
-          if (next[paneId] !== previous) changed = true;
+
+          next[paneId] = current;
+          if (current !== previous) changed = true;
         }
       }
     }

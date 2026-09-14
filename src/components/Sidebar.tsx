@@ -1,44 +1,65 @@
 /**
- * Projects, their decks, and the terminals inside.
+ * The sidebar: every project, its decks, and the terminals inside them.
  *
- * Rows are inset from the panel and rounded, so a selected row reads as a chip
- * sitting in the list rather than as a band painted edge to edge. Indentation is
- * padding inside the row, which keeps every hover and every selection the same
- * width no matter how deep it sits.
+ * Three kinds of row, one grammar:
+ *
+ *  - **Click** goes there.
+ *  - **Double-click** or **F2** renames it in place.
+ *  - **Right-click**, the context-menu key, or the ⋯ that appears on hover opens
+ *    everything else you can do to it. The menus are shared with the panes, so a
+ *    terminal offers the same actions wherever you reach for it.
+ *
+ * Decks show up as small numbered group headers once a project has two of them.
+ * With one, its terminals sit straight under the project, and nothing here
+ * mentions decks until you make a second.
  *
  * **Exactly one row is ever filled.** Selecting a terminal makes its deck and
- * its project current too, and painting all three the same grey stacked them
- * into a single tall blob that read as one chip overlapping its neighbours. So
- * the fill goes to the deepest thing that is actually current — the focused
- * terminal if there is one, else the active deck, else the project — and the
- * rows above it say "you are inside me" in weight and text colour instead. See
- * `leafOf`.
- *
- * The deck level collapses out of the tree whenever a project has only one — the
- * terminals hang straight off the folder, and nothing on screen mentions decks
- * until you actually open a second one.
- *
- * Selection is one-way on purpose: clicking the selected project does not
- * deselect it. There is no "no project" state to fall into.
+ * project current too, and filling all three stacked into one tall blob. So the
+ * fill goes to the deepest thing that is actually current — the focused
+ * terminal, else the active deck, else the project — and the rows above it say
+ * "you are inside me" with weight and text colour instead. See `leafOf`.
  */
 
-import { open as openFolder } from "@tauri-apps/plugin-dialog";
-import { ChevronRight, FolderPlus, Plus, X } from "lucide-react";
+import { ChevronRight, Ellipsis, FolderPlus, Plus, X } from "lucide-react";
 
+import { InlineRename } from "@/components/InlineRename";
 import { StatusDot } from "@/components/StatusDot";
+import {
+  ContextMenuEntries,
+  type MenuEntry,
+} from "@/components/menu/MenuEntries";
+import {
+  deckMenu,
+  paneMenu,
+  pickProjectFolder,
+  projectMenu,
+  sidebarMenu,
+} from "@/components/menu/actions";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { agentAccent } from "@/lib/tokens";
 import { listPanes } from "@/lib/tree";
 import { cn } from "@/lib/utils";
-import type { Agent, Deck, PaneStatus, Project } from "@/lib/types";
-import { activeDeck, deckAttention, useKeel } from "@/state/store";
+import type {
+  Agent,
+  AgentAccount,
+  Deck,
+  Pane,
+  PaneStatus,
+  Project,
+} from "@/lib/types";
+import {
+  activeDeck,
+  deckAttention,
+  useKeel,
+  type RenameTarget,
+} from "@/state/store";
 
-/**
- * Left padding per level, added to the row's own 8px.
- *
- * The steps are wide enough to read as a hierarchy at a glance and tight enough
- * that a three-level tree still leaves room for a terminal's title.
- */
-const INDENT = [0, 13, 24];
+/** Left padding per level, added to the row's own 8px. */
+const INDENT = [0, 14, 26];
 
 /** Which row of the selected project carries the fill. */
 type Leaf =
@@ -64,7 +85,6 @@ function leafOf(project: Project, open: boolean, showDecks: boolean): Leaf {
 
 export interface SidebarProps {
   activeProjectId: string | null;
-  onAddTerminals: (projectId: string) => void;
   /**
    * Fired whenever a row moves you somewhere. The canvas can be covered by the
    * overview, and navigating from over here has to get you out from under it —
@@ -74,21 +94,62 @@ export interface SidebarProps {
   onNavigate: () => void;
 }
 
-async function pickFolder() {
-  const picked = await openFolder({
-    directory: true,
-    multiple: false,
-    title: "Add a project folder",
-  });
-  if (typeof picked === "string") useKeel.getState().addProject(picked);
+type RowGroup = RenameTarget["kind"];
+
+// Spelled out per group so Tailwind can see every class name.
+const GROUP: Record<RowGroup, string> = {
+  project: "group/project",
+  deck: "group/deck",
+  pane: "group/pane",
+};
+const SHOW_ON_HOVER: Record<RowGroup, string> = {
+  project: "group-hover/project:flex group-focus-visible/project:flex",
+  deck: "group-hover/deck:flex group-focus-visible/deck:flex",
+  pane: "group-hover/pane:flex group-focus-visible/pane:flex",
+};
+const HIDE_ON_HOVER: Record<RowGroup, string> = {
+  project: "group-hover/project:hidden group-focus-visible/project:hidden",
+  deck: "group-hover/deck:hidden group-focus-visible/deck:hidden",
+  pane: "group-hover/pane:hidden group-focus-visible/pane:hidden",
+};
+
+function useRenaming(kind: RowGroup, id: string): boolean {
+  return useKeel(
+    (state) =>
+      state.renaming?.where === "sidebar" &&
+      state.renaming.kind === kind &&
+      state.renaming.id === id,
+  );
 }
 
-export function Sidebar({
-  activeProjectId,
-  onAddTerminals,
-  onNavigate,
-}: SidebarProps) {
+function startRename(kind: RowGroup, id: string) {
+  useKeel.getState().startRename({ kind, id, where: "sidebar" });
+}
+
+function stopRename() {
+  useKeel.getState().stopRename();
+}
+
+/** Open a row's context menu from a button inside it, anchored under the button. */
+function openMenuFrom(element: HTMLElement) {
+  const rect = element.getBoundingClientRect();
+  element.dispatchEvent(
+    new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      clientX: rect.left,
+      clientY: rect.bottom + 2,
+    }),
+  );
+}
+
+function isControl(target: EventTarget): boolean {
+  return target instanceof Element && target.closest("button, input") !== null;
+}
+
+export function Sidebar({ activeProjectId, onNavigate }: SidebarProps) {
   const agents = useKeel((state) => state.agents);
+  const accounts = useKeel((state) => state.accounts);
   const projects = useKeel((state) => state.projects);
   const status = useKeel((state) => state.status);
 
@@ -100,30 +161,37 @@ export function Sidebar({
           type="button"
           title="Add a folder"
           aria-label="Add a folder"
-          onClick={() => void pickFolder()}
+          onClick={() => void pickProjectFolder()}
           className="k-icon-btn size-[24px]"
         >
           <Plus className="size-3.5" />
         </button>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto pb-2 pt-0.5">
-        {projects.length === 0 ? (
-          <EmptyProjects />
-        ) : (
-          projects.map((project) => (
-            <ProjectNode
-              key={project.id}
-              project={project}
-              agents={agents}
-              status={status}
-              selected={project.id === activeProjectId}
-              onAddTerminals={onAddTerminals}
-              onNavigate={onNavigate}
-            />
-          ))
-        )}
-      </div>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <div className="min-h-0 flex-1 overflow-y-auto pb-2 pt-0.5">
+            {projects.length === 0 ? (
+              <EmptyProjects />
+            ) : (
+              projects.map((project) => (
+                <ProjectSection
+                  key={project.id}
+                  project={project}
+                  agents={agents}
+                  accounts={accounts}
+                  status={status}
+                  selected={project.id === activeProjectId}
+                  onNavigate={onNavigate}
+                />
+              ))
+            )}
+          </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuEntries entries={sidebarMenu} />
+        </ContextMenuContent>
+      </ContextMenu>
     </aside>
   );
 }
@@ -137,7 +205,7 @@ function EmptyProjects() {
     <div className="px-[var(--keel-inset)] pt-1">
       <button
         type="button"
-        onClick={() => void pickFolder()}
+        onClick={() => void pickProjectFolder()}
         className="flex w-full flex-col items-start gap-1 rounded-[var(--keel-r-control)] border border-dashed border-line-strong px-3 py-3 text-left transition-colors hover:border-foreground/25 hover:bg-veil"
       >
         <span className="flex items-center gap-1.5 text-[13px] text-foreground">
@@ -152,46 +220,183 @@ function EmptyProjects() {
   );
 }
 
-function ProjectNode({
-  project,
-  agents,
-  status,
+/**
+ * A row that behaves like one: focusable, activated by Enter or Space, renamed
+ * by F2 or a double-click, and carrying its own context menu.
+ */
+function Row({
+  group,
+  menu,
   selected,
-  onAddTerminals,
-  onNavigate,
+  onActivate,
+  onRename,
+  className,
+  style,
+  title,
+  children,
 }: {
-  project: Project;
-  agents: Agent[];
-  status: Record<string, PaneStatus>;
+  group: RowGroup;
+  menu: () => MenuEntry[];
   selected: boolean;
-  onAddTerminals: (projectId: string) => void;
-  onNavigate: () => void;
+  onActivate: () => void;
+  onRename: () => void;
+  className?: string;
+  style?: React.CSSProperties;
+  title?: string;
+  children: React.ReactNode;
 }) {
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div
+          role="button"
+          tabIndex={0}
+          data-selected={selected}
+          title={title}
+          style={style}
+          className={cn("k-row", GROUP[group], className)}
+          onClick={(event) => {
+            if (!isControl(event.target)) onActivate();
+          }}
+          onDoubleClick={(event) => {
+            if (!isControl(event.target)) onRename();
+          }}
+          onKeyDown={(event) => {
+            if (event.target !== event.currentTarget) return;
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              onActivate();
+            } else if (event.key === "F2") {
+              event.preventDefault();
+              onRename();
+            } else if (
+              event.key === "ContextMenu" ||
+              (event.shiftKey && event.key === "F10")
+            ) {
+              event.preventDefault();
+              openMenuFrom(event.currentTarget);
+            }
+          }}
+        >
+          {children}
+        </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuEntries entries={menu} />
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
+/** Quick actions that slide in on hover, replacing the row's quiet detail. */
+function RowActions({
+  group,
+  children,
+}: {
+  group: RowGroup;
+  children: React.ReactNode;
+}) {
+  return (
+    <span className={cn("hidden shrink-0 items-center gap-px", SHOW_ON_HOVER[group])}>
+      {children}
+    </span>
+  );
+}
+
+function RowButton({
+  label,
+  onClick,
+  danger,
+  children,
+}: {
+  label: string;
+  onClick: (button: HTMLElement) => void;
+  danger?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      data-danger={danger ? "true" : undefined}
+      onClick={(event) => {
+        event.stopPropagation();
+        onClick(event.currentTarget);
+      }}
+      className="k-icon-btn size-[21px]"
+    >
+      {children}
+    </button>
+  );
+}
+
+function MoreButton() {
+  return (
+    <RowButton label="More actions" onClick={openMenuFrom}>
+      <Ellipsis className="size-3.5" />
+    </RowButton>
+  );
+}
+
+/** A pane or deck tally. Mono and tabular because it is a number you compare. */
+function Count({ value, className }: { value: number; className?: string }) {
+  if (!value) return null;
+  return (
+    <span
+      className={cn(
+        "shrink-0 pr-1 font-mono text-[11px] tabular-nums text-faint",
+        className,
+      )}
+    >
+      {value}
+    </span>
+  );
+}
+
+interface TreeProps {
+  agents: Agent[];
+  accounts: AgentAccount[];
+  status: Record<string, PaneStatus>;
+  onNavigate: () => void;
+}
+
+function ProjectSection({
+  project,
+  selected,
+  agents,
+  accounts,
+  status,
+  onNavigate,
+}: TreeProps & { project: Project; selected: boolean }) {
   const total = project.decks.reduce(
     (sum, deck) => sum + listPanes(deck.tree).length,
     0,
   );
-  const open = !project.collapsed && total > 0;
-  // One deck is the common case: skip the level entirely rather than making
-  // every project look like it has a hierarchy it does not use.
   const showDecks = project.decks.length > 1;
+  const expandable = total > 0 || showDecks;
+  const open = expandable && !project.collapsed;
   const leaf = selected ? leafOf(project, open, showDecks) : null;
+  const renaming = useRenaming("project", project.id);
+  const tree = { agents, accounts, status, onNavigate };
 
   return (
     <div className="pt-0.5">
-      <div
-        className="k-row group"
-        data-selected={leaf?.kind === "project"}
+      <Row
+        group="project"
+        menu={() => projectMenu(project.id)}
+        selected={leaf?.kind === "project"}
         title={project.path}
-        onClick={() => {
+        onActivate={() => {
           useKeel.getState().selectProject(project.id);
           onNavigate();
         }}
+        onRename={() => startRename("project", project.id)}
       >
         <button
           type="button"
           aria-label={open ? "Collapse" : "Expand"}
-          disabled={total === 0}
+          disabled={!expandable}
           onClick={(event) => {
             event.stopPropagation();
             useKeel.getState().toggleCollapsed(project.id);
@@ -206,166 +411,168 @@ function ProjectNode({
           />
         </button>
 
-        <span
-          className={cn(
-            "min-w-0 flex-1 truncate",
-            selected ? "font-medium text-foreground" : "text-dim",
-          )}
-        >
-          {project.name}
-        </span>
+        {renaming ? (
+          <InlineRename
+            value={project.name}
+            onCommit={(name) => useKeel.getState().renameProject(project.id, name)}
+            onDone={stopRename}
+          />
+        ) : (
+          <>
+            <span
+              className={cn(
+                "min-w-0 flex-1 truncate",
+                selected ? "font-medium text-foreground" : "text-dim",
+              )}
+            >
+              {project.name}
+            </span>
+            <Count value={total} className={HIDE_ON_HOVER.project} />
+            <RowActions group="project">
+              <RowButton
+                label="Add terminals"
+                onClick={() => {
+                  const state = useKeel.getState();
+                  state.selectProject(project.id);
+                  state.setLauncher(true);
+                  onNavigate();
+                }}
+              >
+                <Plus className="size-3" />
+              </RowButton>
+              <MoreButton />
+            </RowActions>
+          </>
+        )}
+      </Row>
 
-        <Count value={total} className="group-hover:hidden" />
-
-        <span className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
-          <button
-            type="button"
-            title="Add terminals"
-            aria-label="Add terminals"
-            onClick={(event) => {
-              event.stopPropagation();
-              onAddTerminals(project.id);
-            }}
-            className="k-icon-btn size-[21px]"
-          >
-            <Plus className="size-3" />
-          </button>
-          <button
-            type="button"
-            title="Remove project"
-            aria-label="Remove project"
-            data-danger="true"
-            onClick={(event) => {
-              event.stopPropagation();
-              useKeel.getState().removeProject(project.id);
-            }}
-            className="k-icon-btn size-[21px]"
-          >
-            <X className="size-3" />
-          </button>
-        </span>
-      </div>
-
-      {open
-        ? project.decks.map((deck, index) =>
-            showDecks ? (
-              <DeckNode
-                key={deck.id}
-                project={project}
-                deck={deck}
-                index={index}
-                agents={agents}
-                status={status}
-                leaf={leaf}
-                onNavigate={onNavigate}
-              />
-            ) : (
-              <PaneRows
-                key={deck.id}
-                project={project}
-                deck={deck}
-                depth={1}
-                agents={agents}
-                status={status}
-                leaf={leaf}
-                onNavigate={onNavigate}
-              />
-            ),
-          )
-        : null}
+      {open ? (
+        showDecks ? (
+          project.decks.map((deck, index) => (
+            <DeckGroup
+              key={deck.id}
+              project={project}
+              deck={deck}
+              index={index}
+              leaf={leaf}
+              {...tree}
+            />
+          ))
+        ) : (
+          <PaneRows
+            project={project}
+            deck={project.decks[0]}
+            depth={1}
+            leaf={leaf}
+            {...tree}
+          />
+        )
+      ) : null}
     </div>
   );
 }
 
-/** A pane or deck tally. Mono and tabular because it is a number you compare. */
-function Count({ value, className }: { value: number; className?: string }) {
-  if (!value) return null;
-  return (
-    <span
-      className={cn(
-        "shrink-0 font-mono text-[11px] tabular-nums text-faint",
-        className,
-      )}
-    >
-      {value}
-    </span>
-  );
-}
-
-function DeckNode({
+function DeckGroup({
   project,
   deck,
   index,
-  agents,
-  status,
   leaf,
-  onNavigate,
-}: {
+  ...tree
+}: TreeProps & {
   project: Project;
   deck: Deck;
   index: number;
-  agents: Agent[];
-  status: Record<string, PaneStatus>;
   leaf: Leaf | null;
-  onNavigate: () => void;
 }) {
   const active = deck.id === project.activeDeckId;
   const count = listPanes(deck.tree).length;
-  const attention = deckAttention(deck, status);
+  const attention = deckAttention(deck, tree.status);
+  const renaming = useRenaming("deck", deck.id);
+
+  const addHere = () => {
+    const state = useKeel.getState();
+    state.selectProject(project.id);
+    state.selectDeck(project.id, deck.id);
+    state.setLauncher(true);
+    tree.onNavigate();
+  };
 
   return (
     <>
-      <div
-        className="k-row group/deck"
-        data-selected={active && leaf?.kind === "deck"}
+      <Row
+        group="deck"
+        menu={() => deckMenu(project.id, deck.id)}
+        selected={active && leaf?.kind === "deck"}
+        className="mt-1.5 h-[26px]"
         style={{ paddingLeft: 8 + INDENT[1] }}
-        onClick={() => {
-          useKeel.getState().selectDeck(project.id, deck.id);
-          onNavigate();
+        onActivate={() => {
+          const state = useKeel.getState();
+          state.selectProject(project.id);
+          state.selectDeck(project.id, deck.id);
+          tree.onNavigate();
         }}
+        onRename={() => startRename("deck", deck.id)}
       >
         {/* Decks are numbered everywhere else in the app; number them here too. */}
-        <span className="shrink-0 font-mono text-[11px] tabular-nums text-faint">
-          {index + 1}
-        </span>
         <span
           className={cn(
-            "min-w-0 flex-1 truncate",
-            active ? "font-medium text-foreground" : "text-dim",
+            "grid h-4 min-w-4 shrink-0 place-items-center rounded-[4px] px-1 font-mono text-[10px] tabular-nums transition-colors",
+            active ? "bg-veil-3 text-foreground" : "bg-veil text-faint",
           )}
         >
-          {deck.name}
+          {index + 1}
         </span>
 
-        {!active && attention ? (
-          <StatusDot status={attention} title={attention} />
-        ) : null}
+        {renaming ? (
+          <InlineRename
+            value={deck.name}
+            className="h-5 text-[12px]"
+            onCommit={(name) =>
+              useKeel.getState().renameDeck(project.id, deck.id, name)
+            }
+            onDone={stopRename}
+          />
+        ) : (
+          <>
+            <span
+              className={cn(
+                "min-w-0 flex-1 truncate text-[12px]",
+                active ? "font-medium text-foreground" : "text-dim",
+              )}
+            >
+              {deck.name}
+            </span>
+            {!active && attention ? <StatusDot status={attention} /> : null}
+            <Count value={count} className={HIDE_ON_HOVER.deck} />
+            <RowActions group="deck">
+              <RowButton label="Add terminals to this deck" onClick={addHere}>
+                <Plus className="size-3" />
+              </RowButton>
+              <MoreButton />
+            </RowActions>
+          </>
+        )}
+      </Row>
 
-        <Count value={count} className="group-hover/deck:hidden" />
+      {count === 0 ? (
         <button
           type="button"
-          aria-label={`Close ${deck.name}`}
-          title={`Close ${deck.name}`}
-          data-danger="true"
-          onClick={(event) => {
-            event.stopPropagation();
-            useKeel.getState().removeDeck(project.id, deck.id);
-          }}
-          className="k-icon-btn hidden size-[21px] group-hover/deck:grid"
+          onClick={addHere}
+          className="k-row gap-1.5 text-[12px] text-faint hover:text-dim"
+          style={{ paddingLeft: 8 + INDENT[2] }}
         >
-          <X className="size-2.5" />
+          <Plus className="size-3" />
+          Add terminals
         </button>
-      </div>
-
-      <PaneRows
-        project={project}
-        deck={deck}
-        depth={2}
-        agents={agents}
-        status={status}
-        leaf={active ? leaf : null}
-        onNavigate={onNavigate}
-      />
+      ) : (
+        <PaneRows
+          project={project}
+          deck={deck}
+          depth={2}
+          leaf={active ? leaf : null}
+          {...tree}
+        />
+      )}
     </>
   );
 }
@@ -374,18 +581,16 @@ function PaneRows({
   project,
   deck,
   depth,
-  agents,
-  status,
   leaf,
+  agents,
+  accounts,
+  status,
   onNavigate,
-}: {
+}: TreeProps & {
   project: Project;
   deck: Deck;
   depth: number;
-  agents: Agent[];
-  status: Record<string, PaneStatus>;
   leaf: Leaf | null;
-  onNavigate: () => void;
 }) {
   const active = deck.id === project.activeDeckId;
 
@@ -394,56 +599,114 @@ function PaneRows({
       {listPanes(deck.tree).map((paneId) => {
         const pane = deck.panes[paneId];
         if (!pane) return null;
-        const agent =
-          agents.find((candidate) => candidate.id === pane.agentId) ?? null;
-        const accent = agentAccent(agent?.accent);
-        const state = status[paneId] ?? "idle";
-        const focused = active && deck.focused === paneId;
-
         return (
-          <div
+          <PaneRow
             key={paneId}
-            className="k-row group/pane"
-            data-selected={leaf?.kind === "pane" && leaf.id === paneId}
-            style={{ paddingLeft: 8 + (INDENT[depth] ?? INDENT[2]) }}
-            title={pane.cwd ?? project.path}
-            onClick={() => {
-              // Reaching a terminal brings its project and deck with it.
-              useKeel.getState().selectProject(project.id);
-              useKeel.getState().focusPane(project.id, paneId);
-              onNavigate();
-            }}
-          >
-            <StatusDot status={state} fallback={accent} title={state} />
-            <span
-              className="shrink-0 font-mono text-[11px] font-medium"
-              style={{ color: accent }}
-            >
-              {agent?.short ?? "SH"}
-            </span>
-            <span
-              className={cn(
-                "min-w-0 flex-1 truncate",
-                focused ? "font-medium text-foreground" : "text-dim",
-              )}
-            >
-              {pane.title}
-            </span>
-            <button
-              type="button"
-              aria-label={`Close ${pane.title}`}
-              data-danger="true"
-              onClick={(event) => {
-                event.stopPropagation();
-                useKeel.getState().closePane(project.id, paneId);
-              }}
-              className="k-icon-btn hidden size-[21px] group-hover/pane:grid"
-            >
-              <X className="size-2.5" />
-            </button>
-          </div>
+            project={project}
+            pane={pane}
+            depth={depth}
+            agent={agents.find((agent) => agent.id === pane.agentId) ?? null}
+            account={
+              accounts.find((account) => account.id === pane.accountId) ?? null
+            }
+            status={status[paneId] ?? "idle"}
+            selected={leaf?.kind === "pane" && leaf.id === paneId}
+            focused={active && deck.focused === paneId}
+            onNavigate={onNavigate}
+          />
         );
       })}
     </>
+  );
+}
+
+function PaneRow({
+  project,
+  pane,
+  depth,
+  agent,
+  account,
+  status,
+  selected,
+  focused,
+  onNavigate,
+}: {
+  project: Project;
+  pane: Pane;
+  depth: number;
+  agent: Agent | null;
+  account: AgentAccount | null;
+  status: PaneStatus;
+  selected: boolean;
+  focused: boolean;
+  onNavigate: () => void;
+}) {
+  const renaming = useRenaming("pane", pane.id);
+
+  return (
+    <Row
+      group="pane"
+      menu={() => paneMenu(project.id, pane.id, "sidebar")}
+      selected={selected}
+      title={pane.cwd ?? project.path}
+      style={{ paddingLeft: 8 + (INDENT[depth] ?? INDENT[2]) }}
+      onActivate={() => {
+        // Reaching a terminal brings its project and deck with it.
+        const state = useKeel.getState();
+        state.selectProject(project.id);
+        state.focusPane(project.id, pane.id);
+        onNavigate();
+      }}
+      onRename={() => startRename("pane", pane.id)}
+    >
+      <StatusDot status={status} />
+      <span
+        className="w-[18px] shrink-0 font-mono text-[10px] font-medium"
+        style={{ color: agentAccent(agent?.accent) }}
+      >
+        {agent?.short || "SH"}
+      </span>
+
+      {renaming ? (
+        <InlineRename
+          value={pane.title}
+          onCommit={(title) =>
+            useKeel.getState().renamePane(project.id, pane.id, title)
+          }
+          onDone={stopRename}
+        />
+      ) : (
+        <>
+          <span
+            className={cn(
+              "min-w-0 flex-1 truncate",
+              focused ? "font-medium text-foreground" : "text-dim",
+            )}
+          >
+            {pane.title}
+          </span>
+          {account ? (
+            <span
+              className={cn(
+                "max-w-[64px] shrink-0 truncate pr-1 text-[11px] text-faint",
+                HIDE_ON_HOVER.pane,
+              )}
+            >
+              {account.name}
+            </span>
+          ) : null}
+          <RowActions group="pane">
+            <MoreButton />
+            <RowButton
+              label="Close terminal"
+              danger
+              onClick={() => useKeel.getState().closePane(project.id, pane.id)}
+            >
+              <X className="size-3" />
+            </RowButton>
+          </RowActions>
+        </>
+      )}
+    </Row>
   );
 }

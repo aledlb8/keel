@@ -28,7 +28,13 @@ import { toast } from "sonner";
 import { PaneView } from "@/components/PaneView";
 import { listPanes } from "@/lib/tree";
 import { cn } from "@/lib/utils";
-import type { Deck, Direction, LayoutNode, Project } from "@/lib/types";
+import type {
+  Deck,
+  Direction,
+  LayoutNode,
+  PaneActivity,
+  Project,
+} from "@/lib/types";
 import { activeDeck, useKeel } from "@/state/store";
 
 /**
@@ -57,11 +63,11 @@ export function Canvas({
   const [rects, setRects] = useState<Record<string, Rect>>({});
   const [size, setSize] = useState({ width: 0, height: 0 });
   /** Bumping a pane's generation respawns its process in the same terminal. */
-  const [generations, setGenerations] = useState<Record<string, number>>({});
+  const generations = useKeel((state) => state.generations);
 
   const agents = useKeel((state) => state.agents);
   const accounts = useKeel((state) => state.accounts);
-  const status = useKeel((state) => state.status);
+  const exited = useKeel((state) => state.exited);
 
   const project = projects.find((item) => item.id === activeProjectId) ?? null;
   const deck = activeDeck(project);
@@ -140,6 +146,11 @@ export function Canvas({
     (paneId: string) => useKeel.getState().noteOutput(paneId),
     [],
   );
+  const noteActivity = useCallback(
+    (paneId: string, kind: PaneActivity) =>
+      useKeel.getState().noteActivity(paneId, kind),
+    [],
+  );
   const splitPane = useCallback(
     (paneId: string, direction: Direction) =>
       project && useKeel.getState().duplicatePane(project.id, paneId, direction),
@@ -155,19 +166,11 @@ export function Canvas({
       project && useKeel.getState().closePane(project.id, paneId),
     [project],
   );
-  const restartPane = useCallback((paneId: string) => {
-    setGenerations((previous) => ({
-      ...previous,
-      [paneId]: (previous[paneId] ?? 0) + 1,
-    }));
-    // Clear exited so attention tracking can leave "dead" after a relaunch.
-    useKeel.setState((state) => {
-      if (state.status[paneId] !== "exited") return state;
-      const status = { ...state.status };
-      delete status[paneId];
-      return { status };
-    });
-  }, []);
+  // The respawn reports itself (noteActivity "spawn"), which clears "exited".
+  const restartPane = useCallback(
+    (paneId: string) => useKeel.getState().restartPane(paneId),
+    [],
+  );
   const changeAccount = useCallback(
     (paneId: string, accountId: string | null) => {
       if (!project) return;
@@ -266,10 +269,11 @@ export function Canvas({
             return (
               <PaneView
                 key={paneId}
+                projectId={item.id}
                 pane={pane}
                 agent={agent}
                 accounts={accounts}
-                status={status[paneId] ?? "idle"}
+                exited={paneId in exited}
                 focused={onScreen && candidate.focused === paneId}
                 zoomed={isZoomed}
                 cwd={pane.cwd ?? item.path}
@@ -283,6 +287,7 @@ export function Canvas({
                 }
                 onFocus={focusPane}
                 onOutput={noteOutput}
+                onActivity={noteActivity}
                 onSplit={splitPane}
                 onZoom={zoomPane}
                 onClose={closePane}

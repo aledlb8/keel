@@ -49,7 +49,7 @@
 
     /* The only colours with meaning. */
     --color-working: var(--keel-working);
-    --color-waiting: var(--keel-waiting);
+    --color-done: var(--keel-done);
     --color-idle: var(--keel-idle);
     --color-dead: var(--keel-dead);
 
@@ -125,8 +125,9 @@
     --keel-text-faint: #6b7385;
 
     /* ---- State (opaque, and the only colour in the chrome) -------------- */
-    --keel-working: #56cf92;
-    --keel-waiting: #f2b544;
+    /* Agent status, spent only on the sidebar dot. */
+    --keel-working: #6fa4ee;
+    --keel-done: #56cf92;
     --keel-idle: #6b7385;
     --keel-dead: #f2777d;
 
@@ -365,35 +366,6 @@
         background: color-mix(in srgb, var(--keel-dead) 20%, transparent);
         color: var(--keel-dead);
     }
-
-    /*
-     * The one thing in the app that moves on its own.
-     *
-     * An agent that has stopped to ask you something is the single event this
-     * whole window exists to surface, so its dot breathes. Nothing else does —
-     * a screen where six things pulse is a screen where none of them mean
-     * anything.
-     */
-    .k-pulse::after {
-        content: "";
-        position: absolute;
-        inset: -3px;
-        border-radius: 9999px;
-        border: 1px solid currentColor;
-        animation: k-breathe 2.4s ease-in-out infinite;
-    }
-}
-
-@keyframes k-breathe {
-    0%,
-    100% {
-        opacity: 0.5;
-        transform: scale(1);
-    }
-    50% {
-        opacity: 0;
-        transform: scale(1.6);
-    }
 }
 
 /*
@@ -403,39 +375,17 @@
  */
 
 /*
- * xterm sits inside a pane shell that already draws the fill, the radius and the
- * clip. It contributes glyphs and nothing else — the transparent background here
- * is deliberate, and `allowTransparency` on the Terminal is what makes it land.
+ * xterm paints its own ground in the pane's solid colour (see TerminalSurface),
+ * so glyphs are rasterised onto an opaque surface and stay crisp. Its padding
+ * lives on a wrapper rather than here, so FitAddon measures the real grid.
  */
 .xterm {
     height: 100%;
-    padding: 10px 8px 8px 12px;
 }
 
-.xterm .xterm-viewport {
-    background-color: transparent !important;
-    scrollbar-width: thin;
-    scrollbar-color: var(--keel-line-strong) transparent;
-}
-
-.xterm .xterm-screen {
-    background-color: transparent !important;
-}
-
-.xterm .xterm-viewport::-webkit-scrollbar {
-    width: 10px;
-}
-
-.xterm .xterm-viewport::-webkit-scrollbar-thumb {
-    background: var(--keel-line-strong);
-    border-radius: 5px;
-    /* Keeps the thumb clear of the pane's rounded corner. */
-    background-clip: padding-box;
-    border: 3px solid transparent;
-}
-
-.xterm .xterm-viewport::-webkit-scrollbar-track {
-    background: transparent;
+/* A VS Code idiom that xterm 6 inherited; on a flat slab it reads as a smudge. */
+.xterm .xterm-scrollable-element > .shadow {
+    box-shadow: none;
 }
 
 /* Chrome scrollbars, matched to the terminal ones. */

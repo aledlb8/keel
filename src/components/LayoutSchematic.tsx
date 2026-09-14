@@ -3,19 +3,17 @@
  *
  * It renders the real layout tree with the real proportions, so a schematic is
  * never a guess about what you would see — it is the same geometry at another
- * scale. Cells carry the agent's colour and short code plus a live status dot,
- * which reads better at this size than actual terminal pixels ever would.
+ * scale. Cells carry the agent's colour and short code, which reads better at
+ * this size than actual terminal pixels ever would.
  */
 
-import { StatusDot } from "@/components/StatusDot";
 import { agentAccent } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
-import type { Agent, Deck, LayoutNode, PaneStatus } from "@/lib/types";
+import type { Agent, Deck, LayoutNode } from "@/lib/types";
 
 export interface LayoutSchematicProps {
   deck: Deck;
   agents: Agent[];
-  status: Record<string, PaneStatus>;
   /** Pane being dragged out of this deck, dimmed while it is in flight. */
   draggingPaneId?: string | null;
   /** Enables dragging a terminal out of the schematic and onto another deck. */
@@ -26,7 +24,6 @@ export interface LayoutSchematicProps {
 export function LayoutSchematic({
   deck,
   agents,
-  status,
   draggingPaneId,
   onPaneDragStart,
   onPaneDragEnd,
@@ -44,7 +41,6 @@ export function LayoutSchematic({
       node={deck.tree}
       deck={deck}
       agents={agents}
-      status={status}
       draggingPaneId={draggingPaneId}
       onPaneDragStart={onPaneDragStart}
       onPaneDragEnd={onPaneDragEnd}
@@ -56,7 +52,6 @@ function Node({
   node,
   deck,
   agents,
-  status,
   draggingPaneId,
   onPaneDragStart,
   onPaneDragEnd,
@@ -65,7 +60,6 @@ function Node({
     const pane = deck.panes[node.id];
     const agent = agents.find((entry) => entry.id === pane?.agentId) ?? null;
     const accent = agentAccent(agent?.accent);
-    const state = status[node.id] ?? "idle";
     const draggable = Boolean(onPaneDragStart);
 
     return (
@@ -90,7 +84,6 @@ function Node({
           background: "var(--keel-term-solid)",
         }}
       >
-        <StatusDot status={state} fallback={accent} size={4} />
         <span
           className="truncate font-mono text-[10px] font-semibold"
           style={{ color: accent }}
@@ -120,7 +113,6 @@ function Node({
             node={child}
             deck={deck}
             agents={agents}
-            status={status}
             draggingPaneId={draggingPaneId}
             onPaneDragStart={onPaneDragStart}
             onPaneDragEnd={onPaneDragEnd}

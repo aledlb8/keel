@@ -1,10 +1,20 @@
 /** Everything else Rust exposes: agent detection, persistence, folders. */
 
 import { invoke } from "@/lib/invoke";
-import type { Agent, PersistedState } from "./types";
+import type { Agent, AgentSpec, PersistedState } from "./types";
 
 export function detectAgents(): Promise<Agent[]> {
   return invoke("detect_agents");
+}
+
+/** Replaces the user catalogue and returns the freshly detected agents. */
+export function saveAgentCatalogue(agents: AgentSpec[]): Promise<Agent[]> {
+  return invoke("agent_catalogue_save", { agents });
+}
+
+/** The catalogue as it ships, for resetting a built-in agent. */
+export function agentCatalogueDefaults(): Promise<AgentSpec[]> {
+  return invoke("agent_catalogue_defaults");
 }
 
 /** Creates the user-editable catalogue if it does not exist yet, then returns it. */
