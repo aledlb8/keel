@@ -10,7 +10,7 @@
  * two-layer canvas is for.
  *
  * Each cell shows the same brief as the sidebar row, so a deck is identifiable
- * by the work on it, not just "Deck 2" and a pair of agent badges.
+ * by the work on it, not just "Deck 2" and a pair of agent marks.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -45,27 +45,37 @@ export function Overview({ project, agents, onClose }: OverviewProps) {
   }, [onClose, renaming]);
 
   return (
-    <div className="absolute inset-0 z-50 flex flex-col bg-[color:var(--keel-chrome-strong)] backdrop-blur-[var(--keel-blur-strong)]">
-      <div className="flex h-[38px] shrink-0 items-center gap-2.5 border-b border-line pl-4 pr-1.5">
-        <span className="text-[13px] font-medium text-foreground">{project.name}</span>
-        <span aria-hidden className="h-3 w-px bg-line-strong" />
-        <span className="text-[13px] text-faint">
+    <div className="absolute inset-0 z-50 flex flex-col bg-[color:var(--keel-void)] animate-in fade-in-0 duration-150">
+      <div className="flex h-[52px] shrink-0 items-center gap-3 pl-6 pr-3">
+        <div className="flex min-w-0 items-baseline gap-2.5">
+          <span className="truncate text-[15px] font-semibold tracking-[-0.01em] text-foreground">
+            {project.name}
+          </span>
+          <span className="shrink-0 text-[12px] text-faint">
+            {project.decks.length} {project.decks.length === 1 ? "deck" : "decks"}
+          </span>
+        </div>
+        <span className="ml-auto hidden truncate text-[12px] text-faint md:block">
           Drag a terminal onto another deck to move it
         </span>
         <button
           type="button"
           aria-label="Close overview"
           onClick={onClose}
-          className="k-icon-btn ml-auto size-[28px]"
+          className="k-icon-btn size-[30px] rounded-[var(--keel-r-control)]"
         >
           <X className="size-4" />
         </button>
       </div>
 
-      <div className="grid min-h-0 flex-1 auto-rows-min grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-3.5 overflow-y-auto p-5 pt-1">
+      <div className="grid min-h-0 flex-1 auto-rows-min grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-4 overflow-y-auto px-6 pb-6 pt-1">
         {project.decks.map((deck, index) => {
           const active = deck.id === project.activeDeckId;
           const count = listPanes(deck.tree).length;
+          const open = () => {
+            useKeel.getState().selectDeck(project.id, deck.id);
+            onClose();
+          };
           return (
             <div
               key={deck.id}
@@ -89,19 +99,21 @@ export function Overview({ project, agents, onClose }: OverviewProps) {
                 }
               }}
               className={cn(
-                "flex flex-col overflow-hidden rounded-[var(--keel-r-window)] border bg-[color:var(--keel-term-bg)] shadow-[var(--keel-lift)] transition-colors",
+                "group/deck flex flex-col overflow-hidden rounded-[14px] border bg-[color:var(--keel-chrome)] shadow-[var(--keel-lift)] transition-[border-color,box-shadow,transform] duration-150",
                 over === deck.id
-                  ? "border-foreground/50"
+                  ? "border-foreground/40 shadow-[var(--keel-lift-strong)]"
                   : active
                     ? "border-line-strong"
-                    : "border-line",
+                    : "border-line hover:border-line-strong",
               )}
             >
-              <div className="flex items-center gap-2 px-2.5 py-2">
+              <div className="flex h-11 items-center gap-2.5 pl-3 pr-2">
                 <span
                   className={cn(
-                    "grid h-[19px] min-w-[19px] shrink-0 place-items-center rounded-[var(--keel-r-chip)] px-1 font-mono text-[11px] tabular-nums",
-                    active ? "bg-veil-3 text-foreground" : "text-faint",
+                    "grid size-5 shrink-0 place-items-center rounded-full text-[11px] font-semibold tabular-nums",
+                    active
+                      ? "bg-foreground text-background"
+                      : "bg-veil-2 text-dim",
                   )}
                 >
                   {index + 1}
@@ -120,19 +132,16 @@ export function Overview({ project, agents, onClose }: OverviewProps) {
                   <button
                     type="button"
                     onDoubleClick={() => setRenaming(deck.id)}
-                    onClick={() => {
-                      useKeel.getState().selectDeck(project.id, deck.id);
-                      onClose();
-                    }}
+                    onClick={open}
                     title="Double-click to rename"
-                    className="min-w-0 flex-1 truncate text-left text-[13px] text-dim transition-colors hover:text-foreground"
+                    className="min-w-0 flex-1 truncate text-left text-[13px] font-medium text-foreground"
                   >
                     {deck.name}
                   </button>
                 )}
 
-                <span className="shrink-0 font-mono text-[11px] tabular-nums text-faint">
-                  {count}
+                <span className="shrink-0 text-[12px] tabular-nums text-faint">
+                  {count} {count === 1 ? "terminal" : "terminals"}
                 </span>
                 <button
                   type="button"
@@ -141,19 +150,16 @@ export function Overview({ project, agents, onClose }: OverviewProps) {
                     useKeel.getState().removeDeck(project.id, deck.id)
                   }
                   data-danger="true"
-                  className="k-icon-btn size-[20px]"
+                  className="k-icon-btn size-6 opacity-0 transition-opacity group-hover/deck:opacity-100 focus-visible:opacity-100"
                 >
-                  <X className="size-2.5" />
+                  <X className="size-3.5" />
                 </button>
               </div>
 
               <button
                 type="button"
-                onClick={() => {
-                  useKeel.getState().selectDeck(project.id, deck.id);
-                  onClose();
-                }}
-                className="flex aspect-[16/10] w-full flex-col p-2 pt-0"
+                onClick={open}
+                className="mx-2 mb-2 flex aspect-[16/10] flex-col rounded-[10px] bg-[color:var(--keel-void)] p-1.5"
               >
                 <LayoutSchematic
                   deck={deck}
@@ -176,9 +182,11 @@ export function Overview({ project, agents, onClose }: OverviewProps) {
             useKeel.getState().addDeck(project.id);
             onClose();
           }}
-          className="flex aspect-[16/10] flex-col items-center justify-center gap-2 rounded-[var(--keel-r-window)] border border-dashed border-line-strong text-[13px] text-dim transition-colors hover:border-foreground/25 hover:bg-veil hover:text-foreground"
+          className="flex min-h-[200px] flex-col items-center justify-center gap-2.5 rounded-[14px] border border-dashed border-line-strong text-[13px] font-medium text-dim transition-colors hover:border-foreground/25 hover:bg-veil hover:text-foreground"
         >
-          <Plus className="size-4" />
+          <span className="grid size-8 place-items-center rounded-full bg-veil-2">
+            <Plus className="size-4" />
+          </span>
           New deck
         </button>
       </div>

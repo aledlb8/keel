@@ -9,6 +9,9 @@
  * all hung on WebView2's stale idea of `:hover`. A strip in the layout overlaps
  * nothing and is always live. Hover only changes how bright it is, never
  * whether it works.
+ *
+ * The strip is also the pane's handle: press on any part of it that is not a
+ * button and drag, and the pane can be dropped against another one.
  */
 
 import {
@@ -32,7 +35,9 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { AgentMark } from "@/components/AgentMark";
 import { InlineRename } from "@/components/InlineRename";
+import { withShortcut } from "@/lib/keymap";
 import { cn } from "@/lib/utils";
 import type { Agent, AgentAccount, Pane } from "@/lib/types";
 import { nextProfileName } from "@/state/store";
@@ -65,6 +70,8 @@ export interface PaneHeaderProps {
   onStartRename: () => void;
   onRename: (title: string) => void;
   onStopRename: () => void;
+  /** A press on the strip itself, which may turn into dragging the pane. */
+  onDragStart: (event: React.PointerEvent<HTMLDivElement>) => void;
 }
 
 function HeaderButton({
@@ -113,6 +120,7 @@ export function PaneHeader({
   onStartRename,
   onRename,
   onStopRename,
+  onDragStart,
 }: PaneHeaderProps) {
   const agentAccounts = agent
     ? accounts.filter((account) => account.agentId === agent.id)
@@ -123,7 +131,15 @@ export function PaneHeader({
   return (
     <div
       data-no-select
-      className="flex h-7 shrink-0 items-center gap-1 pl-2.5 pr-1"
+      className="flex h-7 shrink-0 cursor-grab items-center gap-1 pl-2.5 pr-1"
+      onPointerDown={(event) => {
+        if (event.button !== 0) return;
+        // Same portal caveat as below: only presses on the strip itself.
+        if (!event.currentTarget.contains(event.target as Node)) return;
+        if ((event.target as HTMLElement).closest("button, input")) return;
+        // No preventDefault: the mousedown below still has to focus the pane.
+        onDragStart(event);
+      }}
       onMouseDown={(event) => {
         // The profile menu is portalled to <body>, but React still bubbles its
         // events up through here. Only presses that physically landed on the
@@ -139,12 +155,13 @@ export function PaneHeader({
         if (!target.closest("button")) onFocus();
       }}
     >
-      <span
-        className="shrink-0 font-mono text-[11px] font-medium"
-        style={{ color: accent }}
-        title={cwd ?? undefined}
-      >
-        {agent?.short ?? "SH"}
+      <span className="mr-0.5 flex shrink-0" title={cwd ?? undefined}>
+        <AgentMark
+          agentId={agent?.id ?? pane.agentId ?? null}
+          name={agent?.name}
+          accent={accent}
+          size={16}
+        />
       </span>
 
       {renaming ? (
@@ -242,20 +259,33 @@ export function PaneHeader({
           focused ? "opacity-100" : "opacity-60 group-hover/pane:opacity-100",
         )}
       >
-        <HeaderButton label="Split right" onClick={() => onSplit("row")}>
+        <HeaderButton
+          label={withShortcut("Split right", "splitRight")}
+          onClick={() => onSplit("row")}
+        >
           <SplitSquareHorizontal className="size-3.5" />
         </HeaderButton>
-        <HeaderButton label="Split down" onClick={() => onSplit("column")}>
+        <HeaderButton
+          label={withShortcut("Split down", "splitDown")}
+          onClick={() => onSplit("column")}
+        >
           <SplitSquareVertical className="size-3.5" />
         </HeaderButton>
-        <HeaderButton label={zoomed ? "Restore" : "Fullscreen"} onClick={onZoom}>
+        <HeaderButton
+          label={withShortcut(zoomed ? "Restore" : "Fullscreen", "fullscreen")}
+          onClick={onZoom}
+        >
           {zoomed ? (
             <Minimize2 className="size-3.5" />
           ) : (
             <Maximize2 className="size-3.5" />
           )}
         </HeaderButton>
-        <HeaderButton label="Close" danger onClick={onClose}>
+        <HeaderButton
+          label={withShortcut("Close", "closePane")}
+          danger
+          onClick={onClose}
+        >
           <X className="size-3.5" />
         </HeaderButton>
       </div>

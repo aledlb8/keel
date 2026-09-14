@@ -13,6 +13,10 @@
  * be split, moved, zoomed, or carried to another deck entirely without React ever
  * reparenting it. Reparenting unmounts, and unmounting an xterm throws away the
  * scrollback and kills the agent inside it.
+ *
+ * Dragging a pane by its header works off the same measurements: where the
+ * pointer is (see `dropTargetAt`) decides which pane or group it would land
+ * against, an overlay shows that, and only letting go touches the tree.
  */
 
 import {
@@ -26,14 +30,20 @@ import { flushSync } from "react-dom";
 import { Terminal } from "lucide-react";
 import { toast } from "sonner";
 
+import { AgentMark } from "@/components/AgentMark";
 import { PaneView } from "@/components/PaneView";
+import { dropTargetAt, type Box, type DropTarget } from "@/lib/dock";
 import type { TitleSource } from "@/lib/paneTitle";
+import { shortcutKeys } from "@/lib/keymap";
+import { agentAccent } from "@/lib/tokens";
 import { listPanes } from "@/lib/tree";
 import { cn } from "@/lib/utils";
 import type {
+  Agent,
   Deck,
   Direction,
   LayoutNode,
+  Pane,
   PaneActivity,
   Project,
 } from "@/lib/types";
@@ -48,7 +58,19 @@ import { activeDeck, useKeel } from "@/state/store";
  */
 const GAP = 12;
 
-type Rect = { left: number; top: number; width: number; height: number };
+type Rect = Box;
+
+/** How far the pointer travels before a press on a header becomes a drag. */
+const DRAG_THRESHOLD = 5;
+
+/** A pane in flight. Coordinates are relative to the canvas. */
+interface PaneDrag {
+  paneId: string;
+  x: number;
+  y: number;
+  /** Where it would land if let go now. */
+  target: DropTarget | null;
+}
 
 export interface CanvasProps {
   projects: Project[];
@@ -63,7 +85,13 @@ export function Canvas({
 }: CanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [rects, setRects] = useState<Record<string, Rect>>({});
+  // The drag handlers outlive a render; they read the latest measurements here.
+  const rectsRef = useRef(rects);
+  useEffect(() => {
+    rectsRef.current = rects;
+  }, [rects]);
   const [size, setSize] = useState({ width: 0, height: 0 });
+  const [drag, setDrag] = useState<PaneDrag | null>(null);
   /** Bumping a pane's generation respawns its process in the same terminal. */
   const generations = useKeel((state) => state.generations);
 
@@ -229,6 +257,86 @@ export function Canvas({
     [restartPane],
   );
 
+  /**
+   * A press on a pane's header. Nothing happens until the pointer has moved a
+   * few pixels, so clicks and double-clicks on the header keep working; after
+   * that the pane follows the pointer until it is let go (drop) or Escape is
+   * pressed (cancel).
+   */
+  const startPaneDrag = useCallback(
+    (paneId: string, event: React.PointerEvent) => {
+      const container = containerRef.current;
+      const state = useKeel.getState();
+      const owner = state.projects.find(
+        (item) => item.id === state.activeProjectId,
+      );
+      const current = activeDeck(owner);
+      const tree = current?.tree;
+      if (!container || !owner || !tree || current.zoomed) return;
+      const onDeck = listPanes(tree);
+      if (onDeck.length < 2 || !onDeck.includes(paneId)) return;
+
+      // Only this deck's panes: hidden decks are measured too, underneath.
+      const boxes: Record<string, Box> = {};
+      for (const id of onDeck) {
+        const box = rectsRef.current[id];
+        if (box) boxes[id] = box;
+      }
+
+      const originX = event.clientX;
+      const originY = event.clientY;
+      let latest: PaneDrag | null = null;
+
+      const onMove = (move: PointerEvent) => {
+        if (
+          !latest &&
+          Math.hypot(move.clientX - originX, move.clientY - originY) <
+            DRAG_THRESHOLD
+        ) {
+          return;
+        }
+        const base = container.getBoundingClientRect();
+        const x = move.clientX - base.left;
+        const y = move.clientY - base.top;
+        latest = {
+          paneId,
+          x,
+          y,
+          target: dropTargetAt(tree, boxes, paneId, x, y),
+        };
+        setDrag(latest);
+      };
+
+      const finish = (commit: boolean) => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        window.removeEventListener("pointercancel", onCancel);
+        window.removeEventListener("keydown", onKey, true);
+        setDrag(null);
+        const target = latest?.target;
+        if (commit && target) {
+          useKeel
+            .getState()
+            .dropPane(owner.id, paneId, target.nodeId, target.zone);
+        }
+      };
+      const onUp = () => finish(true);
+      const onCancel = () => finish(false);
+      const onKey = (key: KeyboardEvent) => {
+        if (key.key !== "Escape" || !latest) return;
+        key.preventDefault();
+        key.stopPropagation();
+        finish(false);
+      };
+
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+      window.addEventListener("pointercancel", onCancel);
+      window.addEventListener("keydown", onKey, true);
+    },
+    [],
+  );
+
   const zoomRect: Rect = {
     left: GAP / 2,
     top: GAP / 2,
@@ -311,11 +419,21 @@ export function Canvas({
                 onAccountChange={changeAccount}
                 onCreateAccount={createAccount}
                 onSpawnResult={onSpawnResult}
+                onDragStart={startPaneDrag}
               />
             );
           }),
         ),
       )}
+
+      {drag && deck ? (
+        <DropOverlay
+          drag={drag}
+          rects={rects}
+          pane={deck.panes[drag.paneId] ?? null}
+          agents={agents}
+        />
+      ) : null}
 
       {project && !hasPanes(deck) ? (
         <div className="grid h-full place-items-center">
@@ -329,9 +447,11 @@ export function Canvas({
             <span className="text-[12px] leading-relaxed text-dim">
               Pick how many of each agent to run in {project.name}.
             </span>
-            <span className="mt-1 rounded-[var(--keel-r-chip)] bg-veil-2 px-2 py-1 font-mono text-[11px] text-faint">
-              Alt+Shift+T
-            </span>
+            {shortcutKeys("addTerminals") ? (
+              <span className="mt-1 rounded-[var(--keel-r-chip)] bg-veil-2 px-2 py-1 text-[11px] font-medium text-faint">
+                {shortcutKeys("addTerminals")}
+              </span>
+            ) : null}
           </button>
         </div>
       ) : null}
@@ -342,6 +462,65 @@ export function Canvas({
 
 function hasPanes(deck: Deck | null): boolean {
   return deck ? listPanes(deck.tree).length > 0 : false;
+}
+
+/**
+ * What a drag looks like: the pane being carried sinks back into the ground,
+ * the space it would take lights up (the whole target, for a swap), and a chip
+ * with its name rides along with the pointer.
+ */
+function DropOverlay({
+  drag,
+  rects,
+  pane,
+  agents,
+}: {
+  drag: PaneDrag;
+  rects: Record<string, Rect>;
+  pane: Pane | null;
+  agents: Agent[];
+}) {
+  const source = rects[drag.paneId];
+  const landing = drag.target?.box ?? null;
+  const agent = agents.find((entry) => entry.id === pane?.agentId) ?? null;
+
+  return (
+    // Above every pane, so the terminals under the pointer don't take hover.
+    <div className="absolute inset-0 z-40 cursor-grabbing">
+      {source ? (
+        <div
+          className="absolute rounded-[var(--keel-r-window)] bg-[color:var(--keel-void)]/65"
+          style={source}
+        />
+      ) : null}
+
+      {landing ? (
+        <div
+          className="absolute grid place-items-center rounded-[var(--keel-r-window)] border border-foreground/35 bg-foreground/[0.07] transition-[left,top,width,height] duration-150 ease-out"
+          style={landing}
+        >
+          {drag.target?.zone === "center" ? (
+            <span className="rounded-[var(--keel-r-chip)] bg-popover px-2 py-1 text-[12px] text-dim shadow-[var(--keel-lift)]">
+              Swap places
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div
+        className="pointer-events-none absolute left-0 top-0 flex h-7 items-center gap-1.5 rounded-[var(--keel-r-control)] border border-line-strong bg-popover pl-1.5 pr-2.5 text-[12px] shadow-[var(--keel-lift-strong)]"
+        style={{ transform: `translate(${drag.x + 14}px, ${drag.y + 14}px)` }}
+      >
+        <AgentMark
+          agentId={pane?.agentId ?? null}
+          name={agent?.name}
+          accent={agentAccent(agent?.accent)}
+          size={16}
+        />
+        <span className="max-w-48 truncate">{pane?.title ?? "Terminal"}</span>
+      </div>
+    </div>
+  );
 }
 
 function Slots({

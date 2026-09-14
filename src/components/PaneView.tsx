@@ -57,6 +57,8 @@ export interface PaneViewProps {
   onCreateAccount: (paneId: string, agentId: string, name: string) => void;
   onSpawnResult?: (paneId: string, ok: boolean, reason?: string) => void;
   onTitle: (paneId: string, title: string, source: TitleSource) => void;
+  /** A press on the header that may become a drag. Must be stable: this is memoised. */
+  onDragStart: (paneId: string, event: React.PointerEvent) => void;
 }
 
 // A hairline of light along the slab's own top edge. Same trick as the glass
@@ -87,6 +89,7 @@ export const PaneView = memo(function PaneView({
   onCreateAccount,
   onSpawnResult,
   onTitle,
+  onDragStart,
 }: PaneViewProps) {
   const renaming = useKeel(
     (state) =>
@@ -159,6 +162,7 @@ export const PaneView = memo(function PaneView({
                 useKeel.getState().renamePane(projectId, pane.id, title)
               }
               onStopRename={() => useKeel.getState().stopRename()}
+              onDragStart={(event) => onDragStart(pane.id, event)}
             />
 
             <div className="relative min-h-0 flex-1">

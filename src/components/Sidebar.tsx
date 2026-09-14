@@ -8,10 +8,17 @@
  *  - **Right-click**, the context-menu key, or the ⋯ that appears on hover opens
  *    everything else you can do to it. The menus are shared with the panes, so a
  *    terminal offers the same actions wherever you reach for it.
+ *  - **Drag** puts it somewhere else. Projects reorder among projects, decks
+ *    among the decks of their project, and terminals anywhere inside their
+ *    project — between other terminals, onto a deck, or into an empty one.
  *
  * Decks show up as small numbered group headers once a project has two of them.
  * With one, its terminals sit straight under the project, and nothing here
  * mentions decks until you make a second.
+ *
+ * Every project has the same shape, empty or not: a chevron, and when it is open
+ * at least one row under it. An empty project shows an "Add terminals" row where
+ * its terminals would be, so it never reads as a different kind of thing.
  *
  * **Exactly one row is ever filled.** Selecting a terminal makes its deck and
  * project current too, and filling all three stacked into one tall blob. So the
@@ -20,8 +27,20 @@
  * "you are inside me" with weight and text colour instead. See `leafOf`.
  */
 
+import {
+  createContext,
+  useContext,
+  useState,
+  type CSSProperties,
+  type Dispatch,
+  type DragEvent,
+  type HTMLAttributes,
+  type ReactNode,
+  type SetStateAction,
+} from "react";
 import { ChevronRight, Ellipsis, FolderPlus, Plus, X } from "lucide-react";
 
+import { AgentMark } from "@/components/AgentMark";
 import { InlineRename } from "@/components/InlineRename";
 import { StatusDot } from "@/components/StatusDot";
 import {
@@ -40,6 +59,7 @@ import {
   ContextMenuContent,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { bindingFor, matchesBinding } from "@/lib/keymap";
 import { agentAccent } from "@/lib/tokens";
 import { listPanes } from "@/lib/tree";
 import { cn } from "@/lib/utils";
@@ -82,6 +102,191 @@ function leafOf(project: Project, open: boolean, showDecks: boolean): Leaf {
   }
   return showDecks ? { kind: "deck" } : { kind: "project" };
 }
+
+// ---- Drag and drop ---------------------------------------------------------
+
+/** The thing being carried. */
+type DragItem =
+  | { kind: "project"; projectId: string }
+  | { kind: "deck"; projectId: string; deckId: string }
+  | { kind: "pane"; projectId: string; deckId: string; paneId: string };
+
+/**
+ * A row that can receive a drop. A project row carries its only deck's id when
+ * its terminals sit straight under it, so a terminal can be dropped onto it.
+ */
+type DropSpot =
+  | { kind: "project"; projectId: string; deckId: string | null }
+  | { kind: "deck"; projectId: string; deckId: string }
+  | { kind: "pane"; projectId: string; deckId: string; paneId: string }
+  | { kind: "empty"; projectId: string; deckId: string };
+
+type Edge = "before" | "after" | "inside";
+
+interface SortState {
+  item: DragItem | null;
+  over: { key: string; edge: Edge } | null;
+}
+
+const SortContext = createContext<{
+  state: SortState;
+  setState: Dispatch<SetStateAction<SortState>>;
+} | null>(null);
+
+const IDLE: SortState = { item: null, over: null };
+
+function spotKey(spot: DropSpot): string {
+  switch (spot.kind) {
+    case "project":
+      return `project:${spot.projectId}`;
+    case "deck":
+      return `deck:${spot.deckId}`;
+    case "pane":
+      return `pane:${spot.paneId}`;
+    case "empty":
+      return `empty:${spot.deckId}`;
+  }
+}
+
+function sameThing(item: DragItem, spot: DropSpot): boolean {
+  if (item.kind === "project") {
+    return spot.kind === "project" && spot.projectId === item.projectId;
+  }
+  if (item.kind === "deck") {
+    return spot.kind === "deck" && spot.deckId === item.deckId;
+  }
+  return spot.kind === "pane" && spot.paneId === item.paneId;
+}
+
+/** Where `item` would land on `spot`, or null if it cannot go there. */
+function edgeFor(
+  item: DragItem,
+  spot: DropSpot,
+  event: DragEvent<HTMLElement>,
+): Edge | null {
+  if (sameThing(item, spot)) return null;
+  const rect = event.currentTarget.getBoundingClientRect();
+  const half: Edge =
+    event.clientY < rect.top + rect.height / 2 ? "before" : "after";
+
+  if (item.kind === "project") return spot.kind === "project" ? half : null;
+  // Decks and terminals never leave their project.
+  if (spot.projectId !== item.projectId) return null;
+  if (item.kind === "deck") return spot.kind === "deck" ? half : null;
+
+  switch (spot.kind) {
+    case "pane":
+      return half;
+    case "deck":
+    case "empty":
+      return "inside";
+    case "project":
+      return spot.deckId ? "inside" : null;
+  }
+}
+
+function commitDrop(item: DragItem, spot: DropSpot, edge: Edge) {
+  const state = useKeel.getState();
+  const after = edge === "after" ? 1 : 0;
+
+  if (item.kind === "project") {
+    const rest = state.projects.filter((p) => p.id !== item.projectId);
+    const at = rest.findIndex((p) => p.id === spot.projectId);
+    if (at >= 0) state.reorderProject(item.projectId, at + after);
+    return;
+  }
+
+  const project = state.projects.find((p) => p.id === item.projectId);
+  if (!project) return;
+
+  if (item.kind === "deck") {
+    if (spot.kind !== "deck") return;
+    const rest = project.decks.filter((deck) => deck.id !== item.deckId);
+    const at = rest.findIndex((deck) => deck.id === spot.deckId);
+    if (at >= 0) state.reorderDeck(project.id, item.deckId, at + after);
+    return;
+  }
+
+  const deck = project.decks.find((entry) => entry.id === spot.deckId);
+  if (!deck) return;
+  const rest = listPanes(deck.tree).filter((id) => id !== item.paneId);
+  let index = rest.length;
+  if (spot.kind === "pane") {
+    const at = rest.indexOf(spot.paneId);
+    if (at >= 0) index = at + after;
+  }
+  state.placePane(project.id, item.paneId, deck.id, index);
+}
+
+type SortableProps = HTMLAttributes<HTMLElement> & {
+  "data-drop"?: Edge;
+  "data-dragging"?: "true";
+};
+
+/**
+ * Wire a row into the sidebar's drag and drop. `item` is what dragging this row
+ * picks up; pass null for rows that only receive drops, or while renaming.
+ */
+function useSortable(spot: DropSpot, item: DragItem | null): SortableProps {
+  const context = useContext(SortContext);
+  if (!context) return {};
+  const { state, setState } = context;
+  const key = spotKey(spot);
+
+  return {
+    draggable: item ? true : undefined,
+    "data-dragging":
+      item && state.item && sameThing(state.item, spot) ? "true" : undefined,
+    "data-drop": state.over?.key === key ? state.over.edge : undefined,
+    onDragStart: (event) => {
+      if (!item) return;
+      event.stopPropagation();
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/keel-sidebar", key);
+      setState({ item, over: null });
+    },
+    onDragEnd: () => setState(IDLE),
+    onDragOver: (event) => {
+      if (!state.item) return;
+      const edge = edgeFor(state.item, spot, event);
+      if (!edge) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.dataTransfer.dropEffect = "move";
+      if (state.over?.key !== key || state.over.edge !== edge) {
+        setState((previous) => ({ ...previous, over: { key, edge } }));
+      }
+    },
+    onDragLeave: (event) => {
+      if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
+        return;
+      }
+      setState((previous) =>
+        previous.over?.key === key ? { ...previous, over: null } : previous,
+      );
+    },
+    onDrop: (event) => {
+      const carried = state.item;
+      setState(IDLE);
+      if (!carried) return;
+      const edge = edgeFor(carried, spot, event);
+      if (!edge) return;
+      event.preventDefault();
+      event.stopPropagation();
+      commitDrop(carried, spot, edge);
+    },
+  };
+}
+
+/** Row padding plus the matching inset for the drop rule. */
+function indentStyle(indent: number): CSSProperties {
+  return {
+    paddingLeft: 8 + indent,
+    ["--drop-indent" as string]: `${8 + indent}px`,
+  };
+}
+
+// ---- Rows ------------------------------------------------------------------
 
 export interface SidebarProps {
   activeProjectId: string | null;
@@ -152,6 +357,7 @@ export function Sidebar({ activeProjectId, onNavigate }: SidebarProps) {
   const accounts = useKeel((state) => state.accounts);
   const projects = useKeel((state) => state.projects);
   const status = useKeel((state) => state.status);
+  const [sort, setSort] = useState<SortState>(IDLE);
 
   return (
     <aside className="k-glass flex w-[240px] shrink-0 flex-col border-r border-line">
@@ -168,30 +374,36 @@ export function Sidebar({ activeProjectId, onNavigate }: SidebarProps) {
         </button>
       </div>
 
-      <ContextMenu>
-        <ContextMenuTrigger asChild>
-          <div className="min-h-0 flex-1 overflow-y-auto pb-2 pt-0.5">
-            {projects.length === 0 ? (
-              <EmptyProjects />
-            ) : (
-              projects.map((project) => (
-                <ProjectSection
-                  key={project.id}
-                  project={project}
-                  agents={agents}
-                  accounts={accounts}
-                  status={status}
-                  selected={project.id === activeProjectId}
-                  onNavigate={onNavigate}
-                />
-              ))
-            )}
-          </div>
-        </ContextMenuTrigger>
-        <ContextMenuContent>
-          <ContextMenuEntries entries={sidebarMenu} />
-        </ContextMenuContent>
-      </ContextMenu>
+      <SortContext.Provider value={{ state: sort, setState: setSort }}>
+        <ContextMenu>
+          <ContextMenuTrigger asChild>
+            <div
+              className="min-h-0 flex-1 overflow-y-auto pb-2 pt-0.5"
+              // A drop that lands between rows still has to end the drag.
+              onDrop={() => setSort(IDLE)}
+            >
+              {projects.length === 0 ? (
+                <EmptyProjects />
+              ) : (
+                projects.map((project) => (
+                  <ProjectSection
+                    key={project.id}
+                    project={project}
+                    agents={agents}
+                    accounts={accounts}
+                    status={status}
+                    selected={project.id === activeProjectId}
+                    onNavigate={onNavigate}
+                  />
+                ))
+              )}
+            </div>
+          </ContextMenuTrigger>
+          <ContextMenuContent>
+            <ContextMenuEntries entries={sidebarMenu} />
+          </ContextMenuContent>
+        </ContextMenu>
+      </SortContext.Provider>
     </aside>
   );
 }
@@ -222,7 +434,7 @@ function EmptyProjects() {
 
 /**
  * A row that behaves like one: focusable, activated by Enter or Space, renamed
- * by F2 or a double-click, and carrying its own context menu.
+ * by F2 or a double-click, draggable, and carrying its own context menu.
  */
 function Row({
   group,
@@ -230,8 +442,9 @@ function Row({
   selected,
   onActivate,
   onRename,
+  sortable,
+  indent = 0,
   className,
-  style,
   title,
   children,
 }: {
@@ -240,20 +453,22 @@ function Row({
   selected: boolean;
   onActivate: () => void;
   onRename: () => void;
+  sortable: SortableProps;
+  indent?: number;
   className?: string;
-  style?: React.CSSProperties;
   title?: string;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
         <div
+          {...sortable}
           role="button"
           tabIndex={0}
           data-selected={selected}
           title={title}
-          style={style}
+          style={indentStyle(indent)}
           className={cn("k-row", GROUP[group], className)}
           onClick={(event) => {
             if (!isControl(event.target)) onActivate();
@@ -266,7 +481,7 @@ function Row({
             if (event.key === "Enter" || event.key === " ") {
               event.preventDefault();
               onActivate();
-            } else if (event.key === "F2") {
+            } else if (matchesBinding(event, bindingFor("rename"))) {
               event.preventDefault();
               onRename();
             } else if (
@@ -294,7 +509,7 @@ function RowActions({
   children,
 }: {
   group: RowGroup;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <span className={cn("hidden shrink-0 items-center gap-px", SHOW_ON_HOVER[group])}>
@@ -312,7 +527,7 @@ function RowButton({
   label: string;
   onClick: (button: HTMLElement) => void;
   danger?: boolean;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <button
@@ -339,18 +554,57 @@ function MoreButton() {
   );
 }
 
-/** A pane or deck tally. Mono and tabular because it is a number you compare. */
+/** A pane or deck tally. Tabular because it is a number you compare. */
 function Count({ value, className }: { value: number; className?: string }) {
   if (!value) return null;
   return (
     <span
       className={cn(
-        "shrink-0 pr-1 font-mono text-[11px] tabular-nums text-faint",
+        "shrink-0 pr-1 text-[11px] tabular-nums text-faint",
         className,
       )}
     >
       {value}
     </span>
+  );
+}
+
+/**
+ * Where terminals would be, in a project or deck that has none. It lines up
+ * with a terminal row — a status-dot's width of air, then a mark-sized glyph —
+ * so an empty project has the same silhouette as a full one. Terminals can be
+ * dropped onto it.
+ */
+function EmptyRow({
+  project,
+  deck,
+  indent,
+  onAdd,
+}: {
+  project: Project;
+  deck: Deck;
+  indent: number;
+  onAdd: () => void;
+}) {
+  const sortable = useSortable(
+    { kind: "empty", projectId: project.id, deckId: deck.id },
+    null,
+  );
+
+  return (
+    <button
+      type="button"
+      {...sortable}
+      onClick={onAdd}
+      style={indentStyle(indent)}
+      className="k-row group/empty text-[12px] text-faint hover:text-dim"
+    >
+      <span aria-hidden className="w-1.5 shrink-0" />
+      <span className="grid size-4 shrink-0 place-items-center rounded-[5px] border border-dashed border-line-strong transition-colors group-hover/empty:border-foreground/30">
+        <Plus className="size-2.5" />
+      </span>
+      Add terminals
+    </button>
   );
 }
 
@@ -374,11 +628,22 @@ function ProjectSection({
     0,
   );
   const showDecks = project.decks.length > 1;
-  const expandable = total > 0 || showDecks;
-  const open = expandable && !project.collapsed;
+  const soloDeck = showDecks ? null : (project.decks[0] ?? null);
+  const open = !project.collapsed;
   const leaf = selected ? leafOf(project, open, showDecks) : null;
   const renaming = useRenaming("project", project.id);
   const tree = { agents, accounts, status, onNavigate };
+  const sortable = useSortable(
+    { kind: "project", projectId: project.id, deckId: soloDeck?.id ?? null },
+    renaming ? null : { kind: "project", projectId: project.id },
+  );
+
+  const addTerminals = () => {
+    const state = useKeel.getState();
+    state.selectProject(project.id);
+    state.setLauncher(true);
+    onNavigate();
+  };
 
   return (
     <div className="pt-0.5">
@@ -387,6 +652,7 @@ function ProjectSection({
         menu={() => projectMenu(project.id)}
         selected={leaf?.kind === "project"}
         title={project.path}
+        sortable={sortable}
         onActivate={() => {
           useKeel.getState().selectProject(project.id);
           onNavigate();
@@ -396,12 +662,11 @@ function ProjectSection({
         <button
           type="button"
           aria-label={open ? "Collapse" : "Expand"}
-          disabled={!expandable}
           onClick={(event) => {
             event.stopPropagation();
             useKeel.getState().toggleCollapsed(project.id);
           }}
-          className="-ml-1 grid size-4 shrink-0 place-items-center rounded-[3px] text-faint transition-colors hover:text-foreground disabled:opacity-0"
+          className="-ml-1 grid size-4 shrink-0 place-items-center rounded-[3px] text-faint transition-colors hover:text-foreground"
         >
           <ChevronRight
             className={cn(
@@ -429,15 +694,7 @@ function ProjectSection({
             </span>
             <Count value={total} className={HIDE_ON_HOVER.project} />
             <RowActions group="project">
-              <RowButton
-                label="Add terminals"
-                onClick={() => {
-                  const state = useKeel.getState();
-                  state.selectProject(project.id);
-                  state.setLauncher(true);
-                  onNavigate();
-                }}
-              >
+              <RowButton label="Add terminals" onClick={addTerminals}>
                 <Plus className="size-3" />
               </RowButton>
               <MoreButton />
@@ -458,15 +715,22 @@ function ProjectSection({
               {...tree}
             />
           ))
-        ) : (
+        ) : soloDeck && total > 0 ? (
           <PaneRows
             project={project}
-            deck={project.decks[0]}
+            deck={soloDeck}
             depth={1}
             leaf={leaf}
             {...tree}
           />
-        )
+        ) : soloDeck ? (
+          <EmptyRow
+            project={project}
+            deck={soloDeck}
+            indent={INDENT[1]}
+            onAdd={addTerminals}
+          />
+        ) : null
       ) : null}
     </div>
   );
@@ -488,6 +752,10 @@ function DeckGroup({
   const count = listPanes(deck.tree).length;
   const attention = deckAttention(deck, tree.status);
   const renaming = useRenaming("deck", deck.id);
+  const sortable = useSortable(
+    { kind: "deck", projectId: project.id, deckId: deck.id },
+    renaming ? null : { kind: "deck", projectId: project.id, deckId: deck.id },
+  );
 
   const addHere = () => {
     const state = useKeel.getState();
@@ -504,7 +772,8 @@ function DeckGroup({
         menu={() => deckMenu(project.id, deck.id)}
         selected={active && leaf?.kind === "deck"}
         className="mt-1.5 h-[26px]"
-        style={{ paddingLeft: 8 + INDENT[1] }}
+        indent={INDENT[1]}
+        sortable={sortable}
         onActivate={() => {
           const state = useKeel.getState();
           state.selectProject(project.id);
@@ -516,7 +785,7 @@ function DeckGroup({
         {/* Decks are numbered everywhere else in the app; number them here too. */}
         <span
           className={cn(
-            "grid h-4 min-w-4 shrink-0 place-items-center rounded-[4px] px-1 font-mono text-[10px] tabular-nums transition-colors",
+            "grid h-4 min-w-4 shrink-0 place-items-center rounded-full px-1 text-[10px] font-semibold tabular-nums transition-colors",
             active ? "bg-veil-3 text-foreground" : "bg-veil text-faint",
           )}
         >
@@ -555,15 +824,12 @@ function DeckGroup({
       </Row>
 
       {count === 0 ? (
-        <button
-          type="button"
-          onClick={addHere}
-          className="k-row gap-1.5 text-[12px] text-faint hover:text-dim"
-          style={{ paddingLeft: 8 + INDENT[2] }}
-        >
-          <Plus className="size-3" />
-          Add terminals
-        </button>
+        <EmptyRow
+          project={project}
+          deck={deck}
+          indent={INDENT[2]}
+          onAdd={addHere}
+        />
       ) : (
         <PaneRows
           project={project}
@@ -603,6 +869,7 @@ function PaneRows({
           <PaneRow
             key={paneId}
             project={project}
+            deck={deck}
             pane={pane}
             depth={depth}
             agent={agents.find((agent) => agent.id === pane.agentId) ?? null}
@@ -622,6 +889,7 @@ function PaneRows({
 
 function PaneRow({
   project,
+  deck,
   pane,
   depth,
   agent,
@@ -632,6 +900,7 @@ function PaneRow({
   onNavigate,
 }: {
   project: Project;
+  deck: Deck;
   pane: Pane;
   depth: number;
   agent: Agent | null;
@@ -642,6 +911,13 @@ function PaneRow({
   onNavigate: () => void;
 }) {
   const renaming = useRenaming("pane", pane.id);
+  const spot = {
+    kind: "pane",
+    projectId: project.id,
+    deckId: deck.id,
+    paneId: pane.id,
+  } as const;
+  const sortable = useSortable(spot, renaming ? null : spot);
 
   return (
     <Row
@@ -649,7 +925,8 @@ function PaneRow({
       menu={() => paneMenu(project.id, pane.id, "sidebar")}
       selected={selected}
       title={pane.cwd ?? project.path}
-      style={{ paddingLeft: 8 + (INDENT[depth] ?? INDENT[2]) }}
+      indent={INDENT[depth] ?? INDENT[2]}
+      sortable={sortable}
       onActivate={() => {
         // Reaching a terminal brings its project and deck with it.
         const state = useKeel.getState();
@@ -660,12 +937,12 @@ function PaneRow({
       onRename={() => startRename("pane", pane.id)}
     >
       <StatusDot status={status} />
-      <span
-        className="w-[18px] shrink-0 font-mono text-[10px] font-medium"
-        style={{ color: agentAccent(agent?.accent) }}
-      >
-        {agent?.short || "SH"}
-      </span>
+      <AgentMark
+        agentId={agent?.id ?? pane.agentId ?? null}
+        name={agent?.name}
+        accent={agentAccent(agent?.accent)}
+        size={16}
+      />
 
       {renaming ? (
         <InlineRename

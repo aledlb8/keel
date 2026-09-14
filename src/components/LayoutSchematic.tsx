@@ -3,15 +3,18 @@
  *
  * It renders the real layout tree with the real proportions, so a schematic is
  * never a guess about what you would see — it is the same geometry at another
- * scale. Each cell is the agent badge plus the pane's title, the same brief the
- * sidebar shows, so a deck of "Claude" and "Codex" is still readable as the work
- * those terminals are doing.
+ * scale. Each cell is a miniature pane card: the agent's mark and name, what it
+ * is doing, and the brief the sidebar shows, so a deck of "Claude" and "Codex"
+ * is still readable as the work those terminals are doing.
  */
 
+import { AgentMark } from "@/components/AgentMark";
+import { StatusDot } from "@/components/StatusDot";
 import { isGenericLabel } from "@/lib/paneTitle";
 import { agentAccent } from "@/lib/tokens";
-import type { Agent, Deck, LayoutNode } from "@/lib/types";
+import type { Agent, Deck, LayoutNode, PaneStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { useKeel } from "@/state/store";
 
 export interface LayoutSchematicProps {
   deck: Deck;
@@ -23,48 +26,40 @@ export interface LayoutSchematicProps {
   onPaneDragEnd?: () => void;
 }
 
-export function LayoutSchematic({
-  deck,
-  agents,
-  draggingPaneId,
-  onPaneDragStart,
-  onPaneDragEnd,
-}: LayoutSchematicProps) {
-  if (!deck.tree) {
+export function LayoutSchematic(props: LayoutSchematicProps) {
+  const status = useKeel((state) => state.status);
+
+  if (!props.deck.tree) {
     return (
-      <div className="grid h-full place-items-center rounded-[var(--keel-r-chip)] border border-dashed border-line-strong text-[11px] text-faint">
-        empty
+      <div className="grid h-full place-items-center rounded-[8px] border border-dashed border-line-strong text-[12px] text-faint">
+        Empty deck
       </div>
     );
   }
 
-  return (
-    <Node
-      node={deck.tree}
-      deck={deck}
-      agents={agents}
-      draggingPaneId={draggingPaneId}
-      onPaneDragStart={onPaneDragStart}
-      onPaneDragEnd={onPaneDragEnd}
-    />
-  );
+  return <Node node={props.deck.tree} status={status} {...props} />;
 }
 
 function Node({
   node,
+  status,
   deck,
   agents,
   draggingPaneId,
   onPaneDragStart,
   onPaneDragEnd,
-}: { node: LayoutNode } & LayoutSchematicProps) {
+}: {
+  node: LayoutNode;
+  status: Record<string, PaneStatus>;
+} & LayoutSchematicProps) {
   if (node.kind === "pane") {
     const pane = deck.panes[node.id];
     const agent = agents.find((entry) => entry.id === pane?.agentId) ?? null;
     const accent = agentAccent(agent?.accent);
     const draggable = Boolean(onPaneDragStart);
     const title = pane?.title ?? "";
-    const brief = title && !isGenericLabel(title, agent);
+    const brief = title && !isGenericLabel(title, agent) ? title : "";
+    const state = status[node.id] ?? "idle";
 
     return (
       <div
@@ -79,29 +74,30 @@ function Node({
         onDragEnd={onPaneDragEnd}
         title={title}
         className={cn(
-          "relative flex min-h-0 min-w-0 flex-1 flex-col items-start justify-center gap-0.5 overflow-hidden rounded-[5px] border-l-2 px-2 py-1.5 text-left",
+          "relative flex min-h-0 min-w-0 flex-1 flex-col gap-1.5 overflow-hidden rounded-[8px] border border-line p-2 text-left",
+          "transition-[border-color,opacity] duration-150 hover:border-line-strong",
           draggable && "cursor-grab active:cursor-grabbing",
           draggingPaneId === node.id && "opacity-30",
         )}
         style={{
-          borderLeftColor: accent,
-          background: "var(--keel-term-solid)",
+          background: `linear-gradient(180deg, color-mix(in srgb, ${accent} 10%, var(--keel-term-solid)) 0%, var(--keel-term-solid) 72%)`,
         }}
       >
-        <span
-          className="shrink-0 font-mono text-[10px] font-semibold"
-          style={{ color: accent }}
-        >
-          {agent?.short ?? "SH"}
-        </span>
-        {title ? (
-          <span
-            className={cn(
-              "min-w-0 w-full break-words text-[11px] leading-snug line-clamp-3",
-              brief ? "text-dim" : "text-faint",
-            )}
-          >
-            {title}
+        <div className="flex min-w-0 items-center gap-1.5">
+          <AgentMark
+            agentId={agent ? agent.id : (pane?.agentId ?? null)}
+            name={agent?.name}
+            accent={accent}
+            size={16}
+          />
+          <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-dim">
+            {agent?.name ?? "Shell"}
+          </span>
+          {state !== "idle" ? <StatusDot status={state} /> : null}
+        </div>
+        {brief ? (
+          <span className="line-clamp-3 min-w-0 break-words text-[11px] leading-snug text-foreground/80">
+            {brief}
           </span>
         ) : null}
       </div>
@@ -110,7 +106,7 @@ function Node({
 
   return (
     <div
-      className="flex min-h-0 min-w-0 flex-1 gap-[4px]"
+      className="flex min-h-0 min-w-0 flex-1 gap-1"
       style={{ flexDirection: node.direction === "row" ? "row" : "column" }}
     >
       {node.children.map((child, index) => (
@@ -125,6 +121,7 @@ function Node({
         >
           <Node
             node={child}
+            status={status}
             deck={deck}
             agents={agents}
             draggingPaneId={draggingPaneId}
