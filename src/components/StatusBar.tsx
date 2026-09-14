@@ -1,5 +1,5 @@
 /**
- * The bar along the bottom edge: workspaces and where you are.
+ * The bar along the bottom edge: workspaces, where you are, and remaining quota.
  *
  * This replaces the old vertical deck rail. The rail was a third floating column
  * wedged between the sidebar and the canvas, and it cost the layout a whole
@@ -8,10 +8,12 @@
  *
  * The deck numbers sit in a recessed track. Grouping them inside one sunken
  * shape is what says "these are the tabs" without drawing a border around each.
+ * Subscription meters dock on the right, one chip per signed-in agent.
  */
 
 import { Grid2X2, Plus } from "lucide-react";
 
+import { UsageMeter } from "@/components/UsageMeter";
 import { cn } from "@/lib/utils";
 import type { Deck, Project } from "@/lib/types";
 
@@ -19,7 +21,6 @@ export interface StatusBarProps {
   project: Project | null;
   /** The path the focused terminal is sitting in, if there is one. */
   cwd: string | null;
-  agentName: string;
   onSelectDeck: (deckId: string) => void;
   onAddDeck: () => void;
   onOverview: () => void;
@@ -39,7 +40,6 @@ function shortenPath(path: string): string {
 export function StatusBar({
   project,
   cwd,
-  agentName,
   onSelectDeck,
   onAddDeck,
   onOverview,
@@ -48,61 +48,54 @@ export function StatusBar({
   const decks = project && project.decks.length >= 2 ? project.decks : null;
 
   return (
-    <footer className="k-glass relative z-30 flex min-w-0 shrink-0 flex-col border-t border-line pl-2 pr-3.5">
-      <div className="flex h-[29px] items-center gap-2.5">
-        {decks ? (
-          <>
+    <footer className="k-glass relative z-30 flex h-[32px] min-w-0 shrink-0 items-center gap-2.5 overflow-visible border-t border-line pl-2 pr-3.5">
+      {decks ? (
+        <>
+          <button
+            type="button"
+            title="Overview (Alt+Shift+Space)"
+            aria-label="Overview"
+            onClick={onOverview}
+            className="k-icon-btn size-[22px]"
+          >
+            <Grid2X2 className="size-3.5" />
+          </button>
+
+          <div className="flex items-center gap-0.5 rounded-[var(--keel-r-control)] bg-veil p-0.5">
+            {decks.map((deck, index) => (
+              <DeckPill
+                key={deck.id}
+                deck={deck}
+                index={index}
+                active={deck.id === project!.activeDeckId}
+                onSelect={() => onSelectDeck(deck.id)}
+              />
+            ))}
             <button
               type="button"
-              title="Overview (Alt+Shift+Space)"
-              aria-label="Overview"
-              onClick={onOverview}
-              className="k-icon-btn size-[22px]"
+              title="New deck (Alt+Shift+Enter)"
+              aria-label="New deck"
+              onClick={onAddDeck}
+              className="k-icon-btn size-[20px]"
             >
-              <Grid2X2 className="size-3.5" />
+              <Plus className="size-3" />
             </button>
+          </div>
 
-            <div className="flex items-center gap-0.5 rounded-[var(--keel-r-control)] bg-veil p-0.5">
-              {decks.map((deck, index) => (
-                <DeckPill
-                  key={deck.id}
-                  deck={deck}
-                  index={index}
-                  active={deck.id === project!.activeDeckId}
-                  onSelect={() => onSelectDeck(deck.id)}
-                />
-              ))}
-              <button
-                type="button"
-                title="New deck (Alt+Shift+Enter)"
-                aria-label="New deck"
-                onClick={onAddDeck}
-                className="k-icon-btn size-[20px]"
-              >
-                <Plus className="size-3" />
-              </button>
-            </div>
+          <span aria-hidden className="h-3.5 w-px bg-line" />
+        </>
+      ) : null}
 
-            <span aria-hidden className="h-3.5 w-px bg-line" />
-          </>
-        ) : null}
-
-        {cwd ? (
-          <span
-            className="min-w-0 truncate font-mono text-[11px] text-faint"
-            title={cwd}
-          >
-            {shortenPath(cwd)}
-          </span>
-        ) : null}
-      </div>
-
-      <div className="flex h-5 min-w-0 items-center gap-1.5 text-[11px] text-faint">
-        <span className="shrink-0">Agent:</span>
-        <span className="min-w-0 truncate text-dim" title={agentName}>
-          {agentName}
+      {cwd ? (
+        <span
+          className="min-w-0 truncate font-mono text-[11px] text-faint"
+          title={cwd}
+        >
+          {shortenPath(cwd)}
         </span>
-      </div>
+      ) : null}
+
+      <UsageMeter />
     </footer>
   );
 }

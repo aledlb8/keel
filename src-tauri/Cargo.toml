@@ -26,6 +26,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 portable-pty = "0.9"
 tauri-plugin-dialog = "2"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls-native-roots"] }
+time = { version = "0.3", default-features = false, features = ["parsing"] }
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["tlhelp32", "handleapi"] }

@@ -218,11 +218,6 @@ export default function App() {
 
   const focusedPane = deck?.focused ? (deck.panes[deck.focused] ?? null) : null;
   const statusCwd = focusedPane?.cwd ?? project?.path ?? null;
-  const statusAgentName = focusedPane
-    ? (agents.find((agent) => agent.id === focusedPane.agentId)?.name ??
-      focusedPane.agentId ??
-      "Shell")
-    : "No focused pane";
 
   const actions: TitlebarActions = {
     addFolder: () => void pickFolder(),
@@ -311,7 +306,6 @@ export default function App() {
       <StatusBar
         project={project}
         cwd={statusCwd}
-        agentName={statusAgentName}
         // Same as the sidebar: the status bar stays clickable while the
         // overview covers the canvas, so anything that moves you has to lift it.
         onSelectDeck={(deckId) => {
