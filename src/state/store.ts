@@ -12,24 +12,40 @@
 import { create } from "zustand";
 
 import * as backend from "@/lib/backend";
-import { sessionNeedsId } from "@/lib/launch";
+import type { DropZone } from "@/lib/dock";
+import { lookingAt, waitingPanes } from "@/lib/island";
+import {
+  readKeybindingOverrides,
+  setKeybindingOverrides,
+  withOverride,
+  withoutOverride,
+  type Binding,
+  type KeybindingOverrides,
+  type ShortcutId,
+} from "@/lib/keymap";
+import { pickCapturedSession, unboundSession } from "@/lib/launch";
 import {
   briefFromOsc,
   briefFromPrompt,
   isGenericLabel,
   type TitleSource,
 } from "@/lib/paneTitle";
+import { moveTo } from "@/lib/order";
 import { killPty } from "@/lib/pty";
 import {
   balance,
+  besideTree,
   closePane as closeInTree,
+  dockPane,
   gridOf,
   listPanes,
   movePane as moveInTree,
   neighbourPane,
   paneLeaf,
+  relabelPanes,
   resizeSplit,
   splitPane,
+  swapPanes,
   type MoveDirection,
 } from "@/lib/tree";
 import type {
@@ -43,6 +59,8 @@ import type {
   PaneStatus,
   PersistedState,
   Project,
+  VpnSettings,
+  VpnState,
 } from "@/lib/types";
 
 /** UI-only reopen chrome. Never written to PersistedState. */
@@ -106,6 +124,7 @@ export interface RenameTarget {
 /** What a caller needs to describe a terminal it wants opened. */
 export interface PaneSpec {
   agentId: string | null;
+  /** Left out, the agent's chosen profile for new terminals is used. */
   accountId?: string | null;
   cwd?: string | null;
   title?: string;
@@ -125,8 +144,20 @@ export interface KeelState {
   restoreStatus: RestoreStatus;
   /** Panes still settling after a layout reopen. */
   restoreLeft: number;
+  /** Panes that existed when the app opened. New chats are not in here. */
+  restorePanes: Record<string, true>;
   /** Host IPC looks dead (UI banner). Not persisted. */
   hostLost: boolean;
+
+  /** Private OpenVPN tunnel. Only autoConnect/profileId are persisted. */
+  vpn: VpnState;
+  refreshVpn: () => Promise<void>;
+  connectVpn: (profileId?: string | null) => Promise<void>;
+  disconnectVpn: () => Promise<void>;
+  setVpnAutoConnect: (autoConnect: boolean) => void;
+  setVpnProfile: (profileId: string | null) => void;
+  openVpnSettings: () => void;
+  closeVpnSettings: () => void;
 
   init: () => Promise<void>;
   /** Re-run state_load / hydrate after a failed restore. */
@@ -146,6 +177,8 @@ export interface KeelState {
     accountId: string | null,
   ) => void;
   renameAccount: (accountId: string, name: string) => void;
+  /** Which profile new terminals of this agent start on; null is the CLI's own sign-in. */
+  setDefaultAccount: (agentId: string, accountId: string | null) => void;
   /** Panes signed in with it fall back to the default login and restart. */
   removeAccount: (accountId: string) => void;
   /** Replace the agent catalogue on disk and re-detect. Rejects invalid input. */
@@ -172,6 +205,35 @@ export interface KeelState {
   launcher: boolean;
   setLauncher: (open: boolean) => void;
 
+  /** When each finished pane finished, for ordering what is waiting. Not persisted. */
+  doneAt: Record<string, number>;
+  /** The go-to switcher that drops out of the top bar's island. */
+  switcher: boolean;
+  setSwitcher: (open: boolean) => void;
+  /** Which top-bar menu is open ("project", "go", …), or "" for none. */
+  menubar: string;
+  setMenubar: (value: string) => void;
+  /** Bumped when a jump finds nothing waiting, so the island can say so. */
+  islandNudge: number;
+  /** Bring a pane forward wherever it lives: its project, its deck, focus. */
+  jumpToPane: (paneId: string) => boolean;
+  /** Go to the agent that has been waiting longest. Returns its pane, if any. */
+  jumpToNextWaiting: () => string | null;
+
+  /** Shortcuts you changed. Applied to `keymap` and written to disk. */
+  keybindings: KeybindingOverrides;
+  /**
+   * Give an action a chord, or none. Actions in `displace` lose theirs, for
+   * when the chord was taken and you chose to move it.
+   */
+  setKeybinding: (
+    id: ShortcutId,
+    binding: Binding | null,
+    displace?: ShortcutId[],
+  ) => void;
+  resetKeybinding: (id: ShortcutId) => void;
+  resetKeybindings: () => void;
+
   /** Which name is being edited in place, if any. */
   renaming: RenameTarget | null;
   startRename: (target: RenameTarget) => void;
@@ -188,6 +250,21 @@ export interface KeelState {
   moveProject: (projectId: string, delta: -1 | 1) => void;
   /** Shift a deck one place; its number follows its position. */
   moveDeck: (projectId: string, deckId: string, delta: -1 | 1) => void;
+  /** Put a project at `index` in the sidebar, counted without it. */
+  reorderProject: (projectId: string, index: number) => void;
+  /** Put a deck at `index` among its project's decks, counted without it. */
+  reorderDeck: (projectId: string, deckId: string, index: number) => void;
+  /**
+   * Put a terminal at `index` in a deck's reading order, carrying it over from
+   * another deck of the same project first. The layout keeps its shape;
+   * terminals trade places inside it.
+   */
+  placePane: (
+    projectId: string,
+    paneId: string,
+    deckId: string,
+    index: number,
+  ) => void;
   setAllCollapsed: (collapsed: boolean) => void;
 
   addProject: (path: string, name?: string) => Project;
@@ -222,6 +299,17 @@ export interface KeelState {
     paneId: string,
     direction: MoveDirection,
   ) => void;
+  /**
+   * Drag and drop. An edge zone docks the pane against its target — a pane, a
+   * group of panes, or the whole layout — and the middle swaps two panes.
+   */
+  dropPane: (
+    projectId: string,
+    paneId: string,
+    /** A pane id, or a split id. */
+    targetId: string,
+    zone: DropZone,
+  ) => void;
   resizeSplit: (
     projectId: string,
     deckId: string,
@@ -244,37 +332,6 @@ function makeId(prefix: string): string {
 function defaultTitle(agents: Agent[], agentId: string | null): string {
   if (!agentId) return "Shell";
   return agents.find((agent) => agent.id === agentId)?.name ?? agentId;
-}
-
-function nextSessionId(
-  agents: Agent[],
-  agentId: string | null,
-): string | null {
-  if (!agentId) return null;
-  const agent = agents.find((entry) => entry.id === agentId);
-  return sessionNeedsId(agent?.session) ? crypto.randomUUID() : null;
-}
-
-/** Mint a session UUID for restored agent panes that never got one. */
-function ensureSessionIds(projects: Project[], agents: Agent[]): Project[] {
-  let touched = false;
-  const next = projects.map((project) => ({
-    ...project,
-    decks: project.decks.map((deck) => {
-      let deckTouched = false;
-      const panes = { ...deck.panes };
-      for (const [paneId, pane] of Object.entries(panes)) {
-        if (pane.sessionId || !pane.agentId) continue;
-        const minted = nextSessionId(agents, pane.agentId);
-        if (!minted) continue;
-        panes[paneId] = { ...pane, sessionId: minted, sessionReady: false };
-        deckTouched = true;
-        touched = true;
-      }
-      return deckTouched ? { ...deck, panes } : deck;
-    }),
-  }));
-  return touched ? next : projects;
 }
 
 export function basename(path: string): string {
@@ -314,13 +371,19 @@ export function emptyDeck(name: string): Deck {
 }
 
 function countPanes(projects: Project[]): number {
-  let total = 0;
+  return Object.keys(paneIdsOf(projects)).length;
+}
+
+function paneIdsOf(projects: Project[]): Record<string, true> {
+  const ids: Record<string, true> = {};
   for (const project of projects) {
     for (const deck of project.decks) {
-      total += Object.keys(deck.panes).length;
+      for (const paneId of Object.keys(deck.panes)) {
+        ids[paneId] = true;
+      }
     }
   }
-  return total;
+  return ids;
 }
 
 /** Add fields introduced after v3 without disturbing the saved layout tree. */
@@ -345,6 +408,84 @@ function normalizeProjects(projects: Project[]): Project[] {
   }));
 }
 
+export const DEFAULT_VPN: VpnSettings = {
+  autoConnect: true,
+  profileId: null,
+};
+
+function readVpn(document: Record<string, unknown> | null): VpnSettings {
+  const raw = document?.vpn;
+  if (!raw || typeof raw !== "object") return { ...DEFAULT_VPN };
+  const vpn = raw as Record<string, unknown>;
+  return {
+    autoConnect: vpn.autoConnect !== false,
+    profileId: typeof vpn.profileId === "string" && vpn.profileId.trim()
+      ? vpn.profileId
+      : null,
+  };
+}
+
+function vpnFromSnapshot(
+  previous: VpnState,
+  snapshot: backend.VpnSnapshot,
+  spawnAllowed: boolean,
+): VpnState {
+  const phase =
+    snapshot.phase === "connecting" ||
+    snapshot.phase === "connected" ||
+    snapshot.phase === "error"
+      ? snapshot.phase
+      : "idle";
+  return {
+    ...previous,
+    phase,
+    spawnAllowed,
+    connectInstalled: snapshot.connectInstalled,
+    openvpnPath: snapshot.openvpnPath,
+    profiles: snapshot.profiles,
+    profileId: snapshot.profileId ?? previous.profileId,
+    profileName: snapshot.profileName,
+    adapter: snapshot.adapter,
+    tunnelIp: snapshot.tunnelIp,
+    proxyPort: snapshot.proxyPort,
+    isolated: snapshot.isolated,
+    error: snapshot.error,
+  };
+}
+
+function emptyVpn(settings: VpnSettings): VpnState {
+  return {
+    autoConnect: settings.autoConnect,
+    profileId: settings.profileId,
+    phase: settings.autoConnect ? "connecting" : "idle",
+    spawnAllowed: !settings.autoConnect,
+    connectInstalled: false,
+    openvpnPath: null,
+    profiles: [],
+    profileName: null,
+    adapter: null,
+    tunnelIp: null,
+    proxyPort: null,
+    isolated: true,
+    error: null,
+    dialogOpen: false,
+  };
+}
+
+/**
+ * The profile a new terminal starts on. A spec that names one — even null, the
+ * CLI's own sign-in — keeps it; otherwise the agent's chosen profile, if any.
+ */
+function accountFor(spec: PaneSpec, accounts: AgentAccount[]): string | null {
+  if (spec.accountId !== undefined) return spec.accountId;
+  if (!spec.agentId) return null;
+  return (
+    accounts.find(
+      (account) => account.agentId === spec.agentId && account.isDefault,
+    )?.id ?? null
+  );
+}
+
 function readAccounts(document: Record<string, unknown> | null): AgentAccount[] {
   if (!document || document.version !== 4 || !Array.isArray(document.accounts)) {
     return [];
@@ -364,6 +505,7 @@ function readAccounts(document: Record<string, unknown> | null): AgentAccount[] 
         id: account.id,
         agentId: account.agentId,
         name: account.name,
+        ...(account.isDefault === true ? { isDefault: true } : {}),
       } satisfies AgentAccount,
     ];
   });
@@ -453,12 +595,14 @@ export const useKeel = create<KeelState>((set, get) => {
     if (saveTimer) clearTimeout(saveTimer);
     const write = () => {
       saveTimer = null;
-      const { projects, activeProjectId, accounts } = get();
+      const { projects, activeProjectId, accounts, vpn, keybindings } = get();
       const document: PersistedState = {
         version: 4,
         projects,
         activeProjectId,
         accounts,
+        vpn: { autoConnect: vpn.autoConnect, profileId: vpn.profileId },
+        keybindings,
       };
       void backend.saveState(document).catch(() => {
         /* A failed save should never interrupt what the user is doing. */
@@ -474,6 +618,22 @@ export const useKeel = create<KeelState>((set, get) => {
       if (pane) return pane;
     }
     return null;
+  }
+
+  /** Conversations already owned by another pane of the same agent/account. */
+  function claimedSessionIds(paneId: string, pane: Pane): Set<string> {
+    const claimed = new Set<string>();
+    for (const item of get().projects) {
+      for (const deck of item.decks) {
+        for (const [id, other] of Object.entries(deck.panes)) {
+          if (id === paneId || !other.sessionReady || !other.sessionId) continue;
+          if (other.agentId !== pane.agentId) continue;
+          if ((other.accountId ?? null) !== (pane.accountId ?? null)) continue;
+          claimed.add(other.sessionId);
+        }
+      }
+    }
+    return claimed;
   }
 
   /** Edit whichever deck holds `paneId`, searching every project. */
@@ -553,15 +713,23 @@ export const useKeel = create<KeelState>((set, get) => {
     generations: {},
     agentSettings: { open: false, agentId: null },
     launcher: false,
+    doneAt: {},
+    keybindings: {},
+    switcher: false,
+    menubar: "",
+    islandNudge: 0,
     renaming: null,
-    restoreStatus: "restoring",
+    restoreStatus: "idle",
     restoreLeft: 0,
+    restorePanes: {},
     hostLost: false,
+    vpn: emptyVpn(DEFAULT_VPN),
 
     async init() {
       restoreSettled.clear();
+      const existing = countPanes(get().projects);
       set({
-        restoreStatus: "restoring",
+        restoreStatus: existing > 0 ? "restoring" : "idle",
         restoreLeft: 0,
         ready: false,
         hostLost: false,
@@ -578,9 +746,11 @@ export const useKeel = create<KeelState>((set, get) => {
           accounts: [],
           projects: [],
           activeProjectId: null,
+          vpn: { ...emptyVpn(DEFAULT_VPN), spawnAllowed: true, phase: "idle" },
           ready: true,
           restoreStatus: "failed",
           restoreLeft: 0,
+          restorePanes: {},
           status: {},
           exited: {},
         });
@@ -594,6 +764,10 @@ export const useKeel = create<KeelState>((set, get) => {
           : migrate(document),
       );
       const accounts = readAccounts(document);
+      const vpnSettings = readVpn(document);
+      // Before anything renders a label or a key reaches a terminal.
+      const keybindings = readKeybindingOverrides(document?.keybindings);
+      setKeybindingOverrides(keybindings);
 
       const wanted = document?.activeProjectId as string | null | undefined;
       const activeProjectId =
@@ -601,21 +775,28 @@ export const useKeel = create<KeelState>((set, get) => {
           ? wanted
           : (projects[0]?.id ?? null);
 
-      const bound = ensureSessionIds(projects, agents);
-
-      const paneCount = countPanes(bound);
+      const restorePanes = paneIdsOf(projects);
+      const paneCount = Object.keys(restorePanes).length;
       set({
         agents,
         accounts,
-        projects: bound,
+        projects,
         activeProjectId,
         ready: true,
         restoreStatus: paneCount > 0 ? "restoring" : "idle",
         restoreLeft: paneCount,
+        restorePanes,
         status: {},
         exited: {},
+        vpn: emptyVpn(vpnSettings),
+        keybindings,
       });
       persist(true);
+      if (vpnSettings.autoConnect) {
+        void get().connectVpn(vpnSettings.profileId);
+      } else {
+        void get().refreshVpn();
+      }
 
       // Safety: never leave Restoring… forever if a pane never settles.
       if (paneCount > 0) {
@@ -653,6 +834,7 @@ export const useKeel = create<KeelState>((set, get) => {
         exited: {},
         restoreStatus: "idle",
         restoreLeft: 0,
+        restorePanes: {},
         ready: true,
       });
       persist();
@@ -663,6 +845,8 @@ export const useKeel = create<KeelState>((set, get) => {
 
       const state = get();
       if (state.restoreStatus !== "restoring") return;
+      // A pane opened after startup is a new chat, not part of power-up restore.
+      if (!(paneId in state.restorePanes)) return;
       if (restoreSettled.has(paneId)) return;
       restoreSettled.add(paneId);
 
@@ -727,8 +911,7 @@ export const useKeel = create<KeelState>((set, get) => {
             ...current.panes[paneId],
             accountId,
             // A different login has its own session store.
-            sessionId: nextSessionId(get().agents, pane.agentId),
-            sessionReady: false,
+            ...unboundSession(),
           },
         },
       }));
@@ -741,6 +924,17 @@ export const useKeel = create<KeelState>((set, get) => {
         accounts: state.accounts.map((account) =>
           account.id === accountId ? { ...account, name: clean } : account,
         ),
+      }));
+      persist();
+    },
+
+    setDefaultAccount(agentId, accountId) {
+      set((state) => ({
+        accounts: state.accounts.map((account) => {
+          if (account.agentId !== agentId) return account;
+          const { isDefault: _previous, ...rest } = account;
+          return account.id === accountId ? { ...rest, isDefault: true } : rest;
+        }),
       }));
       persist();
     },
@@ -763,8 +957,7 @@ export const useKeel = create<KeelState>((set, get) => {
                   {
                     ...pane,
                     accountId: null,
-                    sessionId: nextSessionId(state.agents, pane.agentId),
-                    sessionReady: false,
+                    ...unboundSession(),
                   },
                 ];
               }),
@@ -804,9 +997,9 @@ export const useKeel = create<KeelState>((set, get) => {
     },
 
     markSessionReady(_paneId) {
-      // Spawn chrome only. sessionReady is set by captureSession once this
-      // pane's own conversation exists — not here, or a remount would type
-      // `--resume` for an instance the user just opened fresh.
+      // Spawn chrome only. sessionReady becomes true only when captureSession
+      // binds the conversation this process created — not merely because the
+      // executable started.
     },
 
     bindSession(paneId, sessionId) {
@@ -823,6 +1016,9 @@ export const useKeel = create<KeelState>((set, get) => {
     async captureSession(paneId) {
       const pane = findPane(paneId);
       if (!pane?.agentId || !pane.resumeAgent) return;
+      // Already bound to a real conversation. Restarting this pane resumes
+      // that id; do not adopt a different transcript from the folder.
+      if (pane.sessionReady) return;
       const project = get().projects.find((item) => deckOfPane(item, paneId));
       if (!project) return;
       const agent = get().agents.find((entry) => entry.id === pane.agentId);
@@ -830,16 +1026,6 @@ export const useKeel = create<KeelState>((set, get) => {
       if (store !== "grok" && store !== "claude") return;
 
       const spawnedAt = activity.get(paneId)?.spawnedAt ?? Date.now();
-      const claimed = new Set<string>();
-      for (const item of get().projects) {
-        for (const deck of item.decks) {
-          for (const [id, other] of Object.entries(deck.panes)) {
-            if (id === paneId || !other.sessionId) continue;
-            if (other.agentId !== pane.agentId) continue;
-            claimed.add(other.sessionId);
-          }
-        }
-      }
 
       for (let attempt = 0; attempt < 6; attempt += 1) {
         if (attempt > 0) {
@@ -847,6 +1033,10 @@ export const useKeel = create<KeelState>((set, get) => {
         }
         const live = findPane(paneId);
         if (!live?.resumeAgent) return;
+        if (live.sessionReady) return;
+        // A restart while we were waiting belongs to a later capture.
+        if ((activity.get(paneId)?.spawnedAt ?? spawnedAt) !== spawnedAt) return;
+
         const recent = await backend
           .sessionRecent({
             store,
@@ -856,19 +1046,16 @@ export const useKeel = create<KeelState>((set, get) => {
           })
           .catch(() => [] as { id: string; mtimeMs: number }[]);
 
-        if (live.sessionId && recent.some((hit) => hit.id === live.sessionId)) {
-          if (!live.sessionReady) get().bindSession(paneId, live.sessionId);
-          return;
-        }
-
-        // Only adopt a conversation this spawn just created — never an older
-        // chat sitting in the same folder (that would be `--resume` of someone
-        // else's session the next time this pane starts).
-        const created = recent.find(
-          (hit) => !claimed.has(hit.id) && hit.mtimeMs >= spawnedAt - 2000,
-        );
-        if (created) {
-          get().bindSession(paneId, created.id);
+        const captured = pickCapturedSession({
+          // Never wait for a leftover generated UUID. Fresh launches do not
+          // pass `--session-id`, so the process creates its own conversation.
+          mintedId: null,
+          recent,
+          claimed: claimedSessionIds(paneId, live),
+          spawnedAt,
+        });
+        if (captured) {
+          get().bindSession(paneId, captured);
           return;
         }
       }
@@ -884,8 +1071,166 @@ export const useKeel = create<KeelState>((set, get) => {
       }));
     },
 
+    openVpnSettings() {
+      set((state) => ({ vpn: { ...state.vpn, dialogOpen: true } }));
+      void get().refreshVpn();
+    },
+
+    closeVpnSettings() {
+      set((state) => ({ vpn: { ...state.vpn, dialogOpen: false } }));
+    },
+
+    async refreshVpn() {
+      try {
+        const snapshot = await backend.vpnSnapshot();
+        set((state) => ({
+          vpn: vpnFromSnapshot(state.vpn, snapshot, state.vpn.spawnAllowed),
+        }));
+      } catch {
+        /* Discovery failing must not brick the session. */
+      }
+    },
+
+    async connectVpn(profileId) {
+      const chosen = profileId ?? get().vpn.profileId;
+      set((state) => ({
+        vpn: {
+          ...state.vpn,
+          profileId: chosen ?? state.vpn.profileId,
+          phase: "connecting",
+          error: null,
+        },
+      }));
+      persist();
+      try {
+        const snapshot = await backend.vpnConnect(chosen);
+        set((state) => ({
+          vpn: vpnFromSnapshot(
+            {
+              ...state.vpn,
+              profileId: chosen ?? state.vpn.profileId,
+            },
+            snapshot,
+            true,
+          ),
+        }));
+      } catch (error) {
+        set((state) => ({
+          vpn: {
+            ...state.vpn,
+            phase: "error",
+            spawnAllowed: true,
+            error: String(error),
+          },
+        }));
+      }
+    },
+
+    async disconnectVpn() {
+      try {
+        const snapshot = await backend.vpnDisconnect();
+        set((state) => ({
+          vpn: vpnFromSnapshot(state.vpn, snapshot, true),
+        }));
+      } catch (error) {
+        set((state) => ({
+          vpn: {
+            ...state.vpn,
+            phase: "error",
+            spawnAllowed: true,
+            error: String(error),
+          },
+        }));
+      }
+    },
+
+    setVpnAutoConnect(autoConnect) {
+      set((state) => ({ vpn: { ...state.vpn, autoConnect } }));
+      persist();
+      if (autoConnect && get().vpn.phase !== "connected") {
+        void get().connectVpn();
+      }
+    },
+
+    setVpnProfile(profileId) {
+      set((state) => ({ vpn: { ...state.vpn, profileId } }));
+      persist();
+    },
+
     setLauncher(open) {
       set({ launcher: open });
+    },
+
+    setSwitcher(open) {
+      set({ switcher: open });
+    },
+
+    setMenubar(value) {
+      set({ menubar: value });
+    },
+
+    setKeybinding(id, binding, displace = []) {
+      let keybindings = withOverride(get().keybindings, id, binding);
+      for (const other of displace) {
+        if (other !== id) keybindings = withOverride(keybindings, other, null);
+      }
+      setKeybindingOverrides(keybindings);
+      set({ keybindings });
+      persist();
+    },
+
+    resetKeybinding(id) {
+      const keybindings = withoutOverride(get().keybindings, id);
+      setKeybindingOverrides(keybindings);
+      set({ keybindings });
+      persist();
+    },
+
+    resetKeybindings() {
+      setKeybindingOverrides({});
+      set({ keybindings: {} });
+      persist();
+    },
+
+    jumpToPane(paneId) {
+      const project = get().projects.find((item) => deckOfPane(item, paneId));
+      const deck = project ? deckOfPane(project, paneId) : null;
+      if (!project || !deck) return false;
+      acknowledge(paneId);
+      set({ activeProjectId: project.id });
+      updateProject(project.id, (current) => ({
+        ...current,
+        // Open in the sidebar too, so the row you just went to is on screen.
+        collapsed: false,
+        activeDeckId: deck.id,
+        decks: current.decks.map((item) =>
+          item.id === deck.id
+            ? {
+                ...item,
+                focused: paneId,
+                // A different pane filling the deck would hide the one you asked for.
+                zoomed: item.zoomed === paneId ? item.zoomed : null,
+              }
+            : item,
+        ),
+      }));
+      return true;
+    },
+
+    jumpToNextWaiting() {
+      const state = get();
+      const next = waitingPanes(
+        state.projects,
+        state.status,
+        state.doneAt,
+        lookingAt(state.projects, state.activeProjectId),
+      )[0];
+      if (!next) {
+        set({ islandNudge: state.islandNudge + 1 });
+        return null;
+      }
+      get().jumpToPane(next.paneId);
+      return next.paneId;
     },
 
     startRename(target) {
@@ -955,6 +1300,35 @@ export const useKeel = create<KeelState>((set, get) => {
         ...project,
         decks: shift(project.decks, (deck) => deck.id === deckId, delta),
       }));
+    },
+
+    reorderProject(projectId, index) {
+      set((state) => ({
+        projects: moveTo(state.projects, (item) => item.id === projectId, index),
+      }));
+      persist();
+    },
+
+    reorderDeck(projectId, deckId, index) {
+      updateProject(projectId, (project) => ({
+        ...project,
+        decks: moveTo(project.decks, (deck) => deck.id === deckId, index),
+      }));
+    },
+
+    placePane(projectId, paneId, deckId, index) {
+      const project = get().projects.find((item) => item.id === projectId);
+      const from = project ? deckOfPane(project, paneId) : null;
+      if (!project || !from) return;
+      if (!project.decks.some((deck) => deck.id === deckId)) return;
+
+      if (from.id !== deckId) get().movePaneToDeck(projectId, paneId, deckId);
+      updateDeck(projectId, deckId, (deck) => {
+        if (!deck.tree) return deck;
+        const order = listPanes(deck.tree).filter((id) => id !== paneId);
+        order.splice(Math.max(0, Math.min(index, order.length)), 0, paneId);
+        return { ...deck, tree: relabelPanes(deck.tree, order) };
+      });
     },
 
     setAllCollapsed(collapsed) {
@@ -1128,10 +1502,9 @@ export const useKeel = create<KeelState>((set, get) => {
         const pane: Pane = {
           id: paneId,
           agentId: spec.agentId,
-          accountId: spec.accountId ?? null,
+          accountId: accountFor(spec, get().accounts),
           resumeAgent: spec.agentId !== null,
-          sessionId: nextSessionId(agents, spec.agentId),
-          sessionReady: false,
+          ...unboundSession(),
           title: spec.title ?? defaultTitle(agents, spec.agentId),
           cwd: spec.cwd ?? null,
         };
@@ -1168,18 +1541,20 @@ export const useKeel = create<KeelState>((set, get) => {
           panes[paneId] = {
             id: paneId,
             agentId: spec.agentId,
-            accountId: spec.accountId ?? null,
+            accountId: accountFor(spec, get().accounts),
             resumeAgent: spec.agentId !== null,
-            sessionId: nextSessionId(agents, spec.agentId),
-            sessionReady: false,
+            ...unboundSession(),
             title: spec.title ?? defaultTitle(agents, spec.agentId),
             cwd: spec.cwd ?? null,
           };
         }
+        const batch = gridOf(ids);
         // Several at once means a batch launch â€” lay them out as a grid.
         return {
           ...current,
-          tree: gridOf([...listPanes(current.tree), ...ids]),
+          // Beside what is already there, never re-gridded into it: the panes
+          // the user arranged stay where they put them.
+          tree: current.tree && batch ? besideTree(current.tree, batch) : batch,
           panes,
           focused: ids[0] ?? current.focused,
           zoomed: null,
@@ -1264,6 +1639,17 @@ export const useKeel = create<KeelState>((set, get) => {
           ? { ...deck, tree: moveInTree(deck.tree, paneId, direction) }
           : deck,
       );
+    },
+
+    dropPane(projectId, paneId, targetId, zone) {
+      updateDeckOfPane(projectId, paneId, (deck) => {
+        if (!deck.tree) return deck;
+        const tree =
+          zone === "center"
+            ? swapPanes(deck.tree, paneId, targetId)
+            : dockPane(deck.tree, paneId, targetId, zone);
+        return { ...deck, tree, focused: paneId, zoomed: null };
+      });
     },
 
     resizeSplit(projectId, deckId, splitId, seam, delta) {
@@ -1360,9 +1746,15 @@ export function startAttentionTracking(): () => void {
   const timer = setInterval(() => {
     const state = useKeel.getState();
     const next: Record<string, PaneStatus> = {};
+    const nextDoneAt: Record<string, number> = {};
     let changed = false;
 
     const now = Date.now();
+    // The terminal in front of you, while the window has focus. An agent that
+    // finishes there was never waiting for you.
+    const watching = document.hasFocus()
+      ? lookingAt(state.projects, state.activeProjectId)
+      : null;
 
     for (const project of state.projects) {
       for (const deck of project.decks) {
@@ -1386,13 +1778,17 @@ export function startAttentionTracking(): () => void {
             if (sustained || (previous === "working" && entry.runStart !== null)) {
               current = "working";
             } else if (previous === "working") {
-              current = "done";
+              current = paneId === watching ? "idle" : "done";
             } else {
               current = previous;
             }
           }
 
           next[paneId] = current;
+          if (current === "done") {
+            nextDoneAt[paneId] =
+              previous === "done" ? (state.doneAt[paneId] ?? now) : now;
+          }
           if (current !== previous) changed = true;
         }
       }
@@ -1402,7 +1798,7 @@ export function startAttentionTracking(): () => void {
       changed ||
       Object.keys(next).length !== Object.keys(state.status).length
     ) {
-      useKeel.setState({ status: next });
+      useKeel.setState({ status: next, doneAt: nextDoneAt });
     }
   }, 350);
 

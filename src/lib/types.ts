@@ -37,13 +37,14 @@ export interface Pane {
    */
   resumeAgent: boolean;
   /**
-   * UUID handed to CLIs that let us pick a session id. `null` when this agent
-   * has no such flag, or when the pane predates session tracking.
+   * Conversation this pane owns, once captured from the agent. `null` until
+   * then. Leftover generated UUIDs from older builds are ignored until
+   * `sessionReady` is true.
    */
   sessionId: string | null;
   /**
-   * The agent has come up at least once, so the next spawn should resume the
-   * conversation instead of opening a new one.
+   * True when `sessionId` is a captured conversation this pane may resume.
+   * False means launch the bare command; capture will bind the real id later.
    */
   sessionReady: boolean;
   title: string;
@@ -93,9 +94,12 @@ export interface Project {
 /**
  * Extra args (or a subcommand) that reopen a CLI's conversation.
  *
- * `start` is typed on the first spawn; `resume` on every spawn after that.
- * `{id}` is this pane's session id — never `--continue`, which would give
- * every pane of the same agent the most recent chat in the folder.
+ * `resume` is typed only when this pane has a captured conversation
+ * (`sessionReady`). `{id}` is that conversation — never `--continue`, which
+ * would give every pane of the same agent the most recent chat in the folder.
+ * `start` is legacy: some CLIs accept `--session-id` on first launch, but
+ * ordinary new panes do not use it. The agent creates the conversation; Keel
+ * captures the id afterwards.
  * `store` names the on-disk layout used to discover that id.
  */
 export interface SessionSpec {
@@ -114,8 +118,8 @@ export interface AgentSpec {
   /** Typed into a fresh shell. */
   command: string;
   /**
-   * How this CLI reopens a conversation. Absent means every spawn is a new
-   * session. `{id}` is replaced with the pane's `sessionId`.
+   * How this CLI reopens a captured conversation. Absent means every spawn
+   * is a new session. `{id}` is replaced with the pane's captured `sessionId`.
    */
   session?: SessionSpec | null;
   /** Up to three characters, shown wherever the agent is drawn small. */
@@ -140,11 +144,48 @@ export interface Agent extends AgentSpec {
   builtin: boolean;
 }
 
+import type { KeybindingOverrides } from "./keymap";
+
 /** A named login slot. Credentials stay in the agent's own isolated config dir. */
 export interface AgentAccount {
   id: string;
   agentId: string;
   name: string;
+  /** New terminals of this agent start on it. At most one per agent. */
+  isDefault?: boolean;
+}
+
+/** Private OpenVPN tunnel settings. The rest of the PC stays off the VPN. */
+export interface VpnSettings {
+  /** Bring the tunnel up when Keel starts. */
+  autoConnect: boolean;
+  /** OpenVPN Connect profile id (file stem). `null` uses the only/first one. */
+  profileId: string | null;
+}
+
+export interface VpnProfileInfo {
+  id: string;
+  name: string;
+  path: string;
+}
+
+export type VpnPhase = "idle" | "connecting" | "connected" | "error";
+
+/** Live tunnel state. Only `autoConnect` / `profileId` are written to disk. */
+export interface VpnState extends VpnSettings {
+  phase: VpnPhase;
+  /** False while auto-connect is still bringing the tunnel up. */
+  spawnAllowed: boolean;
+  connectInstalled: boolean;
+  openvpnPath: string | null;
+  profiles: VpnProfileInfo[];
+  profileName: string | null;
+  adapter: string | null;
+  tunnelIp: string | null;
+  proxyPort: number | null;
+  isolated: boolean;
+  error: string | null;
+  dialogOpen: boolean;
 }
 
 /** Everything written to disk. Live PTYs are deliberately not part of it. */
@@ -153,4 +194,7 @@ export interface PersistedState {
   projects: Project[];
   activeProjectId: string | null;
   accounts: AgentAccount[];
+  vpn?: VpnSettings;
+  /** Only the shortcuts you changed; everything else follows the defaults. */
+  keybindings?: KeybindingOverrides;
 }

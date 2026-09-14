@@ -1,7 +1,7 @@
 /** Everything else Rust exposes: agent detection, persistence, folders. */
 
 import { invoke } from "@/lib/invoke";
-import type { Agent, AgentSpec, PersistedState } from "./types";
+import type { Agent, AgentSpec, PersistedState, VpnProfileInfo } from "./types";
 
 export function detectAgents(): Promise<Agent[]> {
   return invoke("detect_agents");
@@ -57,4 +57,31 @@ export function sessionRecent(probe: {
   accountId?: string | null;
 }): Promise<SessionHit[]> {
   return invoke("session_recent", { probe });
+}
+
+export interface VpnSnapshot {
+  phase: string;
+  connectInstalled: boolean;
+  openvpnPath: string | null;
+  profiles: VpnProfileInfo[];
+  profileId: string | null;
+  profileName: string | null;
+  adapter: string | null;
+  tunnelIp: string | null;
+  ifIndex: number | null;
+  proxyPort: number | null;
+  isolated: boolean;
+  error: string | null;
+}
+
+export function vpnSnapshot(): Promise<VpnSnapshot> {
+  return invoke("vpn_snapshot");
+}
+
+export function vpnConnect(profileId?: string | null): Promise<VpnSnapshot> {
+  return invoke("vpn_connect", { profileId: profileId ?? null });
+}
+
+export function vpnDisconnect(): Promise<VpnSnapshot> {
+  return invoke("vpn_disconnect");
 }
