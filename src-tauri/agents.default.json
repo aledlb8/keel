@@ -67,6 +67,23 @@
     ]
   },
   {
+    "id": "grok",
+    "name": "Grok Build",
+    "command": "grok",
+    "accountEnv": "GROK_HOME",
+    "short": "GR",
+    "accent": "#f5f5f5",
+    "bins": ["grok"],
+    "paths": [
+      "{home}/.grok/bin",
+      "{home}/.local/bin",
+      "{home}/AppData/Local/pnpm",
+      "{home}/AppData/Roaming/npm",
+      "/opt/homebrew/bin",
+      "/usr/local/bin"
+    ]
+  },
+  {
     "id": "cursor-agent",
     "name": "Cursor Agent",
     "command": "cursor-agent",

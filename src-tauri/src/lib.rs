@@ -20,6 +20,8 @@ pub fn run() {
             pty::pty_alive,
             agents::detect_agents,
             agents::agent_catalogue_path,
+            agents::agent_catalogue_defaults,
+            agents::agent_catalogue_save,
             store::state_load,
             store::state_save,
             store::state_path,

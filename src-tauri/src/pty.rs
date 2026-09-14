@@ -187,6 +187,14 @@ pub fn which(program: &str) -> Option<String> {
     None
 }
 
+/// Letters, digits and underscores, not starting with a digit.
+pub fn is_env_name(key: &str) -> bool {
+    !key.is_empty()
+        && key.chars().enumerate().all(|(index, ch)| {
+            ch == '_' || ch.is_ascii_alphanumeric() && (index > 0 || !ch.is_ascii_digit())
+        })
+}
+
 pub fn home_dir() -> Option<std::path::PathBuf> {
     #[cfg(windows)]
     {
@@ -267,10 +275,7 @@ pub fn pty_spawn(
         cmd.env(key, value);
     }
     if let (Some(key), Some(account_id)) = (&options.account_env, &options.account_id) {
-        let valid_key = !key.is_empty()
-            && key.chars().enumerate().all(|(index, ch)| {
-                ch == '_' || ch.is_ascii_alphanumeric() && (index > 0 || !ch.is_ascii_digit())
-            });
+        let valid_key = is_env_name(key);
         let valid_id = account_id
             .chars()
             .all(|ch| ch == '_' || ch == '-' || ch.is_ascii_alphanumeric());
@@ -331,7 +336,23 @@ pub fn pty_spawn(
                     }
                 }
                 alive.store(false, Ordering::SeqCst);
-                let _ = app.emit("pty:exit", PtyExit { id });
+                // A pane that is relaunched or switches profile gets a fresh
+                // session under the same id before this old reader winds down.
+                // Only report an exit if this reader's session is still the one
+                // on record; otherwise the new, live shell gets marked as dead.
+                let still_current = app
+                    .state::<PtyManager>()
+                    .sessions
+                    .lock()
+                    .map(|sessions| {
+                        sessions
+                            .get(&id)
+                            .is_some_and(|session| Arc::ptr_eq(&session.alive, &alive))
+                    })
+                    .unwrap_or(false);
+                if still_current {
+                    let _ = app.emit("pty:exit", PtyExit { id });
+                }
             })
             .map_err(|err| format!("could not start the reader thread: {err}"))?;
     }
