@@ -256,11 +256,12 @@ fn config_home(app: &AppHandle, agent_id: &str, account_id: Option<&str>) -> Opt
     default_home(agent_id)
 }
 
-fn http_client() -> Result<Client, String> {
-    Client::builder()
-        .timeout(REQUEST_TIMEOUT)
-        .build()
-        .map_err(|err| err.to_string())
+fn http_client(proxy: Option<&str>) -> Result<Client, String> {
+    let mut builder = Client::builder().timeout(REQUEST_TIMEOUT);
+    if let Some(proxy) = proxy.filter(|url| !url.is_empty()) {
+        builder = builder.proxy(reqwest::Proxy::all(proxy).map_err(|err| err.to_string())?);
+    }
+    builder.build().map_err(|err| err.to_string())
 }
 
 fn header_map(pairs: &[(&str, &str)]) -> HeaderMap {
@@ -1123,7 +1124,10 @@ fn fetch_one(client: &Client, app: &AppHandle, query: &UsageAgentQuery) -> Optio
 #[tauri::command]
 pub fn usage_fetch(app: AppHandle, agents: Vec<UsageAgentQuery>) -> UsageSnapshot {
     let fetched_at = now_ms();
-    let Ok(client) = http_client() else {
+    let proxy = app
+        .try_state::<crate::vpn::VpnManager>()
+        .and_then(|vpn| vpn.http_proxy_url());
+    let Ok(client) = http_client(proxy.as_deref()) else {
         return UsageSnapshot {
             agents: Vec::new(),
             fetched_at,
@@ -1158,7 +1162,7 @@ pub fn usage_fetch(app: AppHandle, agents: Vec<UsageAgentQuery>) -> UsageSnapsho
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -1296,7 +1300,12 @@ mod tests {
     #[test]
     #[ignore]
     fn live_provider_smoke() {
-        let client = http_client().expect("http client");
+        let proxy = std::env::var("KEEL_USAGE_SMOKE_PROXY").ok();
+        live_usage_through_proxy(proxy.as_deref());
+    }
+
+    pub(crate) fn live_usage_through_proxy(proxy: Option<&str>) {
+        let client = http_client(proxy).expect("http client");
         let home = home_dir().expect("home");
         let providers = [
             (

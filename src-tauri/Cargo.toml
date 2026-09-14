@@ -27,11 +27,29 @@ serde_json = "1"
 portable-pty = "0.9"
 tauri-plugin-dialog = "2"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls-native-roots"] }
+socket2 = "0.5"
 time = { version = "0.3", default-features = false, features = ["parsing"] }
 
 [target.'cfg(windows)'.dependencies]
-winapi = { version = "0.3", features = ["tlhelp32", "handleapi"] }
-
+winapi = { version = "0.3", features = [
+    "tlhelp32",
+    "handleapi",
+    "winsock2",
+    "iphlpapi",
+    "ipmib",
+    "winerror",
+    "fileapi",
+    "winbase",
+    "namedpipeapi",
+    "processthreadsapi",
+    "winnt",
+    "winsvc",
+    "shellapi",
+    "sysinfoapi",
+    "synchapi",
+    "winuser",
+] }
+ipconfig = "0.3"
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

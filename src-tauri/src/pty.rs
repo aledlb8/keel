@@ -116,9 +116,9 @@ function global:prompt {
     $ok = $?
 
     $e = [char]27
-    $dim = "$e[38;2;148;154;173m"
+    $dim = "$e[38;2;161;161;161m"
     $off = "$e[0m"
-    $caret = if ($ok) { "$e[38;2;227;229;237m" } else { "$e[38;2;242;119;125m" }
+    $caret = if ($ok) { "$e[38;2;237;237;237m" } else { "$e[38;2;236;93;94m" }
 
     # The folder, not the full path: the pane already knows where it is, and the
     # status bar along the bottom of the window is showing it.
@@ -134,16 +134,16 @@ function global:prompt {
 # lot worse than one that is the wrong colour.
 try {
     Set-PSReadLineOption -ErrorAction Stop -Colors @{
-        Command          = '#8fbcff'
-        Parameter        = '#949aad'
-        Operator         = '#949aad'
-        String           = '#4fd894'
-        Number           = '#e5bd6c'
-        Comment          = '#626878'
-        Member           = '#b6c1d2'
-        Type             = '#5fc7d4'
-        Variable         = '#dd8fbc'
-        InlinePrediction = '#3a4152'
+        Command          = '#ededed'
+        Parameter        = '#a1a1a1'
+        Operator         = '#a1a1a1'
+        String           = '#4cc38a'
+        Number           = '#e9a23b'
+        Comment          = '#6e6e6e'
+        Member           = '#c7c7c7'
+        Type             = '#3fc1b0'
+        Variable         = '#e07fb7'
+        InlinePrediction = '#4a4a4a'
     }
 } catch {
     # No PSReadLine here. The defaults will do.
@@ -309,6 +309,13 @@ pub fn pty_spawn(
     // Agents read these to decide how much colour they are allowed to use.
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
+
+    // Private OpenVPN tunnel: only this pane's processes should use it.
+    if let Some(vpn) = app.try_state::<crate::vpn::VpnManager>() {
+        for (key, value) in vpn.proxy_env() {
+            cmd.env(key, value);
+        }
+    }
 
     let child = pair
         .slave

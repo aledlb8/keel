@@ -4,10 +4,15 @@ mod pty;
 mod sessions;
 mod store;
 mod usage;
+mod vpn;
+mod vpn_profile;
+mod vpn_proxy;
+mod vpn_service;
 
 use tauri::Manager;
 
 use pty::PtyManager;
+use vpn::VpnManager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -15,6 +20,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(PtyManager::default())
+        .manage(VpnManager::default())
         .invoke_handler(tauri::generate_handler![
             pty::pty_spawn,
             pty::pty_write,
@@ -32,13 +38,20 @@ pub fn run() {
             store::path_exists,
             sessions::session_recent,
             usage::usage_fetch,
+            vpn::vpn_snapshot,
+            vpn::vpn_connect,
+            vpn::vpn_disconnect,
         ])
         .on_window_event(|window, event| {
             // Closing the window must take every child process with it, or the
-            // agents keep running headless.
+            // agents keep running headless. The private OpenVPN tunnel is the
+            // same: it exists only for this app.
             if let tauri::WindowEvent::Destroyed = event {
                 if let Some(manager) = window.app_handle().try_state::<PtyManager>() {
                     manager.shutdown_all();
+                }
+                if let Some(vpn) = window.app_handle().try_state::<VpnManager>() {
+                    vpn.shutdown();
                 }
             }
         })
