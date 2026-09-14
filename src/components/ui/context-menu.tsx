@@ -16,11 +16,23 @@ import { cn } from "@/lib/utils";
 /** Whatever had focus when a context menu was asked for. */
 let focusBeforeMenu: Element | null = null;
 
-const SURFACE =
-  "z-50 max-h-(--radix-context-menu-content-available-height) min-w-[216px] origin-(--radix-context-menu-content-transform-origin) overflow-x-hidden overflow-y-auto rounded-[var(--keel-r-window)] border border-line-strong bg-popover p-1 text-popover-foreground shadow-[var(--keel-lift-strong)] backdrop-blur-[var(--keel-blur-strong)] duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95";
+/**
+ * Every menu surface in the app — right-click menus and the menu bar — is this
+ * one panel, so a command looks the same wherever you reach for it. Only the
+ * Radix CSS variables for size and origin differ between the two.
+ */
+export const MENU_SURFACE =
+  "z-50 min-w-[216px] overflow-x-hidden overflow-y-auto rounded-[var(--keel-r-window)] border border-line-strong bg-popover p-1 text-popover-foreground shadow-[var(--keel-lift-strong)] backdrop-blur-[var(--keel-blur-strong)] duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95";
 
-const ITEM =
+const SURFACE = `${MENU_SURFACE} max-h-(--radix-context-menu-content-available-height) origin-(--radix-context-menu-content-transform-origin)`;
+
+export const MENU_ITEM =
   "relative flex h-[30px] cursor-default items-center gap-2.5 rounded-[var(--keel-r-chip)] px-2.5 text-[13px] text-foreground outline-hidden select-none focus:bg-veil-3 data-disabled:pointer-events-none data-disabled:opacity-40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5 [&_svg]:text-dim focus:[&_svg]:text-foreground";
+
+export const MENU_DESTRUCTIVE =
+  "data-[variant=destructive]:text-[color:var(--keel-dead)] data-[variant=destructive]:[&_svg]:text-[color:var(--keel-dead)] data-[variant=destructive]:focus:bg-[color-mix(in_srgb,var(--keel-dead)_16%,transparent)]";
+
+const ITEM = MENU_ITEM;
 
 function ContextMenu(props: React.ComponentProps<typeof Primitive.Root>) {
   return <Primitive.Root data-slot="context-menu" modal={false} {...props} />;
@@ -85,11 +97,7 @@ function ContextMenuItem({
     <Primitive.Item
       data-slot="context-menu-item"
       data-variant={variant}
-      className={cn(
-        ITEM,
-        "data-[variant=destructive]:text-[color:var(--keel-dead)] data-[variant=destructive]:[&_svg]:text-[color:var(--keel-dead)] data-[variant=destructive]:focus:bg-[color-mix(in_srgb,var(--keel-dead)_16%,transparent)]",
-        className,
-      )}
+      className={cn(ITEM, MENU_DESTRUCTIVE, className)}
       {...props}
     />
   );
@@ -131,7 +139,7 @@ function ContextMenuShortcut({
   return (
     <span
       data-slot="context-menu-shortcut"
-      className={cn("ml-auto pl-5 font-mono text-[11px] text-faint", className)}
+      className={cn("ml-auto pl-5 text-[11px] tracking-wide text-faint", className)}
       {...props}
     />
   );
@@ -201,8 +209,30 @@ function ContextMenuRadioItem({
   );
 }
 
+function ContextMenuCheckboxItem({
+  className,
+  children,
+  ...props
+}: React.ComponentProps<typeof Primitive.CheckboxItem>) {
+  return (
+    <Primitive.CheckboxItem
+      data-slot="context-menu-checkbox-item"
+      className={cn(ITEM, "pl-8", className)}
+      {...props}
+    >
+      <span className="pointer-events-none absolute left-2.5 grid size-3.5 place-items-center">
+        <Primitive.ItemIndicator>
+          <CheckIcon className="size-3.5" />
+        </Primitive.ItemIndicator>
+      </span>
+      {children}
+    </Primitive.CheckboxItem>
+  );
+}
+
 export {
   ContextMenu,
+  ContextMenuCheckboxItem,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuLabel,

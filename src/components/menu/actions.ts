@@ -10,33 +10,52 @@ import { open as openFolder } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   ArrowDown,
+  ArrowLeft,
+  ArrowRight,
   ArrowUp,
+  BellDot,
   ChevronsDownUp,
   ChevronsUpDown,
   ClipboardPaste,
   Copy,
   Eraser,
+  Columns3,
+  FolderCog,
   FolderOpen,
   FolderPlus,
+  Folders,
+  Keyboard,
   Layers,
+  LayoutGrid,
   Maximize2,
   Minimize2,
   Pencil,
   Plus,
   RotateCw,
+  Search,
   Settings2,
+  ShieldCheck,
   SplitSquareHorizontal,
   SplitSquareVertical,
   TextSelect,
   Trash2,
   UserRound,
+  UsersRound,
   X,
 } from "lucide-react";
 
 import type { MenuEntry } from "@/components/menu/MenuEntries";
 import { terminalCommands } from "@/components/TerminalSurface";
+import type { TitlebarActions } from "@/components/Titlebar";
+import { lookingAt, waitingPanes } from "@/lib/island";
+import { deckShortcutKeys, shortcutKeys } from "@/lib/keymap";
 import { listPanes } from "@/lib/tree";
-import { deckOfPane, useKeel, type RenameTarget } from "@/state/store";
+import {
+  activeDeck,
+  deckOfPane,
+  useKeel,
+  type RenameTarget,
+} from "@/state/store";
 
 const DEFAULT_PROFILE = "__default__";
 
@@ -61,6 +80,272 @@ export async function pickProjectFolder() {
     title: "Add a project folder",
   });
   if (typeof picked === "string") useKeel.getState().addProject(picked);
+}
+
+// ---- The menu bar ------------------------------------------------------------
+//
+// Four menus, each a question you might be asking: what can I do to this
+// project, where can I go, how is it laid out, and where do I find help. Every
+// entry is built when its menu opens, so what is disabled and which deck is
+// ticked describe the window as it is right now.
+
+/** What the menu bar acts on: the project in front, its deck, its focused pane. */
+function inFront() {
+  const state = useKeel.getState();
+  const project =
+    state.projects.find((item) => item.id === state.activeProjectId) ?? null;
+  const deck = activeDeck(project);
+  const focused =
+    deck?.focused && listPanes(deck.tree).includes(deck.focused)
+      ? deck.focused
+      : null;
+  return { state, project, deck, focused };
+}
+
+export function projectBarMenu(actions: TitlebarActions): MenuEntry[] {
+  const { state, project } = inFront();
+  const terminals = project
+    ? project.decks.reduce((sum, deck) => sum + listPanes(deck.tree).length, 0)
+    : 0;
+
+  return [
+    ...(project ? [{ kind: "label", label: project.name } as const] : []),
+    {
+      kind: "item",
+      label: "Add terminals…",
+      icon: Plus,
+      shortcut: shortcutKeys("addTerminals"),
+      disabled: !project,
+      onSelect: actions.addTerminals,
+    },
+    {
+      kind: "item",
+      label: "New deck",
+      icon: Layers,
+      shortcut: shortcutKeys("newDeck"),
+      disabled: !project,
+      onSelect: actions.newDeck,
+    },
+    { kind: "separator" },
+    {
+      kind: "item",
+      label: "Add a folder…",
+      icon: FolderPlus,
+      onSelect: actions.addFolder,
+    },
+    {
+      kind: "sub",
+      label: "Switch project",
+      icon: Folders,
+      disabled: state.projects.length < 2,
+      entries: [
+        {
+          kind: "radio",
+          value: state.activeProjectId ?? "",
+          options: state.projects.map((item) => ({
+            value: item.id,
+            label: item.name,
+          })),
+          onChange: (projectId) => state.selectProject(projectId),
+        },
+      ],
+    },
+    { kind: "separator" },
+    {
+      kind: "item",
+      label: REVEAL_LABEL,
+      icon: FolderOpen,
+      disabled: !project,
+      onSelect: () => {
+        if (project) void revealItemInDir(project.path);
+      },
+    },
+    {
+      kind: "item",
+      label: "Copy path",
+      icon: Copy,
+      disabled: !project,
+      onSelect: () => {
+        if (project) copyText(project.path);
+      },
+    },
+    { kind: "separator" },
+    {
+      kind: "item",
+      label: "Remove from Keel",
+      icon: Trash2,
+      destructive: true,
+      disabled: !project,
+      confirm:
+        terminals > 0
+          ? `Close ${plural(terminals, "terminal")} and remove`
+          : "Click again to remove",
+      onSelect: actions.removeProject,
+    },
+  ];
+}
+
+export function goBarMenu(actions: TitlebarActions): MenuEntry[] {
+  const { state, project, focused } = inFront();
+  const waiting = waitingPanes(
+    state.projects,
+    state.status,
+    state.doneAt,
+    lookingAt(state.projects, state.activeProjectId),
+  ).length;
+  const decks = project && project.decks.length > 1 ? project.decks : [];
+
+  return [
+    {
+      kind: "item",
+      label: "Go to…",
+      icon: Search,
+      shortcut: shortcutKeys("goTo"),
+      onSelect: actions.goTo,
+    },
+    {
+      kind: "item",
+      label:
+        waiting > 0
+          ? `Next waiting agent (${waiting})`
+          : "Next waiting agent",
+      icon: BellDot,
+      shortcut: shortcutKeys("nextWaiting"),
+      onSelect: actions.jumpToWaiting,
+    },
+    { kind: "separator" },
+    {
+      kind: "item",
+      label: "Next pane",
+      icon: ArrowRight,
+      shortcut: shortcutKeys("nextPane"),
+      disabled: !focused,
+      onSelect: actions.nextPane,
+    },
+    {
+      kind: "item",
+      label: "Previous pane",
+      icon: ArrowLeft,
+      shortcut: shortcutKeys("prevPane"),
+      disabled: !focused,
+      onSelect: actions.prevPane,
+    },
+    ...(project && decks.length > 0
+      ? ([
+          { kind: "separator" },
+          { kind: "label", label: "Decks" },
+          {
+            kind: "radio",
+            value: project.activeDeckId ?? "",
+            options: decks.map((deck, index) => ({
+              value: deck.id,
+              label: deck.name,
+              shortcut: deckShortcutKeys(index),
+            })),
+            onChange: actions.selectDeck,
+          },
+        ] satisfies MenuEntry[])
+      : []),
+    { kind: "separator" },
+    {
+      kind: "item",
+      label: "Overview of every deck",
+      icon: LayoutGrid,
+      shortcut: shortcutKeys("overview"),
+      disabled: !project,
+      onSelect: actions.showOverview,
+    },
+  ];
+}
+
+export function viewBarMenu(
+  actions: TitlebarActions,
+  sidebarVisible: boolean,
+): MenuEntry[] {
+  const { deck, focused } = inFront();
+  const zoomed = Boolean(focused && deck?.zoomed === focused);
+
+  return [
+    {
+      kind: "check",
+      label: "Sidebar",
+      checked: sidebarVisible,
+      shortcut: shortcutKeys("toggleSidebar"),
+      onChange: actions.toggleSidebar,
+    },
+    { kind: "separator" },
+    {
+      kind: "item",
+      label: "Split right",
+      icon: SplitSquareHorizontal,
+      shortcut: shortcutKeys("splitRight"),
+      disabled: !focused,
+      onSelect: actions.splitRight,
+    },
+    {
+      kind: "item",
+      label: "Split down",
+      icon: SplitSquareVertical,
+      shortcut: shortcutKeys("splitDown"),
+      disabled: !focused,
+      onSelect: actions.splitDown,
+    },
+    {
+      kind: "item",
+      label: zoomed ? "Exit fullscreen" : "Fullscreen the focused pane",
+      icon: zoomed ? Minimize2 : Maximize2,
+      shortcut: shortcutKeys("fullscreen"),
+      disabled: !focused,
+      onSelect: actions.fullscreenPane,
+    },
+    {
+      kind: "item",
+      label: "Even out every split",
+      icon: Columns3,
+      shortcut: shortcutKeys("balance"),
+      disabled: !deck?.tree,
+      onSelect: actions.balance,
+    },
+    { kind: "separator" },
+    {
+      kind: "item",
+      label: "Close the focused pane",
+      icon: X,
+      shortcut: shortcutKeys("closePane"),
+      disabled: !focused,
+      onSelect: actions.closePane,
+    },
+  ];
+}
+
+export function helpBarMenu(actions: TitlebarActions): MenuEntry[] {
+  return [
+    {
+      kind: "item",
+      label: "Keyboard shortcuts",
+      icon: Keyboard,
+      onSelect: actions.showShortcuts,
+    },
+    {
+      kind: "item",
+      label: "Agents & profiles…",
+      icon: UsersRound,
+      onSelect: actions.openCatalogue,
+    },
+    {
+      kind: "item",
+      label: "Private VPN…",
+      icon: ShieldCheck,
+      onSelect: actions.openVpn,
+    },
+    { kind: "separator" },
+    {
+      kind: "item",
+      label: "Open the config folder",
+      icon: FolderCog,
+      onSelect: actions.openConfig,
+    },
+  ];
 }
 
 /** The empty part of the sidebar. */
@@ -108,7 +393,7 @@ export function projectMenu(projectId: string): MenuEntry[] {
       kind: "item",
       label: "Add terminals…",
       icon: Plus,
-      shortcut: "Alt+Shift+T",
+      shortcut: shortcutKeys("addTerminals"),
       onSelect: () => {
         state.selectProject(projectId);
         state.setLauncher(true);
@@ -118,6 +403,7 @@ export function projectMenu(projectId: string): MenuEntry[] {
       kind: "item",
       label: "New deck",
       icon: Layers,
+      shortcut: shortcutKeys("newDeck"),
       onSelect: () => {
         state.selectProject(projectId);
         state.addDeck(projectId);
@@ -128,7 +414,7 @@ export function projectMenu(projectId: string): MenuEntry[] {
       kind: "item",
       label: "Rename",
       icon: Pencil,
-      shortcut: "F2",
+      shortcut: shortcutKeys("rename"),
       onSelect: () =>
         state.startRename({ kind: "project", id: projectId, where: "sidebar" }),
     },
@@ -193,6 +479,7 @@ export function deckMenu(projectId: string, deckId: string): MenuEntry[] {
       kind: "item",
       label: "Add terminals…",
       icon: Plus,
+      shortcut: shortcutKeys("addTerminals"),
       onSelect: () => {
         state.selectProject(projectId);
         state.selectDeck(projectId, deckId);
@@ -204,7 +491,7 @@ export function deckMenu(projectId: string, deckId: string): MenuEntry[] {
       kind: "item",
       label: "Rename",
       icon: Pencil,
-      shortcut: "F2",
+      shortcut: shortcutKeys("rename"),
       onSelect: () =>
         state.startRename({ kind: "deck", id: deckId, where: "sidebar" }),
     },
@@ -257,7 +544,7 @@ export function paneMenu(
       kind: "item",
       label: "Rename",
       icon: Pencil,
-      shortcut: "F2",
+      shortcut: shortcutKeys("rename"),
       onSelect: () => state.startRename({ kind: "pane", id: paneId, where }),
     },
     { kind: "separator" },
@@ -265,21 +552,21 @@ export function paneMenu(
       kind: "item",
       label: "Split right",
       icon: SplitSquareHorizontal,
-      shortcut: "Alt+Shift+D",
+      shortcut: shortcutKeys("splitRight"),
       onSelect: () => state.duplicatePane(projectId, paneId, "row"),
     },
     {
       kind: "item",
       label: "Split down",
       icon: SplitSquareVertical,
-      shortcut: "Alt+Shift+S",
+      shortcut: shortcutKeys("splitDown"),
       onSelect: () => state.duplicatePane(projectId, paneId, "column"),
     },
     {
       kind: "item",
       label: deck.zoomed === paneId ? "Exit fullscreen" : "Fullscreen",
       icon: deck.zoomed === paneId ? Minimize2 : Maximize2,
-      shortcut: "Alt+Shift+F",
+      shortcut: shortcutKeys("fullscreen"),
       onSelect: () => state.toggleZoom(projectId, paneId),
     },
     {
@@ -366,7 +653,7 @@ export function paneMenu(
       kind: "item",
       label: "Close terminal",
       icon: X,
-      shortcut: "Alt+Shift+W",
+      shortcut: shortcutKeys("closePane"),
       destructive: true,
       onSelect: () => state.closePane(projectId, paneId),
     },

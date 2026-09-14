@@ -6,12 +6,23 @@
  * `actions.ts`) and rendered here. Entries are built when the menu opens, which
  * keeps every label — "Fullscreen" or "Exit fullscreen", which decks exist —
  * true at the moment you look at it.
+ *
+ * The same entries render as a right-click menu or as a menu-bar menu: each is
+ * a kit of primitives with the same props, so a command is written once and
+ * looks identical in both.
  */
 
-import { useState } from "react";
+import {
+  createContext,
+  useContext,
+  useState,
+  type ComponentType,
+  type ReactNode,
+} from "react";
 import type { LucideIcon } from "lucide-react";
 
 import {
+  ContextMenuCheckboxItem,
   ContextMenuItem,
   ContextMenuLabel,
   ContextMenuRadioGroup,
@@ -22,6 +33,18 @@ import {
   ContextMenuSubContent,
   ContextMenuSubTrigger,
 } from "@/components/ui/context-menu";
+import {
+  MenubarCheckboxItem,
+  MenubarItem,
+  MenubarLabel,
+  MenubarRadioGroup,
+  MenubarRadioItem,
+  MenubarSeparator,
+  MenubarShortcut,
+  MenubarSub,
+  MenubarSubContent,
+  MenubarSubTrigger,
+} from "@/components/ui/menubar";
 
 export interface MenuItemEntry {
   kind: "item";
@@ -43,6 +66,14 @@ export type MenuEntry =
   | { kind: "separator" }
   | { kind: "label"; label: string }
   | {
+      kind: "check";
+      label: string;
+      checked: boolean;
+      shortcut?: string;
+      disabled?: boolean;
+      onChange: (checked: boolean) => void;
+    }
+  | {
       kind: "sub";
       label: string;
       icon?: LucideIcon;
@@ -52,9 +83,65 @@ export type MenuEntry =
   | {
       kind: "radio";
       value: string;
-      options: { value: string; label: string }[];
+      options: { value: string; label: string; shortcut?: string }[];
       onChange: (value: string) => void;
     };
+
+interface Kit {
+  Item: ComponentType<{
+    disabled?: boolean;
+    variant?: "default" | "destructive";
+    className?: string;
+    onSelect?: (event: Event) => void;
+    children?: ReactNode;
+  }>;
+  CheckboxItem: ComponentType<{
+    checked?: boolean;
+    disabled?: boolean;
+    onCheckedChange?: (checked: boolean) => void;
+    children?: ReactNode;
+  }>;
+  Label: ComponentType<{ children?: ReactNode }>;
+  Separator: ComponentType<object>;
+  Shortcut: ComponentType<{ children?: ReactNode }>;
+  Sub: ComponentType<{ children?: ReactNode }>;
+  SubTrigger: ComponentType<{ disabled?: boolean; children?: ReactNode }>;
+  SubContent: ComponentType<{ children?: ReactNode }>;
+  RadioGroup: ComponentType<{
+    value?: string;
+    onValueChange?: (value: string) => void;
+    children?: ReactNode;
+  }>;
+  RadioItem: ComponentType<{ value: string; children?: ReactNode }>;
+}
+
+const CONTEXT_KIT: Kit = {
+  Item: ContextMenuItem,
+  CheckboxItem: ContextMenuCheckboxItem,
+  Label: ContextMenuLabel,
+  Separator: ContextMenuSeparator,
+  Shortcut: ContextMenuShortcut,
+  Sub: ContextMenuSub,
+  SubTrigger: ContextMenuSubTrigger,
+  SubContent: ContextMenuSubContent,
+  RadioGroup: ContextMenuRadioGroup,
+  RadioItem: ContextMenuRadioItem,
+};
+
+const MENUBAR_KIT: Kit = {
+  Item: MenubarItem,
+  CheckboxItem: MenubarCheckboxItem,
+  Label: MenubarLabel,
+  Separator: MenubarSeparator,
+  Shortcut: MenubarShortcut,
+  Sub: MenubarSub,
+  SubTrigger: MenubarSubTrigger,
+  SubContent: MenubarSubContent,
+  RadioGroup: MenubarRadioGroup,
+  RadioItem: MenubarRadioItem,
+};
+
+const KitContext = createContext<Kit>(CONTEXT_KIT);
 
 /** Drop separators that would sit at an edge or next to another separator. */
 function tidy(entries: MenuEntry[]): MenuEntry[] {
@@ -72,10 +159,9 @@ function tidy(entries: MenuEntry[]): MenuEntry[] {
   return out;
 }
 
-export function ContextMenuEntries({
+function Entries({
   entries,
 }: {
-  /** A function is only called once the menu is actually open. */
   entries: MenuEntry[] | (() => MenuEntry[]);
 }) {
   const list = tidy(typeof entries === "function" ? entries() : entries);
@@ -88,34 +174,75 @@ export function ContextMenuEntries({
   );
 }
 
+export function ContextMenuEntries({
+  entries,
+}: {
+  /** A function is only called once the menu is actually open. */
+  entries: MenuEntry[] | (() => MenuEntry[]);
+}) {
+  return (
+    <KitContext.Provider value={CONTEXT_KIT}>
+      <Entries entries={entries} />
+    </KitContext.Provider>
+  );
+}
+
+export function MenubarEntries({
+  entries,
+}: {
+  /** A function is only called once the menu is actually open. */
+  entries: MenuEntry[] | (() => MenuEntry[]);
+}) {
+  return (
+    <KitContext.Provider value={MENUBAR_KIT}>
+      <Entries entries={entries} />
+    </KitContext.Provider>
+  );
+}
+
 function Entry({ entry }: { entry: MenuEntry }) {
+  const kit = useContext(KitContext);
   switch (entry.kind) {
     case "separator":
-      return <ContextMenuSeparator />;
+      return <kit.Separator />;
     case "label":
-      return <ContextMenuLabel>{entry.label}</ContextMenuLabel>;
+      return <kit.Label>{entry.label}</kit.Label>;
+    case "check":
+      return (
+        <kit.CheckboxItem
+          checked={entry.checked}
+          disabled={entry.disabled}
+          onCheckedChange={entry.onChange}
+        >
+          <span className="truncate">{entry.label}</span>
+          {entry.shortcut ? <kit.Shortcut>{entry.shortcut}</kit.Shortcut> : null}
+        </kit.CheckboxItem>
+      );
     case "radio":
       return (
-        <ContextMenuRadioGroup value={entry.value} onValueChange={entry.onChange}>
+        <kit.RadioGroup value={entry.value} onValueChange={entry.onChange}>
           {entry.options.map((option) => (
-            <ContextMenuRadioItem key={option.value} value={option.value}>
+            <kit.RadioItem key={option.value} value={option.value}>
               <span className="truncate">{option.label}</span>
-            </ContextMenuRadioItem>
+              {option.shortcut ? (
+                <kit.Shortcut>{option.shortcut}</kit.Shortcut>
+              ) : null}
+            </kit.RadioItem>
           ))}
-        </ContextMenuRadioGroup>
+        </kit.RadioGroup>
       );
     case "sub": {
       const Icon = entry.icon;
       return (
-        <ContextMenuSub>
-          <ContextMenuSubTrigger disabled={entry.disabled}>
+        <kit.Sub>
+          <kit.SubTrigger disabled={entry.disabled}>
             {Icon ? <Icon /> : null}
             {entry.label}
-          </ContextMenuSubTrigger>
-          <ContextMenuSubContent>
-            <ContextMenuEntries entries={entry.entries} />
-          </ContextMenuSubContent>
-        </ContextMenuSub>
+          </kit.SubTrigger>
+          <kit.SubContent>
+            <Entries entries={entry.entries} />
+          </kit.SubContent>
+        </kit.Sub>
       );
     }
     case "item":
@@ -128,27 +255,27 @@ function Entry({ entry }: { entry: MenuEntry }) {
 }
 
 function PlainItem({ entry }: { entry: MenuItemEntry }) {
+  const kit = useContext(KitContext);
   const Icon = entry.icon;
   return (
-    <ContextMenuItem
+    <kit.Item
       disabled={entry.disabled}
       variant={entry.destructive ? "destructive" : "default"}
       onSelect={entry.onSelect}
     >
       {Icon ? <Icon /> : null}
       <span className="truncate">{entry.label}</span>
-      {entry.shortcut ? (
-        <ContextMenuShortcut>{entry.shortcut}</ContextMenuShortcut>
-      ) : null}
-    </ContextMenuItem>
+      {entry.shortcut ? <kit.Shortcut>{entry.shortcut}</kit.Shortcut> : null}
+    </kit.Item>
   );
 }
 
 function ConfirmItem({ entry }: { entry: MenuItemEntry }) {
+  const kit = useContext(KitContext);
   const [armed, setArmed] = useState(false);
   const Icon = entry.icon;
   return (
-    <ContextMenuItem
+    <kit.Item
       disabled={entry.disabled}
       variant="destructive"
       className={armed ? "bg-[color-mix(in_srgb,var(--keel-dead)_16%,transparent)]" : undefined}
@@ -163,6 +290,6 @@ function ConfirmItem({ entry }: { entry: MenuItemEntry }) {
     >
       {Icon ? <Icon /> : null}
       <span className="truncate">{armed ? entry.confirm : entry.label}</span>
-    </ContextMenuItem>
+    </kit.Item>
   );
 }

@@ -6,58 +6,66 @@
  * a piece of glass with controls resting on it instead of as a menu bar bolted
  * to the top of the app.
  *
- * They are one `Menubar`, not three separate dropdowns. That is the difference
- * between a menu bar and three buttons that happen to sit in a row: once any of
- * them is open, moving the pointer across the other titles walks between them
- * and the arrow keys do the same. Three independent `DropdownMenu`s each own
- * their open state, so the click meant for the neighbour was spent dismissing
- * the menu you already had open.
+ * Four menus, each answering one question: **Project** (what can I do to this
+ * project), **Go** (where can I get to), **View** (how is it laid out) and
+ * **Help**. They are one `Menubar` — once any is open, moving across the titles
+ * walks between them and the arrow keys do the same; F10 opens it from the
+ * keyboard. The menus themselves are data (`menu/actions.ts`) drawn with the
+ * same entries as the right-click menus, so a command reads identically
+ * wherever you reach for it.
  *
  * The window buttons stay square and full-height on the right: they belong to
  * the window frame, not to Keel, and matching what Windows draws there is worth
  * more than matching the rest of this file.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Minus, Square, X } from "lucide-react";
 
+import { MenubarEntries, type MenuEntry } from "@/components/menu/MenuEntries";
+import {
+  goBarMenu,
+  helpBarMenu,
+  projectBarMenu,
+  viewBarMenu,
+} from "@/components/menu/actions";
 import {
   Menubar,
-  MenubarCheckboxItem,
   MenubarContent,
-  MenubarItem,
   MenubarMenu,
-  MenubarSeparator,
-  MenubarShortcut,
   MenubarTrigger,
 } from "@/components/ui/menubar";
 import { cn } from "@/lib/utils";
+import { useKeel } from "@/state/store";
 
 export interface TitlebarActions {
   addFolder: () => void;
   addTerminals: () => void;
   removeProject: () => void;
   newDeck: () => void;
+  selectDeck: (deckId: string) => void;
   showOverview: () => void;
   fullscreenPane: () => void;
+  splitRight: () => void;
+  splitDown: () => void;
+  closePane: () => void;
   balance: () => void;
   nextPane: () => void;
+  prevPane: () => void;
   toggleSidebar: () => void;
   showShortcuts: () => void;
   openCatalogue: () => void;
+  openVpn: () => void;
   openConfig: () => void;
+  goTo: () => void;
+  jumpToWaiting: () => void;
 }
 
 export interface TitlebarProps {
-  /** Name of the folder currently in front, or `null` when there is none. */
-  projectName: string | null;
-  projectPath: string | null;
-  /** Only set once a project has more than one deck. */
-  deckName: string | null;
+  /** Sits in the middle of the bar: where you are, and what needs you. */
+  island: ReactNode;
   sidebarVisible: boolean;
-  hasProject: boolean;
-  hasPanes: boolean;
   actions: TitlebarActions;
 }
 
@@ -92,16 +100,10 @@ function KeelMark() {
   );
 }
 
-export function Titlebar({
-  projectName,
-  projectPath,
-  deckName,
-  sidebarVisible,
-  hasProject,
-  hasPanes,
-  actions,
-}: TitlebarProps) {
+export function Titlebar({ island, sidebarVisible, actions }: TitlebarProps) {
   const [maximized, setMaximized] = useState(false);
+  const openMenu = useKeel((state) => state.menubar);
+  const setOpenMenu = useKeel((state) => state.setMenubar);
 
   useEffect(() => {
     const window = getCurrentWindow();
@@ -124,11 +126,11 @@ export function Titlebar({
     >
       <div
         data-tauri-drag-region
-        className="flex shrink-0 items-center gap-0.5 pl-3.5"
+        className="flex shrink-0 items-center pl-3.5"
       >
         <span
           data-tauri-drag-region
-          className="flex items-center gap-2 pr-3 text-dim"
+          className="flex items-center gap-2 pr-2.5 text-dim"
         >
           <KeelMark />
           <span className="text-[13px] font-medium tracking-[0.01em] text-dim">
@@ -136,130 +138,29 @@ export function Titlebar({
           </span>
         </span>
 
-        <Menubar>
-          <MenubarMenu>
-            <MenubarTrigger>Project</MenubarTrigger>
-            <MenubarContent className="w-72">
-              <MenubarItem onSelect={actions.addFolder}>
-                Add a folder…
-              </MenubarItem>
-              <MenubarItem
-                disabled={!hasProject}
-                onSelect={actions.addTerminals}
-              >
-                Add terminals…
-                <MenubarShortcut>Alt+Shift+T</MenubarShortcut>
-              </MenubarItem>
-              <MenubarSeparator />
-              <MenubarItem disabled={!hasProject} onSelect={actions.newDeck}>
-                New deck
-                <MenubarShortcut>Alt+Shift+Enter</MenubarShortcut>
-              </MenubarItem>
-              <MenubarItem
-                disabled={!hasProject}
-                onSelect={actions.showOverview}
-              >
-                Overview of every deck
-                <MenubarShortcut>Alt+Shift+Space</MenubarShortcut>
-              </MenubarItem>
-              <MenubarSeparator />
-              <MenubarItem
-                variant="destructive"
-                disabled={!hasProject}
-                onSelect={actions.removeProject}
-              >
-                Remove this project
-              </MenubarItem>
-            </MenubarContent>
-          </MenubarMenu>
+        <span aria-hidden className="mr-1.5 h-4 w-px bg-line-strong" />
 
-          <MenubarMenu>
-            <MenubarTrigger>View</MenubarTrigger>
-            <MenubarContent className="w-72">
-              <MenubarItem
-                disabled={!hasPanes}
-                onSelect={actions.fullscreenPane}
-              >
-                Fullscreen the focused pane
-                <MenubarShortcut>Alt+Shift+F</MenubarShortcut>
-              </MenubarItem>
-              <MenubarItem disabled={!hasPanes} onSelect={actions.balance}>
-                Even out every split
-                <MenubarShortcut>Alt+Shift+E</MenubarShortcut>
-              </MenubarItem>
-              <MenubarItem disabled={!hasPanes} onSelect={actions.nextPane}>
-                Focus the next pane
-                <MenubarShortcut>Alt+Shift+Tab</MenubarShortcut>
-              </MenubarItem>
-              <MenubarSeparator />
-              <MenubarCheckboxItem
-                checked={sidebarVisible}
-                onSelect={(event) => {
-                  event.preventDefault();
-                  actions.toggleSidebar();
-                }}
-              >
-                Sidebar
-              </MenubarCheckboxItem>
-            </MenubarContent>
-          </MenubarMenu>
-
-          <MenubarMenu>
-            <MenubarTrigger>Help</MenubarTrigger>
-            <MenubarContent className="w-72">
-              <MenubarItem onSelect={actions.showShortcuts}>
-                Keyboard shortcuts
-              </MenubarItem>
-              <MenubarSeparator />
-              <MenubarItem onSelect={actions.openCatalogue}>
-                Agents & profiles…
-              </MenubarItem>
-              <MenubarItem onSelect={actions.openConfig}>
-                Open the config folder…
-              </MenubarItem>
-            </MenubarContent>
-          </MenubarMenu>
+        <Menubar value={openMenu} onValueChange={setOpenMenu}>
+          <BarMenu value="project" label="Project" entries={() => projectBarMenu(actions)} />
+          <BarMenu value="go" label="Go" entries={() => goBarMenu(actions)} />
+          <BarMenu
+            value="view"
+            label="View"
+            entries={() => viewBarMenu(actions, sidebarVisible)}
+          />
+          <BarMenu value="help" label="Help" entries={() => helpBarMenu(actions)} />
         </Menubar>
       </div>
 
       {/*
-       * Where you are, centred and set in a recessed chip so it reads as a
-       * readout rather than as a fourth menu. The deck is separated by a
-       * hairline: it is a second field, not a continuation of the name.
+       * The island: where you are, and whatever needs you. The band around it
+       * stays a drag region; the island itself is all buttons.
        */}
       <div
         data-tauri-drag-region
         className="flex min-w-0 flex-1 items-center justify-center px-4"
       >
-        {projectName ? (
-          <span
-            data-tauri-drag-region
-            className="flex min-w-0 items-center gap-2.5 rounded-[var(--keel-r-control)] bg-veil-2 px-2.5 py-1 shadow-[inset_0_1px_0_0_var(--keel-sheen)]"
-            title={projectPath ?? undefined}
-          >
-            <span
-              data-tauri-drag-region
-              className="min-w-0 truncate text-[12px] text-dim"
-            >
-              {projectName}
-            </span>
-            {deckName ? (
-              <>
-                <span
-                  aria-hidden
-                  data-tauri-drag-region
-                  className="h-3 w-px shrink-0 bg-line-strong"
-                />
-                <span
-                  data-tauri-drag-region
-                  className="min-w-0 truncate text-[12px] text-faint"
-                >
-                  {deckName}
-                </span>
-              </>
-            ) : null}
-          </span>
-        ) : null}
+        {island}
       </div>
 
       <div className="flex items-stretch">
@@ -284,6 +185,25 @@ export function Titlebar({
   );
 }
 
+function BarMenu({
+  value,
+  label,
+  entries,
+}: {
+  value: string;
+  label: string;
+  entries: () => MenuEntry[];
+}) {
+  return (
+    <MenubarMenu value={value}>
+      <MenubarTrigger>{label}</MenubarTrigger>
+      <MenubarContent className="w-[292px]">
+        <MenubarEntries entries={entries} />
+      </MenubarContent>
+    </MenubarMenu>
+  );
+}
+
 function WindowButton({
   label,
   onClick,
@@ -293,7 +213,7 @@ function WindowButton({
   label: string;
   onClick: () => void;
   danger?: boolean;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <button

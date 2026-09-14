@@ -21,6 +21,7 @@ import { Terminal, type ITheme, type IWindowsPty } from "@xterm/xterm";
 import { createPromptDraft, type TitleSource } from "@/lib/paneTitle";
 import { resizePty, spawnPty, writePty } from "@/lib/pty";
 import type { PaneActivity } from "@/lib/types";
+import { useKeel } from "@/state/store";
 
 /**
  * Every PTY resize makes ConPTY repaint the whole screen, and an agent TUI
@@ -268,6 +269,7 @@ export const TerminalSurface = memo(function TerminalSurface({
   onSpawnResult,
   onTitle,
 }: TerminalSurfaceProps) {
+  const spawnAllowed = useKeel((state) => state.vpn.spawnAllowed);
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   /** Wired up by the setup effect; the later effects only ever call these. */
@@ -522,10 +524,13 @@ export const TerminalSurface = memo(function TerminalSurface({
   }, [paneId, visible]);
 
   // 3. Start the process. Re-runs only when the pane is explicitly restarted.
+  // Hold off while a private VPN tunnel is still coming up, so agent traffic
+  // does not leak out the PC's normal route.
   useEffect(() => {
     let cancelled = false;
     const term = termRef.current;
     if (!term) return;
+    if (!spawnAllowed) return;
     promptDraft.current.reset();
 
     const start = async () => {
@@ -571,7 +576,7 @@ export const TerminalSurface = memo(function TerminalSurface({
     };
     // Spawn inputs are read at restart time; generation is the explicit trigger.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [paneId, generation]);
+  }, [paneId, generation, spawnAllowed]);
 
   // 4. Focus follows the layout, so keystrokes land where the border says.
   useEffect(() => {

@@ -14,8 +14,11 @@
 import { Grid2X2, Plus } from "lucide-react";
 
 import { UsageMeter } from "@/components/UsageMeter";
+import { StatusLight, vpnView } from "@/components/VpnDialog";
+import { withShortcut } from "@/lib/keymap";
 import { cn } from "@/lib/utils";
 import type { Deck, Project } from "@/lib/types";
+import { useKeel } from "@/state/store";
 
 export interface StatusBarProps {
   project: Project | null;
@@ -53,7 +56,7 @@ export function StatusBar({
         <>
           <button
             type="button"
-            title="Overview (Alt+Shift+Space)"
+            title={withShortcut("Overview", "overview")}
             aria-label="Overview"
             onClick={onOverview}
             className="k-icon-btn size-[22px]"
@@ -73,7 +76,7 @@ export function StatusBar({
             ))}
             <button
               type="button"
-              title="New deck (Alt+Shift+Enter)"
+              title={withShortcut("New deck", "newDeck")}
               aria-label="New deck"
               onClick={onAddDeck}
               className="k-icon-btn size-[20px]"
@@ -95,7 +98,11 @@ export function StatusBar({
         </span>
       ) : null}
 
-      <UsageMeter />
+      <div className="ml-auto flex min-w-0 items-center gap-1.5">
+        <VpnChip />
+        {/* Brings its own divider, so there is none when it has nothing to show. */}
+        <UsageMeter />
+      </div>
     </footer>
   );
 }
@@ -114,16 +121,43 @@ function DeckPill({
   return (
     <button
       type="button"
-      title={`${deck.name}${index < 9 ? ` (Alt+Shift+${index + 1})` : ""}`}
+      title={`${deck.name}${index < 9 ? ` (Ctrl+${index + 1})` : ""}`}
       onClick={onSelect}
       className={cn(
-        "h-[20px] min-w-[20px] rounded-[var(--keel-r-chip)] px-1.5 font-mono text-[11px] tabular-nums transition-colors",
+        "h-[20px] min-w-[20px] rounded-[var(--keel-r-chip)] px-1.5 text-[11px] font-medium tabular-nums transition-colors",
         active
           ? "bg-veil-3 text-foreground shadow-[inset_0_1px_0_0_var(--keel-sheen)]"
           : "text-faint hover:bg-veil-2 hover:text-foreground",
       )}
     >
       {index + 1}
+    </button>
+  );
+}
+
+function VpnChip() {
+  const vpn = useKeel((state) => state.vpn);
+  const { tone, color, headline } = vpnView(vpn);
+  const title =
+    tone === "connected" && vpn.profileName
+      ? `VPN connected · ${vpn.profileName}`
+      : tone === "error" && vpn.error
+        ? `VPN: ${vpn.error}`
+        : `VPN ${headline.toLowerCase()}`;
+
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      onClick={() => useKeel.getState().openVpnSettings()}
+      className={cn(
+        "flex h-[22px] shrink-0 items-center gap-2 rounded-[var(--keel-r-chip)] px-2 text-[11px] font-medium transition-colors hover:bg-veil-2 hover:text-foreground",
+        tone === "idle" ? "text-faint" : "text-dim",
+      )}
+    >
+      <StatusLight tone={tone} color={color} size={7} />
+      VPN
     </button>
   );
 }

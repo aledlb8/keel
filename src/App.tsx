@@ -21,6 +21,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
 import { AgentSettingsDialog } from "@/components/AgentSettingsDialog";
 import { Canvas } from "@/components/Canvas";
+import { focusTerminal, Island } from "@/components/Island";
 import { LaunchDialog } from "@/components/LaunchDialog";
 import { Overview } from "@/components/Overview";
 import { RestoreChrome } from "@/components/RestoreChrome";
@@ -28,13 +29,18 @@ import { ShortcutsDialog } from "@/components/ShortcutsDialog";
 import { Sidebar } from "@/components/Sidebar";
 import { StatusBar } from "@/components/StatusBar";
 import { Titlebar, type TitlebarActions } from "@/components/Titlebar";
+import { VpnDialog } from "@/components/VpnDialog";
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
 import { statePath } from "@/lib/backend";
 import { onHostLost } from "@/lib/invoke";
-import { deckIndexOf, isKeelChord, MOVES } from "@/lib/keymap";
+import {
+  bindingFor,
+  isEditableTarget,
+  matchesBinding,
+  matchShortcut,
+} from "@/lib/keymap";
 import { onPtyAgentExit, onPtyAgentStart, onPtyExit } from "@/lib/pty";
-import { listPanes } from "@/lib/tree";
 import { activeDeck, startAttentionTracking, useKeel } from "@/state/store";
 
 export default function App() {
@@ -48,6 +54,9 @@ export default function App() {
   const projects = useKeel((state) => state.projects);
   const agents = useKeel((state) => state.agents);
   const activeProjectId = useKeel((state) => state.activeProjectId);
+  // Menus, tooltips and hints print the active chords. Re-render the shell when
+  // they change so every label follows at once.
+  useKeel((state) => state.keybindings);
 
   useEffect(() => {
     void useKeel.getState().init();
@@ -89,23 +98,24 @@ export default function App() {
    * Every shortcut, handled once, in the capture phase.
    *
    * xterm calls `stopPropagation()` on any chord it turns into an escape
-   * sequence, so a bubble-phase listener never sees Alt+Shift+Arrow â€” the keys
+   * sequence, so a bubble-phase listener never sees Ctrl+Shift+Arrow — the keys
    * simply vanished into the terminal. Capturing on `window` puts us ahead of
    * the terminal's own handler, and stopping the event here means the agent
    * never receives a keystroke that was meant for the window manager.
    */
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      // F2 renames the focused terminal — but only when the keystroke comes
-      // from a terminal (or from nowhere in particular). Sidebar rows and text
-      // fields handle their own F2.
-      if (
-        event.key === "F2" &&
-        !event.altKey &&
-        !event.ctrlKey &&
-        !event.metaKey &&
-        !event.shiftKey
-      ) {
+      // The shortcuts editor is listening for a new chord. Whatever you press
+      // is the thing being recorded, not something for the app to do.
+      const focus = document.activeElement;
+      if (focus instanceof HTMLElement && focus.closest("[data-shortcut-recorder]")) {
+        return;
+      }
+
+      // Rename (F2 unless you changed it) renames the focused terminal — but
+      // only when the keystroke comes from a terminal (or from nowhere in
+      // particular). Sidebar rows and text fields handle their own.
+      if (matchesBinding(event, bindingFor("rename"))) {
         const target = event.target as HTMLElement | null;
         const fromTerminal =
           !target ||
@@ -124,7 +134,10 @@ export default function App() {
         return;
       }
 
-      if (!isKeelChord(event)) return;
+      if (isEditableTarget(event.target)) return;
+
+      const matched = matchShortcut(event);
+      if (!matched) return;
 
       const state = useKeel.getState();
       const project = state.projects.find(
@@ -137,69 +150,90 @@ export default function App() {
         event.stopImmediatePropagation();
       };
 
-      if (event.code === "KeyT") {
-        claim();
-        setLaunching(true);
-        return;
+      switch (matched.action) {
+        case "addTerminals":
+          claim();
+          setLaunching(true);
+          return;
+        case "goTo":
+          claim();
+          state.setSwitcher(!state.switcher);
+          return;
+        case "nextWaiting": {
+          claim();
+          const paneId = state.jumpToNextWaiting();
+          if (paneId) {
+            setOverview(false);
+            focusTerminal(paneId);
+          }
+          return;
+        }
+        case "toggleSidebar":
+          claim();
+          setSidebar((previous) => !previous);
+          return;
+        case "menuBar":
+          claim();
+          state.setMenubar(state.menubar ? "" : "project");
+          return;
+        default:
+          break;
       }
+
       if (!project) return;
 
-      // Decks.
-      if (event.code === "Space") {
-        claim();
-        setOverview((previous) => !previous);
-        return;
-      }
-      if (event.code === "Enter") {
-        claim();
-        state.addDeck(project.id);
-        return;
-      }
-      const deckIndex = deckIndexOf(event.code);
-      if (deckIndex !== null) {
-        claim();
-        const target = project.decks[deckIndex];
-        if (target) state.selectDeck(project.id, target.id);
-        return;
+      switch (matched.action) {
+        case "overview":
+          claim();
+          setOverview((previous) => !previous);
+          return;
+        case "newDeck":
+          claim();
+          state.addDeck(project.id);
+          return;
+        case "jumpDeck": {
+          claim();
+          const target = project.decks[matched.index];
+          if (target) state.selectDeck(project.id, target.id);
+          return;
+        }
+        case "balance":
+          claim();
+          state.balanceLayout(project.id);
+          return;
+        case "nextPane":
+          claim();
+          state.cyclePane(project.id, 1);
+          return;
+        case "prevPane":
+          claim();
+          state.cyclePane(project.id, -1);
+          return;
+        default:
+          break;
       }
 
-      if (event.code === "KeyE") {
-        claim();
-        state.balanceLayout(project.id);
-        return;
-      }
-      if (event.code === "Tab") {
-        claim();
-        state.cyclePane(project.id, 1);
-        return;
-      }
-
-      // Everything below acts on one pane.
       const focused = activeDeck(project)?.focused;
       if (!focused) return;
 
-      // `code` is the physical key â€” unaffected by Shift or keyboard layout.
-      const move = MOVES[event.code];
-      if (move) {
-        claim();
-        state.movePane(project.id, focused, move);
-        return;
-      }
-
-      switch (event.code) {
-        case "KeyF":
+      switch (matched.action) {
+        case "movePane":
+          claim();
+          state.movePane(project.id, focused, matched.direction);
+          break;
+        case "fullscreen":
           claim();
           state.toggleZoom(project.id, focused);
           break;
-        case "KeyD":
+        case "splitRight":
           claim();
           state.duplicatePane(project.id, focused, "row");
           break;
-        case "KeyS":
+        case "splitDown":
           claim();
           state.duplicatePane(project.id, focused, "column");
           break;
-        case "KeyW":
+        case "closePane":
           claim();
           state.closePane(project.id, focused);
           break;
@@ -214,7 +248,6 @@ export default function App() {
 
   const project = projects.find((item) => item.id === activeProjectId) ?? null;
   const deck = activeDeck(project);
-  const hasPanes = listPanes(deck?.tree ?? null).length > 0;
 
   const focusedPane = deck?.focused ? (deck.panes[deck.focused] ?? null) : null;
   const statusCwd = focusedPane?.cwd ?? project?.path ?? null;
@@ -231,11 +264,37 @@ export default function App() {
       useKeel.getState().toggleZoom(project.id, deck.focused),
     balance: () => project && useKeel.getState().balanceLayout(project.id),
     nextPane: () => project && useKeel.getState().cyclePane(project.id, 1),
+    prevPane: () => project && useKeel.getState().cyclePane(project.id, -1),
     toggleSidebar: () => setSidebar((previous) => !previous),
     showShortcuts: () => setShortcuts(true),
     openCatalogue: () => useKeel.getState().openAgentSettings(null),
+    openVpn: () => useKeel.getState().openVpnSettings(),
     // Reveal rather than open: the interesting thing is the folder it sits in.
     openConfig: () => void statePath().then(revealItemInDir),
+    selectDeck: (deckId) => {
+      if (!project) return;
+      useKeel.getState().selectDeck(project.id, deckId);
+      setOverview(false);
+    },
+    splitRight: () =>
+      project &&
+      deck?.focused &&
+      useKeel.getState().duplicatePane(project.id, deck.focused, "row"),
+    splitDown: () =>
+      project &&
+      deck?.focused &&
+      useKeel.getState().duplicatePane(project.id, deck.focused, "column"),
+    closePane: () =>
+      project &&
+      deck?.focused &&
+      useKeel.getState().closePane(project.id, deck.focused),
+    goTo: () => useKeel.getState().setSwitcher(true),
+    jumpToWaiting: () => {
+      const paneId = useKeel.getState().jumpToNextWaiting();
+      if (!paneId) return;
+      setOverview(false);
+      focusTerminal(paneId);
+    },
   };
 
   return (
@@ -243,12 +302,10 @@ export default function App() {
     // paints opaque over it; only floating overlays blur what sits behind them.
     <div className="flex h-full flex-col text-foreground">
       <Titlebar
-        projectName={project?.name ?? null}
-        projectPath={project?.path ?? null}
-        deckName={project && project.decks.length > 1 ? (deck?.name ?? null) : null}
+        island={
+          <Island actions={actions} onNavigate={() => setOverview(false)} />
+        }
         sidebarVisible={sidebar}
-        hasProject={project !== null}
-        hasPanes={hasPanes}
         actions={actions}
       />
 
@@ -328,6 +385,7 @@ export default function App() {
       />
       <ShortcutsDialog open={shortcuts} onOpenChange={setShortcuts} />
       <AgentSettingsDialog />
+      <VpnDialog />
       <Toaster />
     </div>
   );

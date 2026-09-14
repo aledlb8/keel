@@ -1,63 +1,36 @@
 /**
- * S10 reopen chrome + IPC host-lost banner.
+ * Power-up reopen chrome.
  *
- * Restoring… is a whisper; Failed is a centered panel with Retry / Reset layout.
- * Partial reopen is pane-level (dead edge + Relaunch) — no blank canvas.
+ * While panes that already existed at launch are coming back, the canvas sits
+ * under a scrim so nothing is typed into a half-started terminal. The words —
+ * "Reopening terminals", "Connecting VPN", "Keel isn't responding" — live in
+ * the top bar's island, the one place the window says what it is doing. Failed
+ * is a centered panel with Retry / Reset layout. Partial reopen is pane-level
+ * (dead edge + Relaunch).
  */
 
 import { Button } from "@/components/ui/button";
-import * as backend from "@/lib/backend";
 import { useKeel } from "@/state/store";
 
 export function RestoreChrome() {
   const ready = useKeel((state) => state.ready);
   const restoreStatus = useKeel((state) => state.restoreStatus);
-  const hostLost = useKeel((state) => state.hostLost);
+  const vpnConnecting = useKeel(
+    (state) => state.vpn.autoConnect && state.vpn.phase === "connecting",
+  );
 
-  const showRestoring =
-    !ready || restoreStatus === "restoring";
+  // Power-up reopen of existing panes, plus the private tunnel coming up so
+  // those panes do not start on the PC's normal route.
+  const showRestoring = restoreStatus === "restoring" || vpnConnecting;
   const showFailed = ready && restoreStatus === "failed";
 
   return (
     <>
-      {hostLost ? (
-        <div
-          className="k-glass absolute inset-x-0 top-0 z-50 flex items-center justify-between gap-3 border-b border-line px-4 py-2"
-          role="alert"
-        >
-          <div className="min-w-0">
-            <p className="text-[14px] text-foreground">Connection lost</p>
-            <p className="mt-0.5 text-[13px] leading-snug text-dim">
-              The Keel host stopped responding. Terminals keep running.
-            </p>
-          </div>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => {
-              void backend
-                .detectAgents()
-                .then(() => useKeel.getState().clearHostLost())
-                .catch(() => {
-                  /* Stay lost until a call succeeds. */
-                });
-            }}
-          >
-            Retry
-          </Button>
-        </div>
-      ) : null}
-
       {showRestoring ? (
         <div
-          className="pointer-events-none absolute inset-0 z-40 grid place-items-center bg-scrim backdrop-blur-[var(--keel-blur)]"
-          aria-live="polite"
-          aria-busy="true"
-        >
-          <p className="rounded-[var(--keel-r-control)] border border-line-strong bg-[color:var(--keel-chrome-strong)] px-3.5 py-2 text-[13px] text-dim shadow-[var(--keel-lift)] backdrop-blur-[var(--keel-blur)]">
-            Restoring layout…
-          </p>
-        </div>
+          className="pointer-events-none absolute inset-0 z-40 bg-scrim backdrop-blur-[var(--keel-blur)] animate-in fade-in-0 duration-200"
+          aria-hidden
+        />
       ) : null}
 
       {showFailed ? (
