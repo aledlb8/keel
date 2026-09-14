@@ -10,11 +10,16 @@ import { describe, it } from "node:test";
 
 import {
   balance,
+  besideTree,
   closePane,
+  dockPane,
   gridOf,
+  gridRows,
   listPanes,
   movePane,
+  relabelPanes,
   splitPane,
+  swapPanes,
 } from "./tree.ts";
 import type { LayoutNode } from "./types.ts";
 
@@ -31,6 +36,21 @@ function shape(node: LayoutNode | null): Shape {
 
 const SIX = ["a", "b", "c", "d", "e", "f"];
 
+describe("relabelPanes", () => {
+  it("swaps terminals without changing the layout's shape", () => {
+    const tree = gridOf(["a", "b", "c"])!;
+    const next = relabelPanes(tree, ["c", "a", "b"]);
+    assert.deepEqual(shape(next), { column: [{ row: ["c", "a"] }, "b"] });
+    assert.deepEqual(listPanes(next), ["c", "a", "b"]);
+  });
+
+  it("ignores an order that is not a permutation of the tree", () => {
+    const tree = gridOf(["a", "b"])!;
+    assert.equal(relabelPanes(tree, ["a", "z"]), tree);
+    assert.equal(relabelPanes(tree, ["a"]), tree);
+  });
+});
+
 describe("gridOf", () => {
   it("lays six panes out as two rows of three", () => {
     assert.deepEqual(shape(gridOf(SIX)), {
@@ -40,6 +60,76 @@ describe("gridOf", () => {
 
   it("returns a bare pane rather than a split of one", () => {
     assert.deepEqual(shape(gridOf(["a"])), "a");
+  });
+});
+
+describe("swapPanes", () => {
+  it("trades two panes and keeps the grid's shape", () => {
+    assert.deepEqual(shape(swapPanes(gridOf(SIX)!, "a", "f")), {
+      column: [{ row: ["f", "b", "c"] }, { row: ["d", "e", "a"] }],
+    });
+  });
+});
+
+describe("dockPane", () => {
+  it("drops below a pane by stacking the two", () => {
+    assert.deepEqual(shape(dockPane(gridOf(["a", "b"])!, "a", "b", "bottom")), {
+      column: ["b", "a"],
+    });
+  });
+
+  it("joins a row on the left of its target, before it", () => {
+    assert.deepEqual(shape(dockPane(gridOf(["a", "b", "c"])!, "c", "a", "left")), {
+      row: ["c", "a", "b"],
+    });
+  });
+
+  it("docks along the edge of the whole layout", () => {
+    const four = gridOf(["a", "b", "c", "d"])!;
+    const tree = dockPane(four, "d", four.id, "right");
+    assert.deepEqual(shape(tree), {
+      row: [{ column: [{ row: ["a", "b"] }, "c"] }, "d"],
+    });
+    assert.ok(tree.kind === "split");
+    assert.deepEqual(tree.sizes, [0.75, 0.25]);
+  });
+
+  it("joins the end of a group that runs the same way", () => {
+    const four = gridOf(["a", "b", "c", "d"])!;
+    assert.ok(four.kind === "split");
+    const topRow = four.children[0].id;
+    assert.deepEqual(shape(dockPane(four, "d", topRow, "right")), {
+      column: [{ row: ["a", "b", "d"] }, "c"],
+    });
+  });
+
+  it("leaves the tree alone when a pane is dropped on itself", () => {
+    const tree = gridOf(SIX)!;
+    assert.equal(dockPane(tree, "a", "a", "right"), tree);
+  });
+});
+
+describe("besideTree", () => {
+  it("keeps both layouts intact and sizes them by pane count", () => {
+    const tree = besideTree(gridOf(["a", "b", "c"])!, gridOf(["d"])!);
+    assert.deepEqual(shape(tree), {
+      row: [{ column: [{ row: ["a", "b"] }, "c"] }, "d"],
+    });
+    assert.ok(tree.kind === "split");
+    assert.deepEqual(tree.sizes, [0.75, 0.25]);
+  });
+});
+
+describe("gridRows", () => {
+  it("fills ceil(sqrt(n)) columns and leaves the remainder on the last row", () => {
+    assert.deepEqual(gridRows(["a", "b", "c", "d", "e"]), [
+      ["a", "b", "c"],
+      ["d", "e"],
+    ]);
+  });
+
+  it("has no rows for nothing", () => {
+    assert.deepEqual(gridRows([]), []);
   });
 });
 

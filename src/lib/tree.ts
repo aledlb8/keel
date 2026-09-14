@@ -271,6 +271,157 @@ export function movePane(
   return tree;
 }
 
+/** An edge of a pane that another pane can be dropped against. */
+export type DropEdge = "left" | "right" | "top" | "bottom";
+
+/** Trade two panes' places. The slots keep their sizes; only who is in them changes. */
+export function swapPanes(tree: LayoutNode, a: string, b: string): LayoutNode {
+  const order = listPanes(tree);
+  if (a === b || !order.includes(a) || !order.includes(b)) return tree;
+  return relabelPanes(
+    tree,
+    order.map((id) => (id === a ? b : id === b ? a : id)),
+  );
+}
+
+type Split = Extract<LayoutNode, { kind: "split" }>;
+
+/** The splits holding a pane, innermost first — every group it belongs to. */
+export function ancestorsOf(tree: LayoutNode, paneId: string): Split[] {
+  const trail = pathTo(tree, paneId, []);
+  return trail ? trail.map((step) => step.split).reverse() : [];
+}
+
+/**
+ * How much of a target a docked pane takes. Half of a single pane; less of a
+ * group, so a pane dropped along the edge of the whole layout does not claim
+ * half the screen.
+ */
+export function dockShare(paneCount: number): number {
+  return paneCount <= 1 ? 0.5 : Math.max(0.25, 1 / (paneCount + 1));
+}
+
+function findNode(node: LayoutNode, id: string): LayoutNode | null {
+  if (node.id === id) return node;
+  if (node.kind === "pane") return null;
+  for (const child of node.children) {
+    const found = findNode(child, id);
+    if (found) return found;
+  }
+  return null;
+}
+
+function parentOf(
+  node: LayoutNode,
+  id: string,
+): { split: Split; index: number } | null {
+  if (node.kind === "pane") return null;
+  const index = node.children.findIndex((child) => child.id === id);
+  if (index >= 0) return { split: node, index };
+  for (const child of node.children) {
+    const found = parentOf(child, id);
+    if (found) return found;
+  }
+  return null;
+}
+
+/** The smallest node holding exactly these panes. */
+function nodeCovering(node: LayoutNode, ids: string[]): LayoutNode | null {
+  const own = listPanes(node);
+  if (own.length === ids.length && own.every((id) => ids.includes(id))) {
+    return node;
+  }
+  if (node.kind === "pane") return null;
+  for (const child of node.children) {
+    const found = nodeCovering(child, ids);
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
+ * Lift a pane out and set it down against one edge of a target — the
+ * drag-and-drop gesture. The target is any node: a single pane, a group of
+ * them, or the root, which docks the pane along the edge of the whole layout.
+ */
+export function dockPane(
+  tree: LayoutNode,
+  paneId: string,
+  targetId: string,
+  edge: DropEdge,
+): LayoutNode {
+  const target = findNode(tree, targetId);
+  if (!target || !hasPane(tree, paneId)) return tree;
+  const remaining = listPanes(target).filter((id) => id !== paneId);
+  if (remaining.length === 0) return tree;
+
+  const pruned = replace(tree, paneId, null);
+  if (!pruned) return tree;
+  // Lifting the pane out can collapse the target into its last child, which
+  // takes the target's place under a different id.
+  const host = nodeCovering(pruned, remaining);
+  if (!host) return tree;
+
+  const direction: Direction =
+    edge === "left" || edge === "right" ? "row" : "column";
+  const before = edge === "left" || edge === "top";
+  const share = dockShare(remaining.length);
+  const leaf = paneLeaf(paneId);
+
+  // A group running the same way: the pane joins it at that end.
+  if (host.kind === "split" && host.direction === direction) {
+    const rest = host.sizes.map((size) => size * (1 - share));
+    const rebuilt: LayoutNode = {
+      ...host,
+      children: before ? [leaf, ...host.children] : [...host.children, leaf],
+      sizes: before ? [share, ...rest] : [...rest, share],
+    };
+    return replace(pruned, host.id, rebuilt) ?? rebuilt;
+  }
+
+  // Sitting in a group that runs the same way: join it beside the target, which
+  // gives up part of its own share — rather than nesting a split in a split.
+  const parent = parentOf(pruned, host.id);
+  if (parent && parent.split.direction === direction) {
+    const { split, index } = parent;
+    const children = [...split.children];
+    const sizes = [...split.sizes];
+    const taken = sizes[index] * share;
+    sizes[index] -= taken;
+    const at = before ? index : index + 1;
+    children.splice(at, 0, leaf);
+    sizes.splice(at, 0, taken);
+    const rebuilt: LayoutNode = { ...split, children, sizes };
+    return replace(pruned, split.id, rebuilt) ?? rebuilt;
+  }
+
+  const wrapper: LayoutNode = {
+    kind: "split",
+    id: nodeId("s"),
+    direction,
+    children: before ? [leaf, host] : [host, leaf],
+    sizes: before ? [share, 1 - share] : [1 - share, share],
+  };
+  return replace(pruned, host.id, wrapper) ?? wrapper;
+}
+
+/**
+ * Two layouts side by side, each given width in proportion to how many panes
+ * it holds. A batch of new terminals joins a deck this way, so the panes you
+ * already arranged keep their arrangement.
+ */
+export function besideTree(left: LayoutNode, right: LayoutNode): LayoutNode {
+  const leftCount = listPanes(left).length;
+  const rightCount = listPanes(right).length;
+  return {
+    kind: "split",
+    id: nodeId("s"),
+    direction: "row",
+    children: [left, right],
+    sizes: normalise([leftCount, rightCount]),
+  };
+}
+
 function findSplit(
   node: LayoutNode,
   splitId: string,
@@ -285,6 +436,20 @@ function findSplit(
 }
 
 /**
+ * How a flat list is chunked into a balanced grid: `ceil(sqrt(n))` columns,
+ * filled left to right. `gridOf` builds its tree from this, and anything that
+ * previews a grid should draw from it too, so the two cannot drift apart.
+ */
+export function gridRows<T>(items: readonly T[]): T[][] {
+  const columns = Math.ceil(Math.sqrt(items.length));
+  const rows: T[][] = [];
+  for (let index = 0; index < items.length; index += columns) {
+    rows.push(items.slice(index, index + columns));
+  }
+  return rows;
+}
+
+/**
  * Build a balanced grid from a flat list of panes — how six agents opened at once
  * become a layout without the user placing anything by hand.
  */
@@ -292,11 +457,7 @@ export function gridOf(paneIds: string[]): LayoutNode | null {
   if (paneIds.length === 0) return null;
   if (paneIds.length === 1) return paneLeaf(paneIds[0]);
 
-  const columns = Math.ceil(Math.sqrt(paneIds.length));
-  const rows: string[][] = [];
-  for (let index = 0; index < paneIds.length; index += columns) {
-    rows.push(paneIds.slice(index, index + columns));
-  }
+  const rows = gridRows(paneIds);
 
   const rowNodes: LayoutNode[] = rows.map((row) =>
     row.length === 1
@@ -331,4 +492,25 @@ export function neighbourPane(
   const index = panes.indexOf(paneId);
   if (index === -1) return panes[0];
   return panes[(index + step + panes.length) % panes.length];
+}
+
+/**
+ * Keep the tree's shape and hand its leaves out again in `order`: terminals
+ * trade places, while the splits and their sizes stay exactly where they were.
+ * `order` must be a permutation of the tree's panes; anything else is ignored.
+ */
+export function relabelPanes(tree: LayoutNode, order: string[]): LayoutNode {
+  const current = listPanes(tree);
+  if (
+    current.length !== order.length ||
+    !current.every((paneId) => order.includes(paneId))
+  ) {
+    return tree;
+  }
+  let cursor = 0;
+  const walk = (node: LayoutNode): LayoutNode =>
+    node.kind === "pane"
+      ? { ...node, id: order[cursor++] }
+      : { ...node, children: node.children.map(walk) };
+  return walk(tree);
 }
