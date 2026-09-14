@@ -1,0 +1,454 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+@import "@xterm/xterm/css/xterm.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Keel — depth, not lines.
+ *
+ * Three rules decide how everything here looks.
+ *
+ * 1. **Surfaces separate by value, not by border.** The window ground, the
+ *    docked chrome and a terminal slab are three different darks, and a pane is
+ *    *lighter* than the ground it floats on so it reads as an object lifted off
+ *    it. Hairlines survive only where two pieces of glass butt together and
+ *    there is no value step to do the work.
+ *
+ * 2. **One rounding language, three sizes.** `window` for anything that floats
+ *    (panes, dialogs, menus, overview cards), `control` for anything you click
+ *    (rows, buttons, pills), `chip` for the small stuff riding on top of
+ *    something else. A row is inset from its panel so the radius has room to
+ *    show — full-bleed square rows were what made the sidebar read as a file
+ *    tree rather than as a list of places.
+ *
+ * 3. **The chrome has no hue.** Hover, selection and pressed are white at three
+ *    fixed alphas. With eight agent colours and four status colours already in
+ *    play, an accent on the chrome is the thing that turns the screen to noise.
+ *    Colour here answers exactly two questions: which agent, and what is it
+ *    doing.
+ */
+
+@theme inline {
+    --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+    --font-heading: var(--font-sans);
+    --font-mono: var(--keel-font-mono);
+
+    /* Chrome vocabulary. Everything the UI paints comes from these. */
+    --color-chrome: var(--keel-chrome);
+    --color-line: var(--keel-line);
+    --color-line-strong: var(--keel-line-strong);
+    --color-veil: var(--keel-veil-1);
+    --color-veil-2: var(--keel-veil-2);
+    --color-veil-3: var(--keel-veil-3);
+    --color-dim: var(--keel-text-dim);
+    --color-faint: var(--keel-text-faint);
+    --color-scrim: var(--keel-scrim);
+
+    /* The only colours with meaning. */
+    --color-working: var(--keel-working);
+    --color-waiting: var(--keel-waiting);
+    --color-idle: var(--keel-idle);
+    --color-dead: var(--keel-dead);
+
+    /* shadcn primitives, remapped onto the above. */
+    --color-background: var(--background);
+    --color-foreground: var(--foreground);
+    --color-card: var(--card);
+    --color-card-foreground: var(--card-foreground);
+    --color-popover: var(--popover);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-primary: var(--primary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-secondary: var(--secondary);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-muted: var(--muted);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-accent: var(--accent);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-destructive: var(--destructive);
+    --color-border: var(--border);
+    --color-input: var(--input);
+    --color-ring: var(--ring);
+
+    /* Three radii, and they are not interchangeable. See the note above. */
+    --radius-window: var(--keel-r-window);
+    --radius-control: var(--keel-r-control);
+    --radius-chip: var(--keel-r-chip);
+    --radius-sm: var(--keel-r-chip);
+    --radius-md: var(--keel-r-control);
+    --radius-lg: var(--keel-r-window);
+    --radius-xl: var(--keel-r-window);
+}
+
+:root,
+.dark {
+    /* ---- The value ladder ---------------------------------------------- */
+    /*
+     * Four darks, far enough apart to be seen. Everything in the app sits on
+     * one of them, and which one it sits on is the whole depth cue.
+     *
+     *   void         the ground behind the window
+     *   chrome       the docked bands, glass over the ground
+     *   term-solid   a terminal — lighter than the ground, because it floats
+     *   chrome-strong dialogs and menus, the top of the stack
+     */
+    --keel-void: #0a0c12;
+    --keel-chrome: rgba(21, 25, 34, 0.72);
+    --keel-chrome-strong: rgba(24, 28, 38, 0.94);
+
+    /* The three states of every interactive surface. No hue, on purpose. */
+    --keel-veil-1: rgba(255, 255, 255, 0.04);
+    --keel-veil-2: rgba(255, 255, 255, 0.075);
+    --keel-veil-3: rgba(255, 255, 255, 0.12);
+
+    --keel-line: rgba(255, 255, 255, 0.055);
+    --keel-line-strong: rgba(255, 255, 255, 0.12);
+    /*
+     * The 1px of light along the top of a translucent panel. It is the single
+     * detail that makes glass read as a pane of glass rather than as a slightly
+     * wrong flat fill, and it costs one inset shadow.
+     */
+    --keel-sheen: rgba(255, 255, 255, 0.07);
+    --keel-scrim: rgba(6, 7, 11, 0.66);
+
+    /* ---- Type ---------------------------------------------------------- */
+    /*
+     * Three steps, and the gap between them is deliberate. `dim` has to stay
+     * comfortably readable — it carries every unselected row in the sidebar —
+     * so the drop to `faint` does the work of pushing counters and paths back.
+     */
+    --keel-text: #eaecf2;
+    --keel-text-dim: #a3abbe;
+    --keel-text-faint: #6b7385;
+
+    /* ---- State (opaque, and the only colour in the chrome) -------------- */
+    --keel-working: #56cf92;
+    --keel-waiting: #f2b544;
+    --keel-idle: #6b7385;
+    --keel-dead: #f2777d;
+
+    /* ---- Agent identity ------------------------------------------------- */
+    /*
+     * Muted a step from the raw catalogue hues so eight of them can share a
+     * screen without any one of them shouting.
+     */
+    --keel-agent-fallback: #838b9c;
+    --keel-agent-1: #6fa4ee;
+    --keel-agent-2: #6fd39c;
+    --keel-agent-3: #e5bd6c;
+    --keel-agent-4: #dd8fbc;
+    --keel-agent-5: #9a8ff0;
+    --keel-agent-6: #5fc7d4;
+    --keel-agent-7: #e2977a;
+    --keel-agent-8: #b6c1d2;
+
+    /* ---- Terminal ------------------------------------------------------- */
+    /*
+     * The glyph surface is a solid, flat slab — one colour, the same colour on
+     * every pane and in every focus state, and a clear step lighter than the
+     * ground so a pane reads as lifted rather than as a hole cut in the window.
+     * It is never translucent: a wash drifting through it made each pane a
+     * slightly different tint depending on where it happened to sit.
+     */
+    --keel-term-bg: var(--keel-term-solid);
+    --keel-term-bg-focus: var(--keel-term-solid);
+    --keel-term-solid: #10131b;
+    /* One hairline, brighter when the pane is focused. That difference plus the
+     * lift is the whole focus cue — no colour, no fill change. */
+    --keel-term-border: rgba(255, 255, 255, 0.07);
+    --keel-term-border-focus: rgba(255, 255, 255, 0.19);
+    --keel-term-fg: #e2e5ed;
+    --keel-term-cursor: #eaecf2;
+    --keel-term-selection: rgba(255, 255, 255, 0.16);
+
+    /* ANSI 0-15. Locked hex — agents rely on these reading true. */
+    --keel-ansi-black: #10131b;
+    --keel-ansi-red: #f2777d;
+    --keel-ansi-green: #56cf92;
+    --keel-ansi-yellow: #f2b544;
+    --keel-ansi-blue: #6fa4ee;
+    --keel-ansi-magenta: #dd8fbc;
+    --keel-ansi-cyan: #5fc7d4;
+    --keel-ansi-white: #b6c1d2;
+    --keel-ansi-bright-black: #3f4759;
+    --keel-ansi-bright-red: #ff8f95;
+    --keel-ansi-bright-green: #74e8ae;
+    --keel-ansi-bright-yellow: #ffd070;
+    --keel-ansi-bright-blue: #8fbcff;
+    --keel-ansi-bright-magenta: #f0aed4;
+    --keel-ansi-bright-cyan: #7fe0ec;
+    --keel-ansi-bright-white: #eef0f6;
+
+    /* ---- Geometry ------------------------------------------------------- */
+    --keel-r-window: 12px;
+    --keel-r-control: 8px;
+    --keel-r-chip: 6px;
+    --keel-blur: 20px;
+    --keel-blur-strong: 30px;
+    /* Air around the floating terminals. Docked chrome never uses this. */
+    --keel-gutter: 12px;
+    /* Air between a row and the panel it sits in, so its radius has room. */
+    --keel-inset: 6px;
+
+    /* Two lifts. A pane gets the first, anything modal gets the second. */
+    --keel-lift: 0 10px 30px -12px rgba(0, 0, 0, 0.75);
+    --keel-lift-strong: 0 28px 64px -18px rgba(0, 0, 0, 0.85);
+
+    --keel-font-mono: "JetBrainsMono Nerd Font", "CaskaydiaCove Nerd Font",
+        "FiraCode Nerd Font", "Hack Nerd Font", "Cascadia Mono", "Consolas",
+        "DejaVu Sans Mono", ui-monospace, monospace;
+
+    /* ---- shadcn bridge -------------------------------------------------- */
+    --background: var(--keel-void);
+    --foreground: var(--keel-text);
+    --card: var(--keel-chrome);
+    --card-foreground: var(--keel-text);
+    --popover: var(--keel-chrome-strong);
+    --popover-foreground: var(--keel-text);
+    /* "Primary" is light, not blue: the chrome has no hue to spend. */
+    --primary: #eaecf2;
+    --primary-foreground: #0a0c12;
+    --secondary: var(--keel-veil-2);
+    --secondary-foreground: var(--keel-text);
+    --muted: var(--keel-veil-1);
+    --muted-foreground: var(--keel-text-dim);
+    --accent: var(--keel-veil-2);
+    --accent-foreground: var(--keel-text);
+    --destructive: var(--keel-dead);
+    --border: var(--keel-line);
+    --input: var(--keel-veil-1);
+    --ring: var(--keel-line-strong);
+    --radius: var(--keel-r-window);
+}
+
+@layer base {
+    * {
+        @apply border-border;
+        min-width: 0;
+    }
+
+    html,
+    body,
+    #root {
+        height: 100%;
+    }
+
+    html {
+        @apply font-sans;
+        background: var(--keel-void);
+    }
+
+    body {
+        @apply bg-background text-foreground;
+        margin: 0;
+        overflow: hidden;
+        /* The whole app is one fixed surface; nothing outside a pane scrolls. */
+        overscroll-behavior: none;
+        font-size: 13px;
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+    }
+
+    /*
+     * The canvas ground, painted once on the root.
+     *
+     * Deliberately quiet: a near-flat dark fill with one soft top-down vignette
+     * and a hair of grain so a fill this large cannot band. There is no coloured
+     * wash — the depth in this app comes from the value step between the ground
+     * and the slabs sitting on it, not from a gradient bleeding through them.
+     */
+    #root {
+        background-color: var(--keel-void);
+        background-image:
+            url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.3'/%3E%3C/svg%3E"),
+            radial-gradient(
+                130% 90% at 50% -20%,
+                rgba(255, 255, 255, 0.04) 0%,
+                transparent 62%
+            ),
+            linear-gradient(180deg, #0d1018 0%, #090b10 100%);
+        background-blend-mode: overlay, normal, normal;
+        background-size: 180px 180px, auto, auto;
+    }
+
+    /* Chrome is not prose — dragging it should move the window, not select it. */
+    button,
+    [data-no-select] {
+        user-select: none;
+    }
+
+    /* Keyboard focus is visible; a mouse never draws a ring. */
+    :focus-visible {
+        outline: 1px solid var(--keel-line-strong);
+        outline-offset: 1px;
+        border-radius: var(--keel-r-chip);
+    }
+}
+
+@layer components {
+    /*
+     * Docked chrome: translucent, blurred, with a hairline of light along its
+     * top edge — the detail that makes glass read as glass instead of as a
+     * slightly wrong flat fill.
+     */
+    .k-glass {
+        background: var(--keel-chrome);
+        backdrop-filter: blur(var(--keel-blur)) saturate(1.4);
+        -webkit-backdrop-filter: blur(var(--keel-blur)) saturate(1.4);
+        box-shadow: inset 0 1px 0 0 var(--keel-sheen);
+    }
+
+    /*
+     * A row in the sidebar. Inset from the panel and rounded, so selection
+     * reads as a chip you could pick up rather than as a band painted across
+     * the whole panel.
+     */
+    .k-row {
+        position: relative;
+        display: flex;
+        align-items: center;
+        width: calc(100% - var(--keel-inset) * 2);
+        margin-inline: var(--keel-inset);
+        /* A hair of air top and bottom, so two filled rows in a row still read
+         * as two chips rather than as one tall slab. */
+        margin-block: 1px;
+        height: 30px;
+        gap: 7px;
+        padding-inline: 8px 5px;
+        border-radius: var(--keel-r-control);
+        font-size: 13px;
+        text-align: left;
+        cursor: default;
+        transition:
+            background-color 110ms ease,
+            color 110ms ease;
+    }
+
+    .k-row:hover {
+        background: var(--keel-veil-1);
+    }
+
+    .k-row[data-selected="true"] {
+        background: var(--keel-veil-2);
+        box-shadow: inset 0 1px 0 0 var(--keel-sheen);
+    }
+
+    /* Quiet heading over a group of rows. Sentence case, never tracked-out caps. */
+    .k-label {
+        padding-inline: calc(var(--keel-inset) + 8px);
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--keel-text-faint);
+    }
+
+    /* Icon button, sized to sit inside a 30px row without pushing it. */
+    .k-icon-btn {
+        display: grid;
+        place-items: center;
+        flex-shrink: 0;
+        border-radius: var(--keel-r-chip);
+        color: var(--keel-text-faint);
+        transition:
+            background-color 110ms ease,
+            color 110ms ease;
+    }
+
+    .k-icon-btn:hover {
+        background: var(--keel-veil-2);
+        color: var(--keel-text);
+    }
+
+    .k-icon-btn[data-danger="true"]:hover {
+        background: color-mix(in srgb, var(--keel-dead) 20%, transparent);
+        color: var(--keel-dead);
+    }
+
+    /*
+     * The one thing in the app that moves on its own.
+     *
+     * An agent that has stopped to ask you something is the single event this
+     * whole window exists to surface, so its dot breathes. Nothing else does —
+     * a screen where six things pulse is a screen where none of them mean
+     * anything.
+     */
+    .k-pulse::after {
+        content: "";
+        position: absolute;
+        inset: -3px;
+        border-radius: 9999px;
+        border: 1px solid currentColor;
+        animation: k-breathe 2.4s ease-in-out infinite;
+    }
+}
+
+@keyframes k-breathe {
+    0%,
+    100% {
+        opacity: 0.5;
+        transform: scale(1);
+    }
+    50% {
+        opacity: 0;
+        transform: scale(1.6);
+    }
+}
+
+/*
+ * Window dragging is done with `data-tauri-drag-region`, not CSS. WebView2 does
+ * not implement `-webkit-app-region`, so the Electron trick silently does
+ * nothing here and the window would be unmovable with decorations off.
+ */
+
+/*
+ * xterm sits inside a pane shell that already draws the fill, the radius and the
+ * clip. It contributes glyphs and nothing else — the transparent background here
+ * is deliberate, and `allowTransparency` on the Terminal is what makes it land.
+ */
+.xterm {
+    height: 100%;
+    padding: 10px 8px 8px 12px;
+}
+
+.xterm .xterm-viewport {
+    background-color: transparent !important;
+    scrollbar-width: thin;
+    scrollbar-color: var(--keel-line-strong) transparent;
+}
+
+.xterm .xterm-screen {
+    background-color: transparent !important;
+}
+
+.xterm .xterm-viewport::-webkit-scrollbar {
+    width: 10px;
+}
+
+.xterm .xterm-viewport::-webkit-scrollbar-thumb {
+    background: var(--keel-line-strong);
+    border-radius: 5px;
+    /* Keeps the thumb clear of the pane's rounded corner. */
+    background-clip: padding-box;
+    border: 3px solid transparent;
+}
+
+.xterm .xterm-viewport::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+/* Chrome scrollbars, matched to the terminal ones. */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: var(--keel-line-strong) transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+    }
+}

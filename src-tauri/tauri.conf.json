@@ -1,0 +1,54 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Keel",
+  "mainBinaryName": "Keel",
+  "version": "0.1.0",
+  "identifier": "com.alede.keel",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Keel",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 900,
+        "minHeight": 560,
+        "center": true,
+        "decorations": false,
+        "transparent": false,
+        "shadow": true,
+        "backgroundColor": "#0A0C12",
+        "dragDropEnabled": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "publisher": "alede",
+    "copyright": "Copyright © 2026 alede",
+    "category": "DeveloperTool",
+    "shortDescription": "A desktop workspace for running many AI coding agents at once.",
+    "longDescription": "Keel finds the agent CLIs you already have installed, launches them into tiling terminal panes, and remembers the arrangement so you can bring it back in one click.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
+  }
+}

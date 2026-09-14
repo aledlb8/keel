@@ -1,0 +1,12 @@
+{
+  /* Tests run under Node, so they need Node's types — the app itself must not,
+     or browser code could reach for `process` and only fail at runtime. */
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "lib": ["ES2023", "DOM"]
+  },
+  "include": ["src/lib"],
+  "exclude": [],
+  "references": []
+}

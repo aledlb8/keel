@@ -1,0 +1,29 @@
+# Logs
+logs
+*.log
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+
+# Collected build artifacts (pnpm build:app)
+release
+*.local
+
+# Not this project's package manager — pnpm only
+package-lock.json
+yarn.lock
+bun.lockb
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

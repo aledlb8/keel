@@ -1,0 +1,109 @@
+[
+  {
+    "id": "claude",
+    "name": "Claude Code",
+    "command": "claude",
+    "accountEnv": "CLAUDE_CONFIG_DIR",
+    "short": "CC",
+    "accent": "#d97757",
+    "bins": ["claude"],
+    "paths": [
+      "{home}/.local/bin",
+      "{home}/.claude/local",
+      "{home}/AppData/Local/pnpm",
+      "{home}/AppData/Roaming/npm",
+      "/opt/homebrew/bin",
+      "/usr/local/bin"
+    ]
+  },
+  {
+    "id": "codex",
+    "name": "Codex",
+    "command": "codex",
+    "accountEnv": "CODEX_HOME",
+    "short": "CX",
+    "accent": "#10a37f",
+    "bins": ["codex"],
+    "paths": [
+      "{home}/AppData/Local/Programs/OpenAI/Codex",
+      "{home}/.local/bin",
+      "{home}/AppData/Local/pnpm",
+      "{home}/AppData/Roaming/npm",
+      "/opt/homebrew/bin",
+      "/usr/local/bin"
+    ]
+  },
+  {
+    "id": "gemini",
+    "name": "Gemini CLI",
+    "command": "gemini",
+    "accountEnv": "GEMINI_CLI_HOME",
+    "short": "GM",
+    "accent": "#4285f4",
+    "bins": ["gemini"],
+    "paths": [
+      "{home}/AppData/Local/pnpm",
+      "{home}/AppData/Roaming/npm",
+      "{home}/.local/bin",
+      "/opt/homebrew/bin",
+      "/usr/local/bin"
+    ]
+  },
+  {
+    "id": "opencode",
+    "name": "opencode",
+    "command": "opencode",
+    "accountEnv": "XDG_DATA_HOME",
+    "short": "OC",
+    "accent": "#e5c07b",
+    "bins": ["opencode"],
+    "paths": [
+      "{home}/scoop/shims",
+      "{home}/.opencode/bin",
+      "{home}/AppData/Local/pnpm",
+      "{home}/.local/bin",
+      "/opt/homebrew/bin",
+      "/usr/local/bin"
+    ]
+  },
+  {
+    "id": "cursor-agent",
+    "name": "Cursor Agent",
+    "command": "cursor-agent",
+    "short": "CU",
+    "accent": "#a0a0a0",
+    "bins": ["cursor-agent"],
+    "paths": ["{home}/.local/bin", "{home}/scoop/shims", "/usr/local/bin"]
+  },
+  {
+    "id": "aider",
+    "name": "Aider",
+    "command": "aider",
+    "short": "AI",
+    "accent": "#8b5cf6",
+    "bins": ["aider"],
+    "paths": [
+      "{home}/.local/bin",
+      "{home}/AppData/Roaming/Python/Scripts",
+      "/usr/local/bin"
+    ]
+  },
+  {
+    "id": "crush",
+    "name": "Crush",
+    "command": "crush",
+    "short": "CR",
+    "accent": "#ff7ac6",
+    "bins": ["crush"],
+    "paths": ["{home}/scoop/shims", "{home}/.local/bin", "/opt/homebrew/bin"]
+  },
+  {
+    "id": "goose",
+    "name": "Goose",
+    "command": "goose",
+    "short": "GO",
+    "accent": "#38bdf8",
+    "bins": ["goose"],
+    "paths": ["{home}/.local/bin", "/opt/homebrew/bin", "/usr/local/bin"]
+  }
+]
