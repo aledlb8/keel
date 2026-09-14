@@ -69,11 +69,19 @@ symbols and the console window attached.
 
 Add a folder, and it becomes a project. Terminals open inside it and are listed under
 it in the sidebar — fold a project open to see everything running in it, with each
-terminal's state as a coloured dot. Click one to focus it on the canvas; if it belongs
+agent's state as a dot: blue while it is working, green once it has finished and you
+have not been back to it, grey otherwise. Plain shells are always grey. Click one to focus it on the canvas; if it belongs
 to another project, that project comes forward with it. Terminals in projects you are
 not looking at keep running.
 
 Selecting a project is one-way: clicking the selected one does not deselect it.
+
+Every row in the sidebar follows one grammar: click goes there, double-click or `F2`
+renames it in place, and right-click (or the ⋯ that appears on hover) opens everything
+else — add terminals, new deck, reorder, copy the path, show it in Explorer, remove.
+Right-click a pane for copy, paste, select all and clear, plus split, fullscreen, move to
+another deck, switch profile, restart and close. `F2` in a terminal renames it. The
+browser's own context menu is switched off everywhere.
 
 ### Decks
 
@@ -81,9 +89,8 @@ A project can hold several arrangements of terminals, all running at once. They 
 called decks, and **you will not see any sign of them until you make a second one** —
 one deck looks exactly like an app that has never heard of decks.
 
-Once there are two, a numbered rail appears down the edge of the canvas. A deck you
-are not looking at shows a dot when something on it wants you: amber when an agent has
-gone quiet, red when a shell exited. `Alt+Shift+1…9` jumps straight to one.
+Once there are two, a numbered rail appears down the edge of the canvas. In the sidebar, a
+deck you are not looking at shows a dot when an agent on it is working or has finished. `Alt+Shift+1…9` jumps straight to one.
 
 `Alt+Shift+Space` opens the **overview**: every deck at once, drawn to scale from its
 real layout in the agents' colours. Click one to enter it, double-click its name to
@@ -91,11 +98,9 @@ rename it, or **drag a terminal from one deck onto another** — the process kee
 running, only the rectangle it is drawn in changes.
 
 The window has no OS decorations — the titlebar is drawn by the app and carries the
-menu bar. Panes have no titlebar at all: hover one and a small chip appears in its
-corner with move, split, fullscreen and close. A pane's top edge is a two-pixel line,
-coloured by its agent when idle and by its state when not — green while it is
-producing output, amber once it has gone quiet and probably wants you, red when the
-shell has exited.
+menu bar. Each pane has a slim header with its agent,
+its profile, and split, fullscreen and close. A pane's edge is a hairline
+that brightens when the pane is focused.
 
 Everything the app has to explain lives behind **Project / View / Help** rather than as
 text parked next to the terminals.
@@ -131,9 +136,13 @@ Both files live in the app config directory
 - `keel.json` — projects, their decks and the layouts on them
 - `agents.json` — the agent catalogue
 
-The catalogue is data, not code. It is written from the built-in list the first time
-it is needed, and once it exists it wins: adding a new agent CLI means adding an
-entry with the executable name and the places it might be installed, no rebuild.
+Edit both from **Help › Agents & profiles** (also reachable from the launcher and from
+a pane's profile menu). Rename an agent, change its command, badge or colour, hide the
+ones you do not use, add your own CLIs, and add, rename or remove sign-in profiles.
+Agent changes save as you type.
+
+The catalogue file only stores what differs from the built-in list, so a default that
+changes in a later release still reaches every agent you never touched.
 
 Live agent sessions do not survive a restart — layouts do. Reopening a project starts
 its shells again and retypes each agent command.
