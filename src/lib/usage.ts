@@ -69,7 +69,112 @@ export function tightestWindow(windows: UsageWindow[]): UsageWindow | null {
   );
 }
 
+export type UsageLevel = "ok" | "warn" | "hot";
+
+/** Colour band for a used percentage: calm, getting close, nearly out. */
+export function usageLevel(used: number): UsageLevel {
+  if (used >= 90) return "hot";
+  if (used >= 75) return "warn";
+  return "ok";
+}
+
+const WINDOW_NAMES: Record<string, string> = {
+  "5h": "5-hour",
+  "1d": "Daily",
+  wk: "Weekly",
+  mo: "Monthly",
+};
+
+/** Spell out the backend's terse window tags; model buckets pass through. */
+export function windowName(label: string): string {
+  return WINDOW_NAMES[label] ?? label;
+}
+
+const WINDOW_SHORT: Record<string, string> = {
+  "5h": "5h",
+  "1d": "Day",
+  wk: "Wk",
+  mo: "Mo",
+};
+
+/** A window's name in a glance: "5h", "Wk", or the first letters of a model bucket. */
+export function windowShortName(label: string): string {
+  return WINDOW_SHORT[label] ?? label.slice(0, 4);
+}
+
 export const USAGE_POLL_MS = 120_000;
+
+/**
+ * How long a good reading outlives failed polls. Long enough that one flaky
+ * request never makes a login blink out of the footer; short enough that a
+ * login that has really gone away (signed out, token expired) stops claiming
+ * numbers it no longer has.
+ */
+export const USAGE_STALE_MS = 10 * 60_000;
+
+/** The same key the footer and the focused pane use for a login. */
+export function usageKey(agentId: string, accountId: string | null | undefined): string {
+  return `${agentId}:${accountId ?? ""}`;
+}
+
+/** A reading worth showing: it answered, and it has at least one real window. */
+export function isReady(usage: AgentUsage): boolean {
+  return (
+    usage.status === "ok" &&
+    usage.windows.some((window) => Number.isFinite(window.usedPercent))
+  );
+}
+
+export interface KeptUsage {
+  usage: AgentUsage;
+  /** When this reading arrived, on our clock. */
+  at: number;
+}
+
+/**
+ * Fold a poll into what is already on screen. Good readings replace the old
+ * ones; an error or an empty answer never does — the last good reading stays
+ * until it is older than `maxAgeMs`. Logins no longer being asked about go.
+ */
+export function retainUsage(
+  kept: Map<string, KeptUsage>,
+  fresh: AgentUsage[],
+  now: number,
+  live: Set<string>,
+  maxAgeMs = USAGE_STALE_MS,
+): Map<string, KeptUsage> {
+  const next = new Map<string, KeptUsage>();
+  for (const [key, entry] of kept) {
+    if (live.has(key) && now - entry.at <= maxAgeMs) next.set(key, entry);
+  }
+  for (const usage of fresh) {
+    const key = usageKey(usage.agentId, usage.accountId);
+    if (live.has(key) && isReady(usage)) next.set(key, { usage, at: now });
+  }
+  return next;
+}
+
+/** How much of a window has already passed, 0…1, or null when it can't be known. */
+export function windowElapsed(window: UsageWindow, now: number): number | null {
+  if (!window.resetsAt || !(window.windowMinutes > 0)) return null;
+  const span = window.windowMinutes * 60_000;
+  const left = window.resetsAt - now;
+  if (left <= 0) return 1;
+  if (left >= span) return 0;
+  return 1 - left / span;
+}
+
+/**
+ * Burning through the window noticeably faster than time is passing — at this
+ * rate it runs out before it resets. Ignored early on, when a few requests can
+ * look like a lot.
+ */
+export function aheadOfPace(window: UsageWindow, now: number): boolean {
+  const elapsed = windowElapsed(window, now);
+  if (elapsed === null) return false;
+  const used = Math.min(100, Math.max(0, window.usedPercent)) / 100;
+  return used >= 0.25 && used - elapsed >= 0.15;
+}
 
 export const USAGE_AGENT_IDS = [
   "claude",

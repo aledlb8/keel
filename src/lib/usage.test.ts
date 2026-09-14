@@ -3,14 +3,115 @@ import { describe, it } from "node:test";
 
 import type { Agent, AgentAccount } from "./types.ts";
 import {
+  aheadOfPace,
   buildUsageQueries,
   formatPercent,
   formatReset,
+  isReady,
   profileLabel,
+  retainUsage,
   tightestWindow,
+  usageKey,
+  usageLevel,
   usageQueryKey,
+  windowElapsed,
+  windowName,
+  windowShortName,
+  type AgentUsage,
+  type KeptUsage,
   type UsageWindow,
 } from "./usage.ts";
+
+function reading(
+  agentId: string,
+  accountId: string | null,
+  extra: Partial<AgentUsage> = {},
+): AgentUsage {
+  return {
+    agentId,
+    accountId,
+    short: agentId.slice(0, 2).toUpperCase(),
+    name: agentId,
+    accent: "#fff",
+    plan: null,
+    windows: [window(40, "5h")],
+    status: "ok",
+    error: null,
+    updatedAt: 0,
+    ...extra,
+  };
+}
+
+describe("isReady", () => {
+  it("wants an answer with at least one window", () => {
+    assert.equal(isReady(reading("claude", null)), true);
+    assert.equal(isReady(reading("claude", null, { windows: [] })), false);
+    assert.equal(
+      isReady(reading("claude", null, { status: "error", error: "401" })),
+      false,
+    );
+  });
+});
+
+describe("retainUsage", () => {
+  const live = new Set([usageKey("claude", null), usageKey("codex", "cx")]);
+
+  it("shows only logins that answered with numbers", () => {
+    const kept = retainUsage(
+      new Map(),
+      [
+        reading("claude", null),
+        reading("codex", "cx", { status: "error", windows: [] }),
+      ],
+      1_000,
+      live,
+    );
+    assert.deepEqual([...kept.keys()], ["claude:"]);
+  });
+
+  it("keeps the last good reading through a failed poll", () => {
+    const first = retainUsage(new Map(), [reading("claude", null)], 1_000, live);
+    const after = retainUsage(
+      first,
+      [reading("claude", null, { status: "error", windows: [] })],
+      2_000,
+      live,
+    );
+    assert.equal(after.get("claude:")?.at, 1_000);
+  });
+
+  it("lets a reading go once it is stale, or no longer asked about", () => {
+    const kept = new Map<string, KeptUsage>([
+      ["claude:", { usage: reading("claude", null), at: 0 }],
+      ["gemini:", { usage: reading("gemini", null), at: 5_000 }],
+    ]);
+    assert.deepEqual([...retainUsage(kept, [], 5_000, live, 1_000).keys()], []);
+    assert.deepEqual([...retainUsage(kept, [], 500, live, 1_000).keys()], ["claude:"]);
+  });
+});
+
+describe("windowElapsed", () => {
+  const now = 1_000_000_000;
+  const hours = (count: number) => count * 3_600_000;
+
+  it("is unknown without a reset time", () => {
+    assert.equal(windowElapsed(window(10, "5h"), now), null);
+  });
+
+  it("measures how far through the window we are", () => {
+    const half = { ...window(10, "5h"), resetsAt: now + hours(2.5) };
+    assert.equal(windowElapsed(half, now), 0.5);
+    assert.equal(windowElapsed({ ...half, resetsAt: now - 1 }, now), 1);
+    assert.equal(windowElapsed({ ...half, resetsAt: now + hours(9) }, now), 0);
+  });
+
+  it("calls it ahead of pace only when usage clearly outruns time", () => {
+    const early = { ...window(60, "5h"), resetsAt: now + hours(4) };
+    assert.equal(aheadOfPace(early, now), true);
+    assert.equal(aheadOfPace({ ...early, usedPercent: 20 }, now), false);
+    assert.equal(aheadOfPace({ ...early, resetsAt: now + hours(1) }, now), false);
+  });
+});
 
 function window(used: number, label: string): UsageWindow {
   return { usedPercent: used, windowMinutes: 300, resetsAt: null, label };
@@ -45,6 +146,30 @@ describe("formatPercent", () => {
     assert.equal(formatPercent(32.4), "32%");
     assert.equal(formatPercent(150), "100%");
     assert.equal(formatPercent(-4), "0%");
+  });
+});
+
+describe("usageLevel", () => {
+  it("bands by used percent", () => {
+    assert.equal(usageLevel(10), "ok");
+    assert.equal(usageLevel(75), "warn");
+    assert.equal(usageLevel(90), "hot");
+  });
+});
+
+describe("windowName", () => {
+  it("spells out known tags and passes model buckets through", () => {
+    assert.equal(windowName("5h"), "5-hour");
+    assert.equal(windowName("wk"), "Weekly");
+    assert.equal(windowName("Opus"), "Opus");
+  });
+});
+
+describe("windowShortName", () => {
+  it("shortens known windows and clips model buckets", () => {
+    assert.equal(windowShortName("5h"), "5h");
+    assert.equal(windowShortName("wk"), "Wk");
+    assert.equal(windowShortName("Sonnet"), "Sonn");
   });
 });
 
