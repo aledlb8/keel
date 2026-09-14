@@ -1,5 +1,7 @@
 mod agents;
+mod procs;
 mod pty;
+mod sessions;
 mod store;
 
 use tauri::Manager;
@@ -27,6 +29,7 @@ pub fn run() {
             store::state_path,
             store::list_subdirectories,
             store::path_exists,
+            sessions::session_recent,
         ])
         .on_window_event(|window, event| {
             // Closing the window must take every child process with it, or the

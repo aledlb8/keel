@@ -24,6 +24,9 @@ pub struct AgentSpec {
     pub name: String,
     /// What gets typed into the shell.
     pub command: String,
+    /// How this CLI reopens a conversation. `{id}` is the pane's session UUID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<SessionSpec>,
     /// Executable names to look for on PATH, in order of preference.
     #[serde(default)]
     pub bins: Vec<String>,
@@ -46,6 +49,22 @@ pub struct AgentSpec {
 
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+/// Extra args (or a subcommand) typed after the agent's command so a reopen
+/// lands in the same conversation rather than a new one.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<String>,
+    pub resume: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub store: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -288,6 +307,31 @@ fn validate(agents: &[AgentSpec]) -> Result<(), String> {
         }
         if agent.command.contains(['\r', '\n']) {
             return Err(format!("{}: the command must be a single line", agent.name));
+        }
+        if let Some(session) = &agent.session {
+            if session.resume.trim().is_empty() {
+                return Err(format!("{}: session resume cannot be empty", agent.name));
+            }
+            for (label, value) in [
+                ("start", session.start.as_deref()),
+                ("resume", Some(session.resume.as_str())),
+                ("fallback", session.fallback.as_deref()),
+            ] {
+                if value.is_some_and(|text| text.contains(['\r', '\n'])) {
+                    return Err(format!(
+                        "{}: session {label} must be a single line",
+                        agent.name
+                    ));
+                }
+            }
+            if let Some(kind) = &session.kind {
+                if kind != "args" && kind != "subcommand" {
+                    return Err(format!(
+                        "{}: session kind must be args or subcommand",
+                        agent.name
+                    ));
+                }
+            }
         }
         if agent.short.chars().count() > 3 {
             return Err(format!(

@@ -13,12 +13,12 @@
  */
 
 import { memo, useEffect, useRef } from "react";
-import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal, type ITheme, type IWindowsPty } from "@xterm/xterm";
 
+import { createPromptDraft, type TitleSource } from "@/lib/paneTitle";
 import { resizePty, spawnPty, writePty } from "@/lib/pty";
 import type { PaneActivity } from "@/lib/types";
 
@@ -27,6 +27,44 @@ import type { PaneActivity } from "@/lib/types";
  * redraws on top of that. Dragging a seam should cost one of those, not sixty.
  */
 const PTY_RESIZE_DELAY_MS = 60;
+
+/**
+ * How long after the layout stops moving before we recell the grid.
+ *
+ * Recelling the WebGL canvas blanks a frame. During a live drag we CSS-scale
+ * the existing glyphs instead, and only recell once the size has settled — or
+ * sooner, if the stretch would get ugly.
+ */
+const FIT_SETTLE_MS = 80;
+const STRETCH_LIMIT = 0.15;
+
+/**
+ * Cells that fit in the host, using the whole area.
+ *
+ * FitAddon always subtracts a 14px scrollbar gutter. Agent TUIs (Claude, Codex,
+ * Grok, …) paint every column of the PTY, so that gutter plus any CSS padding
+ * is a dead frame of pane around their own chrome. The scrollbar is an overlay;
+ * it does not get a reserved column.
+ */
+function proposeGrid(term: Terminal, host: HTMLElement) {
+  const width = host.clientWidth;
+  const height = host.clientHeight;
+  if (width <= 0 || height <= 0) return null;
+  const cell = (
+    term as unknown as {
+      _core: {
+        _renderService: {
+          dimensions: { css: { cell: { width: number; height: number } } };
+        };
+      };
+    }
+  )._core._renderService.dimensions.css.cell;
+  if (!cell.width || !cell.height) return null;
+  return {
+    cols: Math.max(2, Math.floor(width / cell.width)),
+    rows: Math.max(1, Math.floor(height / cell.height)),
+  };
+}
 
 const isWindows = /Windows/i.test(navigator.userAgent);
 
@@ -207,6 +245,8 @@ export interface TerminalSurfaceProps {
   onFocus: (paneId: string) => void;
   /** Spawn settled — ok or fail. Used for reopen chrome + spawn-fail UI. */
   onSpawnResult?: (paneId: string, ok: boolean, reason?: string) => void;
+  /** A prompt was submitted, or the process set the window title. */
+  onTitle?: (paneId: string, title: string, source: TitleSource) => void;
 }
 
 /**
@@ -226,6 +266,7 @@ export const TerminalSurface = memo(function TerminalSurface({
   onActivity,
   onFocus,
   onSpawnResult,
+  onTitle,
 }: TerminalSurfaceProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -233,9 +274,16 @@ export const TerminalSurface = memo(function TerminalSurface({
   const actions = useRef({ refit: () => {}, syncPty: () => {} });
   /** The size the PTY was last told about, and whether there is a PTY to tell. */
   const pty = useRef({ ready: false, cols: 0, rows: 0 });
+  const promptDraft = useRef(createPromptDraft());
   // Latest callbacks without re-running the setup effect.
-  const handlers = useRef({ onOutput, onActivity, onFocus, onSpawnResult });
-  handlers.current = { onOutput, onActivity, onFocus, onSpawnResult };
+  const handlers = useRef({
+    onOutput,
+    onActivity,
+    onFocus,
+    onSpawnResult,
+    onTitle,
+  });
+  handlers.current = { onOutput, onActivity, onFocus, onSpawnResult, onTitle };
 
   // 1. Create the terminal and everything that lives exactly as long as it does.
   useEffect(() => {
@@ -270,8 +318,6 @@ export const TerminalSurface = memo(function TerminalSurface({
       theme: keelTerminalTheme(),
     });
 
-    const fit = new FitAddon();
-    term.loadAddon(fit);
     term.loadAddon(new WebLinksAddon());
     term.loadAddon(new Unicode11Addon());
     term.unicode.activeVersion = "11";
@@ -285,6 +331,10 @@ export const TerminalSurface = memo(function TerminalSurface({
     });
 
     let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+    let fitTimer: ReturnType<typeof setTimeout> | undefined;
+    // CSS size of the host the last time the grid was recelled. Used to scale
+    // the existing canvas during a live resize instead of blanking it.
+    let lastFit = { w: 0, h: 0 };
 
     const syncPty = () => {
       const current = pty.current;
@@ -295,25 +345,62 @@ export const TerminalSurface = memo(function TerminalSurface({
       void resizePty(paneId, term.cols, term.rows).catch(() => {});
     };
 
-    const refit = () => {
+    const clearPreviewScale = () => {
+      const el = term.element;
+      if (!el) return;
+      el.style.transform = "";
+      el.style.transformOrigin = "";
+    };
+
+    const commitFit = () => {
       if (disposed) return;
       // A hidden pane measures zero; fitting then would collapse the grid to 1x1.
       if (host.clientWidth === 0 || host.clientHeight === 0) return;
-      const size = fit.proposeDimensions();
+      clearPreviewScale();
+      const size = proposeGrid(term, host);
       if (!size || !Number.isFinite(size.cols) || !Number.isFinite(size.rows)) {
         return;
       }
-      // The grid follows the layout immediately, so nothing is ever drawn at
-      // the wrong size; the PTY follows once the layout stops moving.
+      // Resize in place — FitAddon.fit() calls renderService.clear() first,
+      // which is the blank frame you see on every recell.
       if (size.cols !== term.cols || size.rows !== term.rows) {
         handlers.current.onActivity?.(paneId, "resize");
-        fit.fit();
+        term.resize(size.cols, size.rows);
       }
+      lastFit = { w: host.clientWidth, h: host.clientHeight };
       clearTimeout(resizeTimer);
       resizeTimer = setTimeout(syncPty, PTY_RESIZE_DELAY_MS);
     };
 
-    actions.current = { refit, syncPty };
+    const refit = (mode: "live" | "commit" = "commit") => {
+      if (disposed) return;
+      if (host.clientWidth === 0 || host.clientHeight === 0) return;
+
+      if (mode === "live" && lastFit.w > 0 && lastFit.h > 0) {
+        const sx = host.clientWidth / lastFit.w;
+        const sy = host.clientHeight / lastFit.h;
+        const stretched =
+          !Number.isFinite(sx) ||
+          !Number.isFinite(sy) ||
+          Math.abs(sx - 1) > STRETCH_LIMIT ||
+          Math.abs(sy - 1) > STRETCH_LIMIT;
+        if (!stretched) {
+          const el = term.element;
+          if (el) {
+            el.style.transform = `scale(${sx}, ${sy})`;
+            el.style.transformOrigin = "0 0";
+          }
+          clearTimeout(fitTimer);
+          fitTimer = setTimeout(commitFit, FIT_SETTLE_MS);
+          return;
+        }
+      }
+
+      clearTimeout(fitTimer);
+      commitFit();
+    };
+
+    actions.current = { refit: () => refit("commit"), syncPty };
 
     let webgl: WebglAddon | null = null;
     const slot: GpuSlot = {
@@ -347,17 +434,19 @@ export const TerminalSurface = memo(function TerminalSurface({
     };
     gpu.register(paneId, slot);
 
-    let frame = 0;
-    const layout = new ResizeObserver(() => {
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(refit);
-    });
+    const layout = new ResizeObserver(() => refit("live"));
     layout.observe(host);
-    refit();
+    refit("commit");
 
     const typed = term.onData((data) => {
       handlers.current.onActivity?.(paneId, "input");
+      const brief = promptDraft.current.push(data);
+      if (brief) handlers.current.onTitle?.(paneId, brief, "prompt");
       void writePty(paneId, data).catch(() => {});
+    });
+
+    const titled = term.onTitleChange((title) => {
+      handlers.current.onTitle?.(paneId, title, "osc");
     });
 
     const textarea = term.textarea;
@@ -406,12 +495,14 @@ export const TerminalSurface = memo(function TerminalSurface({
       gpu.unregister(paneId);
       terminals.delete(paneId);
       clearTimeout(resizeTimer);
-      cancelAnimationFrame(frame);
+      clearTimeout(fitTimer);
+      clearPreviewScale();
       layout.disconnect();
       palette.disconnect();
       textarea?.removeEventListener("focus", noteFocus);
       textarea?.removeEventListener("paste", pasteImage, true);
       typed.dispose();
+      titled.dispose();
       term.dispose();
       termRef.current = null;
       actions.current = { refit: () => {}, syncPty: () => {} };
@@ -419,9 +510,15 @@ export const TerminalSurface = memo(function TerminalSurface({
   }, [paneId]);
 
   // 2. GPU rendering follows visibility; the `gpu` pool above decides when a
-  //    context is taken and when it is reclaimed.
+  //    context is taken and when it is reclaimed. Coming back on screen, force
+  //    a redraw so a compositor that discarded the hidden canvas does not show
+  //    one blank frame.
   useEffect(() => {
     gpu.setVisible(paneId, visible);
+    if (!visible) return;
+    const term = termRef.current;
+    if (term) term.refresh(0, term.rows - 1);
+    actions.current.refit();
   }, [paneId, visible]);
 
   // 3. Start the process. Re-runs only when the pane is explicitly restarted.
@@ -429,6 +526,7 @@ export const TerminalSurface = memo(function TerminalSurface({
     let cancelled = false;
     const term = termRef.current;
     if (!term) return;
+    promptDraft.current.reset();
 
     const start = async () => {
       pty.current.ready = false;
@@ -481,15 +579,14 @@ export const TerminalSurface = memo(function TerminalSurface({
   }, [focused]);
 
   return (
-    // The padding lives out here, not on `.xterm`, so the element FitAddon
-    // measures is exactly the space the grid gets. `isolate` keeps xterm's own
-    // z-indexed layers (scrollbar, IME helpers) from stacking over anything
-    // outside the terminal.
+    // No inset. Agent TUIs draw a full-screen frame; padding around the grid
+    // is a second frame of pane around theirs. `isolate` keeps xterm's
+    // z-indexed layers from stacking over the header.
     <div
-      className="isolate h-full w-full overflow-hidden pb-2 pl-3 pr-1 pt-1.5"
+      className="isolate h-full w-full overflow-hidden"
       onMouseDown={() => onFocus(paneId)}
     >
-      <div ref={hostRef} className="h-full w-full" />
+      <div ref={hostRef} className="h-full w-full overflow-hidden" />
     </div>
   );
 });

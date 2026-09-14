@@ -3,13 +3,15 @@
  *
  * It renders the real layout tree with the real proportions, so a schematic is
  * never a guess about what you would see — it is the same geometry at another
- * scale. Cells carry the agent's colour and short code, which reads better at
- * this size than actual terminal pixels ever would.
+ * scale. Each cell is the agent badge plus the pane's title, the same brief the
+ * sidebar shows, so a deck of "Claude" and "Codex" is still readable as the work
+ * those terminals are doing.
  */
 
+import { isGenericLabel } from "@/lib/paneTitle";
 import { agentAccent } from "@/lib/tokens";
-import { cn } from "@/lib/utils";
 import type { Agent, Deck, LayoutNode } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 export interface LayoutSchematicProps {
   deck: Deck;
@@ -61,6 +63,8 @@ function Node({
     const agent = agents.find((entry) => entry.id === pane?.agentId) ?? null;
     const accent = agentAccent(agent?.accent);
     const draggable = Boolean(onPaneDragStart);
+    const title = pane?.title ?? "";
+    const brief = title && !isGenericLabel(title, agent);
 
     return (
       <div
@@ -73,9 +77,9 @@ function Node({
           onPaneDragStart?.(node.id);
         }}
         onDragEnd={onPaneDragEnd}
-        title={pane?.title}
+        title={title}
         className={cn(
-          "relative flex min-h-0 min-w-0 flex-1 items-center justify-center gap-1.5 overflow-hidden rounded-[5px] border-l-2",
+          "relative flex min-h-0 min-w-0 flex-1 flex-col items-start justify-center gap-0.5 overflow-hidden rounded-[5px] border-l-2 px-2 py-1.5 text-left",
           draggable && "cursor-grab active:cursor-grabbing",
           draggingPaneId === node.id && "opacity-30",
         )}
@@ -85,11 +89,21 @@ function Node({
         }}
       >
         <span
-          className="truncate font-mono text-[10px] font-semibold"
+          className="shrink-0 font-mono text-[10px] font-semibold"
           style={{ color: accent }}
         >
           {agent?.short ?? "SH"}
         </span>
+        {title ? (
+          <span
+            className={cn(
+              "min-w-0 w-full break-words text-[11px] leading-snug line-clamp-3",
+              brief ? "text-dim" : "text-faint",
+            )}
+          >
+            {title}
+          </span>
+        ) : null}
       </div>
     );
   }

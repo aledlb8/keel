@@ -16,11 +16,14 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::{Channel, Response};
 use tauri::{AppHandle, Emitter, Manager, State};
+
+use crate::procs;
 
 /// Read buffer per pane. A blocking `read` returns whatever is available up to
 /// this size, so a chatty agent naturally coalesces into few large sends.
@@ -33,9 +36,18 @@ pub struct PtySession {
     alive: Arc<AtomicBool>,
 }
 
+/// Watches a pane whose shell had an agent typed into it, until that agent
+/// process tree is gone and the shell is sitting at a prompt again.
+struct AgentWatch {
+    shell_pid: u32,
+    alive: Arc<AtomicBool>,
+    saw_agent: bool,
+}
+
 #[derive(Default)]
 pub struct PtyManager {
     sessions: Mutex<HashMap<String, PtySession>>,
+    watches: Mutex<HashMap<String, AgentWatch>>,
 }
 
 impl PtyManager {
@@ -47,6 +59,9 @@ impl PtyManager {
         for (_, mut session) in sessions.drain() {
             session.alive.store(false, Ordering::SeqCst);
             let _ = session.child.kill();
+        }
+        if let Ok(mut watches) = self.watches.lock() {
+            watches.clear();
         }
     }
 }
@@ -361,8 +376,9 @@ pub fn pty_spawn(
         master: pair.master,
         writer,
         child,
-        alive,
+        alive: Arc::clone(&alive),
     };
+    let shell_pid = session.child.process_id();
 
     let mut sessions = manager
         .sessions
@@ -374,7 +390,11 @@ pub fn pty_spawn(
     }
 
     // Typed in, not exec'd, so the shell is still there when the agent quits.
-    if let Some(command) = options.command.as_ref().filter(|c| !c.trim().is_empty()) {
+    let typed_command = options
+        .command
+        .as_ref()
+        .filter(|command| !command.trim().is_empty());
+    if let Some(command) = typed_command {
         if let Some(session) = sessions.get_mut(&options.id) {
             let line = format!("{command}\r");
             session
@@ -384,8 +404,112 @@ pub fn pty_spawn(
             let _ = session.writer.flush();
         }
     }
+    let typed_command = typed_command.is_some();
+
+    drop(sessions);
+
+    // A pane that launched an agent should reopen as a shell once that agent
+    // has exited — otherwise Ctrl+C, close, reopen types `grok` again.
+    if typed_command {
+        if let Some(pid) = shell_pid {
+            watch_agent(&manager, &app, options.id.clone(), pid, alive);
+        }
+    }
 
     Ok(())
+}
+
+/// How often we look at the process tree for typed-in agents that have exited.
+const AGENT_WATCH_MS: u64 = 400;
+
+fn watch_agent(
+    manager: &PtyManager,
+    app: &AppHandle,
+    id: String,
+    shell_pid: u32,
+    alive: Arc<AtomicBool>,
+) {
+    if let Ok(mut watches) = manager.watches.lock() {
+        watches.insert(
+            id,
+            AgentWatch {
+                shell_pid,
+                alive,
+                saw_agent: false,
+            },
+        );
+    }
+    start_agent_watcher(app.clone());
+}
+
+fn start_agent_watcher(app: AppHandle) {
+    static STARTED: AtomicBool = AtomicBool::new(false);
+    if STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let _ = std::thread::Builder::new()
+        .name("keel-pty-watch".into())
+        .spawn(move || loop {
+            std::thread::sleep(Duration::from_millis(AGENT_WATCH_MS));
+            let (started, finished) = collect_agent_events(&app);
+            for id in started {
+                let _ = app.emit("pty:agent-start", PtyExit { id });
+            }
+            for id in finished {
+                // A restart under the same pane id inserts a new watch before
+                // we emit; that spawn is a fresh agent and must not be released.
+                let replaced = app
+                    .state::<PtyManager>()
+                    .watches
+                    .lock()
+                    .map(|watches| watches.contains_key(&id))
+                    .unwrap_or(true);
+                if replaced {
+                    continue;
+                }
+                let _ = app.emit("pty:agent-exit", PtyExit { id });
+            }
+        });
+}
+
+fn collect_agent_events(app: &AppHandle) -> (Vec<String>, Vec<String>) {
+    let manager = app.state::<PtyManager>();
+    let mut watches = match manager.watches.lock() {
+        Ok(guard) => guard,
+        Err(_) => return (Vec::new(), Vec::new()),
+    };
+    if watches.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+    let parents = procs::process_parents();
+    if parents.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+
+    let mut started = Vec::new();
+    let mut finished = Vec::new();
+    watches.retain(|id, watch| {
+        if !watch.alive.load(Ordering::SeqCst) {
+            return false;
+        }
+        if !parents.contains_key(&watch.shell_pid) {
+            // The shell itself is gone; `pty:exit` is the event that matters.
+            return false;
+        }
+        if procs::has_descendants(&parents, watch.shell_pid) {
+            if !watch.saw_agent {
+                started.push(id.clone());
+            }
+            watch.saw_agent = true;
+            true
+        } else if watch.saw_agent {
+            finished.push(id.clone());
+            false
+        } else {
+            true
+        }
+    });
+    (started, finished)
 }
 
 #[tauri::command]

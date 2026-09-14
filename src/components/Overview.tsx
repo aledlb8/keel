@@ -8,6 +8,9 @@
  * process is never touched — only which rectangle it is drawn in changes, because
  * the terminals live in a flat layer that spans every deck. That is what the whole
  * two-layer canvas is for.
+ *
+ * Each cell shows the same brief as the sidebar row, so a deck is identifiable
+ * by the work on it, not just "Deck 2" and a pair of agent badges.
  */
 
 import { useEffect, useRef, useState } from "react";

@@ -33,7 +33,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { statePath } from "@/lib/backend";
 import { onHostLost } from "@/lib/invoke";
 import { deckIndexOf, isKeelChord, MOVES } from "@/lib/keymap";
-import { onPtyExit } from "@/lib/pty";
+import { onPtyAgentExit, onPtyAgentStart, onPtyExit } from "@/lib/pty";
 import { listPanes } from "@/lib/tree";
 import { activeDeck, startAttentionTracking, useKeel } from "@/state/store";
 
@@ -55,6 +55,12 @@ export default function App() {
     const unlisten = onPtyExit((paneId) =>
       useKeel.getState().notePaneExit(paneId),
     );
+    const unlistenAgent = onPtyAgentExit((paneId) =>
+      useKeel.getState().releaseAgent(paneId),
+    );
+    const unlistenStart = onPtyAgentStart((paneId) => {
+      void useKeel.getState().captureSession(paneId);
+    });
     const stopHost = onHostLost(() => useKeel.getState().noteHostLost());
     // No browser context menu anywhere: "Reload" and "Inspect" have no business
     // in a desktop app. Every surface with something to offer opens its own.
@@ -65,6 +71,8 @@ export default function App() {
       stopHost();
       window.removeEventListener("contextmenu", blockNativeMenu);
       void unlisten.then((stop) => stop());
+      void unlistenAgent.then((stop) => stop());
+      void unlistenStart.then((stop) => stop());
     };
   }, []);
 
@@ -236,8 +244,8 @@ export default function App() {
   };
 
   return (
-    // No background of its own: the canvas wash lives on #root, and everything
-    // from here down is either transparent or deliberately translucent over it.
+    // No background of its own: the canvas wash lives on #root. Docked chrome
+    // paints opaque over it; only floating overlays blur what sits behind them.
     <div className="flex h-full flex-col text-foreground">
       <Titlebar
         projectName={project?.name ?? null}

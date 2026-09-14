@@ -22,10 +22,12 @@ import {
   useRef,
   useState,
 } from "react";
+import { flushSync } from "react-dom";
 import { Terminal } from "lucide-react";
 import { toast } from "sonner";
 
 import { PaneView } from "@/components/PaneView";
+import type { TitleSource } from "@/lib/paneTitle";
 import { listPanes } from "@/lib/tree";
 import { cn } from "@/lib/utils";
 import type {
@@ -132,7 +134,14 @@ export function Canvas({
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
-    const observer = new ResizeObserver(() => measure());
+    // ResizeObserver runs before paint. Flushing the rects here means the
+    // panes move in the same frame as the window, instead of one frame late
+    // with a strip of ground showing around every terminal.
+    const observer = new ResizeObserver(() => {
+      flushSync(() => {
+        measure();
+      });
+    });
     observer.observe(container);
     return () => observer.disconnect();
   }, [measure]);
@@ -149,6 +158,11 @@ export function Canvas({
   const noteActivity = useCallback(
     (paneId: string, kind: PaneActivity) =>
       useKeel.getState().noteActivity(paneId, kind),
+    [],
+  );
+  const titlePane = useCallback(
+    (paneId: string, title: string, source: TitleSource) =>
+      useKeel.getState().autoTitlePane(paneId, title, source),
     [],
   );
   const splitPane = useCallback(
@@ -195,6 +209,7 @@ export function Canvas({
       const keel = useKeel.getState();
       if (ok) {
         keel.settleRestore(paneId, true);
+        keel.markSessionReady(paneId);
         return;
       }
 
@@ -222,7 +237,7 @@ export function Canvas({
   };
 
   return (
-    <div ref={containerRef} className="relative h-full w-full">
+    <div ref={containerRef} className="relative isolate h-full w-full">
       {/*
        * Geometry only â€” and deliberately *underneath* the panes.
        *
@@ -288,6 +303,7 @@ export function Canvas({
                 onFocus={focusPane}
                 onOutput={noteOutput}
                 onActivity={noteActivity}
+                onTitle={titlePane}
                 onSplit={splitPane}
                 onZoom={zoomPane}
                 onClose={closePane}

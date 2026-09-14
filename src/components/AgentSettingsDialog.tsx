@@ -129,6 +129,7 @@ function specOf(agent: Agent): AgentSpec {
     id: agent.id,
     name: agent.name.trim(),
     command: agent.command.trim(),
+    session: agent.session ?? undefined,
     short: agent.short.trim().toUpperCase(),
     accent: agent.accent.trim(),
     accountEnv: agent.accountEnv?.trim() || null,

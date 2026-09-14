@@ -64,3 +64,21 @@ export function onPtyExit(
 ): Promise<() => void> {
   return listen<{ id: string }>("pty:exit", (event) => handler(event.payload.id));
 }
+
+/** Fires when the agent typed into a pane has exited and left the shell. */
+export function onPtyAgentExit(
+  handler: (id: string) => void,
+): Promise<() => void> {
+  return listen<{ id: string }>("pty:agent-exit", (event) =>
+    handler(event.payload.id),
+  );
+}
+
+/** Fires when the typed-in agent process has actually appeared. */
+export function onPtyAgentStart(
+  handler: (id: string) => void,
+): Promise<() => void> {
+  return listen<{ id: string }>("pty:agent-start", (event) =>
+    handler(event.payload.id),
+  );
+}

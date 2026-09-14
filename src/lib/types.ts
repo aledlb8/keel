@@ -30,7 +30,28 @@ export interface Pane {
   agentId: string | null;
   /** Named isolated login for this agent. `null` uses the CLI's normal login. */
   accountId: string | null;
+  /**
+   * Type the agent command when this pane's shell starts. Cleared once that
+   * process exits, so a reopen continues from the shell you were already in
+   * rather than launching the agent again. Restart arms it.
+   */
+  resumeAgent: boolean;
+  /**
+   * UUID handed to CLIs that let us pick a session id. `null` when this agent
+   * has no such flag, or when the pane predates session tracking.
+   */
+  sessionId: string | null;
+  /**
+   * The agent has come up at least once, so the next spawn should resume the
+   * conversation instead of opening a new one.
+   */
+  sessionReady: boolean;
   title: string;
+  /**
+   * Set once you name the pane yourself. Auto-titles from a prompt or OSC
+   * leave these alone.
+   */
+  titleLocked?: boolean;
   /** Absolute path the shell starts in. `null` falls back to the project root. */
   cwd: string | null;
 }
@@ -69,6 +90,22 @@ export interface Project {
   collapsed: boolean;
 }
 
+/**
+ * Extra args (or a subcommand) that reopen a CLI's conversation.
+ *
+ * `start` is typed on the first spawn; `resume` on every spawn after that.
+ * `{id}` is this pane's session id — never `--continue`, which would give
+ * every pane of the same agent the most recent chat in the folder.
+ * `store` names the on-disk layout used to discover that id.
+ */
+export interface SessionSpec {
+  start?: string;
+  resume: string;
+  /** `subcommand` inserts after the binary (`codex resume {id}`). */
+  kind?: "args" | "subcommand";
+  store?: "grok" | "claude";
+}
+
 /** One entry of the agent catalogue, exactly as it is saved. */
 export interface AgentSpec {
   /** Stable key. Saved layouts reference agents by this. */
@@ -76,6 +113,11 @@ export interface AgentSpec {
   name: string;
   /** Typed into a fresh shell. */
   command: string;
+  /**
+   * How this CLI reopens a conversation. Absent means every spawn is a new
+   * session. `{id}` is replaced with the pane's `sessionId`.
+   */
+  session?: SessionSpec | null;
   /** Up to three characters, shown wherever the agent is drawn small. */
   short: string;
   /** Hex colour, or empty for the neutral fallback. */

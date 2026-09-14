@@ -12,6 +12,13 @@
 import { create } from "zustand";
 
 import * as backend from "@/lib/backend";
+import { sessionNeedsId } from "@/lib/launch";
+import {
+  briefFromOsc,
+  briefFromPrompt,
+  isGenericLabel,
+  type TitleSource,
+} from "@/lib/paneTitle";
 import { killPty } from "@/lib/pty";
 import {
   balance,
@@ -147,6 +154,14 @@ export interface KeelState {
   /** Bumped to respawn a pane's process in the same terminal. Not persisted. */
   generations: Record<string, number>;
   restartPane: (paneId: string) => void;
+  /** Agent process left the shell; the next spawn should not type the command. */
+  releaseAgent: (paneId: string) => void;
+  /** First successful spawn: later launches should resume this conversation. */
+  markSessionReady: (paneId: string) => void;
+  /** Bind this pane to the conversation that actually started in it. */
+  bindSession: (paneId: string, sessionId: string) => void;
+  /** After the agent process appears, record its real conversation id. */
+  captureSession: (paneId: string) => Promise<void>;
 
   /** The agents & profiles dialog; `agentId` preselects an agent. */
   agentSettings: { open: boolean; agentId: string | null };
@@ -164,6 +179,11 @@ export interface KeelState {
 
   renameProject: (projectId: string, name: string) => void;
   renamePane: (projectId: string, paneId: string, title: string) => void;
+  /**
+   * Rename a pane from what the agent is doing. No-ops if you have named it
+   * yourself. OSC titles only apply while the pane still has its factory name.
+   */
+  autoTitlePane: (paneId: string, raw: string, source: TitleSource) => void;
   /** Shift a project one place up or down the sidebar. */
   moveProject: (projectId: string, delta: -1 | 1) => void;
   /** Shift a deck one place; its number follows its position. */
@@ -226,6 +246,37 @@ function defaultTitle(agents: Agent[], agentId: string | null): string {
   return agents.find((agent) => agent.id === agentId)?.name ?? agentId;
 }
 
+function nextSessionId(
+  agents: Agent[],
+  agentId: string | null,
+): string | null {
+  if (!agentId) return null;
+  const agent = agents.find((entry) => entry.id === agentId);
+  return sessionNeedsId(agent?.session) ? crypto.randomUUID() : null;
+}
+
+/** Mint a session UUID for restored agent panes that never got one. */
+function ensureSessionIds(projects: Project[], agents: Agent[]): Project[] {
+  let touched = false;
+  const next = projects.map((project) => ({
+    ...project,
+    decks: project.decks.map((deck) => {
+      let deckTouched = false;
+      const panes = { ...deck.panes };
+      for (const [paneId, pane] of Object.entries(panes)) {
+        if (pane.sessionId || !pane.agentId) continue;
+        const minted = nextSessionId(agents, pane.agentId);
+        if (!minted) continue;
+        panes[paneId] = { ...pane, sessionId: minted, sessionReady: false };
+        deckTouched = true;
+        touched = true;
+      }
+      return deckTouched ? { ...deck, panes } : deck;
+    }),
+  }));
+  return touched ? next : projects;
+}
+
 export function basename(path: string): string {
   const parts = path.split(/[\\/]+/).filter(Boolean);
   return parts[parts.length - 1] ?? path;
@@ -281,7 +332,13 @@ function normalizeProjects(projects: Project[]): Project[] {
       panes: Object.fromEntries(
         Object.entries(deck.panes).map(([id, pane]) => [
           id,
-          { ...pane, accountId: pane.accountId ?? null },
+          {
+            ...pane,
+            accountId: pane.accountId ?? null,
+            resumeAgent: pane.resumeAgent ?? pane.agentId !== null,
+            sessionId: pane.sessionId ?? null,
+            sessionReady: pane.sessionReady ?? false,
+          },
         ]),
       ),
     })),
@@ -391,10 +448,11 @@ let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
 export const useKeel = create<KeelState>((set, get) => {
   /** Debounced write-through. Every mutation calls this; disk sees one write. */
-  function persist() {
+  function persist(immediate = false) {
     if (!get().ready) return;
     if (saveTimer) clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => {
+    const write = () => {
+      saveTimer = null;
       const { projects, activeProjectId, accounts } = get();
       const document: PersistedState = {
         version: 4,
@@ -405,7 +463,39 @@ export const useKeel = create<KeelState>((set, get) => {
       void backend.saveState(document).catch(() => {
         /* A failed save should never interrupt what the user is doing. */
       });
-    }, 400);
+    };
+    if (immediate) write();
+    else saveTimer = setTimeout(write, 400);
+  }
+
+  function findPane(paneId: string): Pane | null {
+    for (const project of get().projects) {
+      const pane = deckOfPane(project, paneId)?.panes[paneId];
+      if (pane) return pane;
+    }
+    return null;
+  }
+
+  /** Edit whichever deck holds `paneId`, searching every project. */
+  function patchPane(
+    paneId: string,
+    change: (pane: Pane) => Pane,
+    immediate = false,
+  ) {
+    const state = get();
+    for (const project of state.projects) {
+      const deck = deckOfPane(project, paneId);
+      if (!deck || !deck.panes[paneId]) continue;
+      updateDeck(project.id, deck.id, (current) => ({
+        ...current,
+        panes: {
+          ...current.panes,
+          [paneId]: change(current.panes[paneId]),
+        },
+      }));
+      if (immediate) persist(true);
+      return;
+    }
   }
 
   function updateProject(
@@ -511,11 +601,13 @@ export const useKeel = create<KeelState>((set, get) => {
           ? wanted
           : (projects[0]?.id ?? null);
 
-      const paneCount = countPanes(projects);
+      const bound = ensureSessionIds(projects, agents);
+
+      const paneCount = countPanes(bound);
       set({
         agents,
         accounts,
-        projects,
+        projects: bound,
         activeProjectId,
         ready: true,
         restoreStatus: paneCount > 0 ? "restoring" : "idle",
@@ -523,6 +615,7 @@ export const useKeel = create<KeelState>((set, get) => {
         status: {},
         exited: {},
       });
+      persist(true);
 
       // Safety: never leave Restoring… forever if a pane never settles.
       if (paneCount > 0) {
@@ -630,7 +723,13 @@ export const useKeel = create<KeelState>((set, get) => {
         ...current,
         panes: {
           ...current.panes,
-          [paneId]: { ...current.panes[paneId], accountId },
+          [paneId]: {
+            ...current.panes[paneId],
+            accountId,
+            // A different login has its own session store.
+            sessionId: nextSessionId(get().agents, pane.agentId),
+            sessionReady: false,
+          },
         },
       }));
     },
@@ -659,7 +758,15 @@ export const useKeel = create<KeelState>((set, get) => {
                 if (pane.accountId !== accountId) return [id, pane];
                 touched = true;
                 affected.push(id);
-                return [id, { ...pane, accountId: null }];
+                return [
+                  id,
+                  {
+                    ...pane,
+                    accountId: null,
+                    sessionId: nextSessionId(state.agents, pane.agentId),
+                    sessionReady: false,
+                  },
+                ];
               }),
             );
             return touched ? { ...deck, panes } : deck;
@@ -678,12 +785,93 @@ export const useKeel = create<KeelState>((set, get) => {
     },
 
     restartPane(paneId) {
+      const pane = findPane(paneId);
+      if (pane?.agentId && !pane.resumeAgent) {
+        patchPane(paneId, (current) => ({ ...current, resumeAgent: true }), true);
+      }
       set((state) => ({
         generations: {
           ...state.generations,
           [paneId]: (state.generations[paneId] ?? 0) + 1,
         },
       }));
+    },
+
+    releaseAgent(paneId) {
+      const pane = findPane(paneId);
+      if (!pane?.agentId || !pane.resumeAgent) return;
+      patchPane(paneId, (current) => ({ ...current, resumeAgent: false }), true);
+    },
+
+    markSessionReady(_paneId) {
+      // Spawn chrome only. sessionReady is set by captureSession once this
+      // pane's own conversation exists — not here, or a remount would type
+      // `--resume` for an instance the user just opened fresh.
+    },
+
+    bindSession(paneId, sessionId) {
+      const pane = findPane(paneId);
+      if (!pane) return;
+      if (pane.sessionId === sessionId && pane.sessionReady) return;
+      patchPane(
+        paneId,
+        (current) => ({ ...current, sessionId, sessionReady: true }),
+        true,
+      );
+    },
+
+    async captureSession(paneId) {
+      const pane = findPane(paneId);
+      if (!pane?.agentId || !pane.resumeAgent) return;
+      const project = get().projects.find((item) => deckOfPane(item, paneId));
+      if (!project) return;
+      const agent = get().agents.find((entry) => entry.id === pane.agentId);
+      const store = agent?.session?.store;
+      if (store !== "grok" && store !== "claude") return;
+
+      const spawnedAt = activity.get(paneId)?.spawnedAt ?? Date.now();
+      const claimed = new Set<string>();
+      for (const item of get().projects) {
+        for (const deck of item.decks) {
+          for (const [id, other] of Object.entries(deck.panes)) {
+            if (id === paneId || !other.sessionId) continue;
+            if (other.agentId !== pane.agentId) continue;
+            claimed.add(other.sessionId);
+          }
+        }
+      }
+
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        if (attempt > 0) {
+          await new Promise((resolve) => setTimeout(resolve, 400));
+        }
+        const live = findPane(paneId);
+        if (!live?.resumeAgent) return;
+        const recent = await backend
+          .sessionRecent({
+            store,
+            cwd: live.cwd ?? project.path,
+            accountEnv: agent?.accountEnv ?? null,
+            accountId: live.accountId,
+          })
+          .catch(() => [] as { id: string; mtimeMs: number }[]);
+
+        if (live.sessionId && recent.some((hit) => hit.id === live.sessionId)) {
+          if (!live.sessionReady) get().bindSession(paneId, live.sessionId);
+          return;
+        }
+
+        // Only adopt a conversation this spawn just created — never an older
+        // chat sitting in the same folder (that would be `--resume` of someone
+        // else's session the next time this pane starts).
+        const created = recent.find(
+          (hit) => !claimed.has(hit.id) && hit.mtimeMs >= spawnedAt - 2000,
+        );
+        if (created) {
+          get().bindSession(paneId, created.id);
+          return;
+        }
+      }
     },
 
     openAgentSettings(agentId = null) {
@@ -721,9 +909,38 @@ export const useKeel = create<KeelState>((set, get) => {
         ...deck,
         panes: {
           ...deck.panes,
-          [paneId]: { ...deck.panes[paneId], title: clean },
+          [paneId]: {
+            ...deck.panes[paneId],
+            title: clean,
+            titleLocked: true,
+          },
         },
       }));
+    },
+
+    autoTitlePane(paneId, raw, source) {
+      const state = get();
+      for (const project of state.projects) {
+        const deck = deckOfPane(project, paneId);
+        const pane = deck?.panes[paneId];
+        if (!pane) continue;
+        if (pane.titleLocked || !pane.agentId) return;
+
+        const agent =
+          state.agents.find((entry) => entry.id === pane.agentId) ?? null;
+        const brief =
+          source === "prompt"
+            ? briefFromPrompt(raw)
+            : briefFromOsc(raw, agent);
+        if (!brief) return;
+        // OSC is often the program name or a path. A prompt is the work; once
+        // we have one, later OSC updates would only make the title noisier.
+        if (source === "osc" && !isGenericLabel(pane.title, agent)) return;
+        if (pane.title === brief) return;
+
+        patchPane(paneId, (current) => ({ ...current, title: brief }));
+        return;
+      }
     },
 
     moveProject(projectId, delta) {
@@ -912,6 +1129,9 @@ export const useKeel = create<KeelState>((set, get) => {
           id: paneId,
           agentId: spec.agentId,
           accountId: spec.accountId ?? null,
+          resumeAgent: spec.agentId !== null,
+          sessionId: nextSessionId(agents, spec.agentId),
+          sessionReady: false,
           title: spec.title ?? defaultTitle(agents, spec.agentId),
           cwd: spec.cwd ?? null,
         };
@@ -949,6 +1169,9 @@ export const useKeel = create<KeelState>((set, get) => {
             id: paneId,
             agentId: spec.agentId,
             accountId: spec.accountId ?? null,
+            resumeAgent: spec.agentId !== null,
+            sessionId: nextSessionId(agents, spec.agentId),
+            sessionReady: false,
             title: spec.title ?? defaultTitle(agents, spec.agentId),
             cwd: spec.cwd ?? null,
           };
@@ -1148,7 +1371,12 @@ export function startAttentionTracking(): () => void {
           const entry = activity.get(paneId);
           let current: PaneStatus = "idle";
 
-          if (pane.agentId !== null && entry && !(paneId in state.exited)) {
+          if (
+            pane.agentId !== null &&
+            pane.resumeAgent &&
+            entry &&
+            !(paneId in state.exited)
+          ) {
             if (entry.runStart !== null && now - entry.lastOutput >= QUIET_MS) {
               entry.runStart = null;
             }

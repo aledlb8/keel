@@ -20,9 +20,6 @@ importers:
       '@tauri-apps/plugin-opener':
         specifier: ^2.5.5
         version: 2.5.5
-      '@xterm/addon-fit':
-        specifier: ^0.11.0
-        version: 0.11.0
       '@xterm/addon-unicode11':
         specifier: ^0.9.0
         version: 0.9.0
@@ -1427,9 +1424,6 @@ packages:
         optional: true
       oxc-transform-react:
         optional: true
-
-  '@xterm/addon-fit@0.11.0':
-    resolution: {integrity: sha512-jYcgT6xtVYhnhgxh3QgYDnnNMYTcf8ElbxxFzX0IZo+vabQqSPAjC3c1wJrKB5E19VwQei89QCiZZP86DCPF7g==}
 
   '@xterm/addon-unicode11@0.9.0':
     resolution: {integrity: sha512-FxDnYcyuXhNl+XSqGZL/t0U9eiNb/q3EWT5rYkQT/zuig8Gz/VagnQANKHdDWFM2lTMk9ly0EFQxxxtZUoRetw==}
@@ -4174,8 +4168,6 @@ snapshots:
     dependencies:
       '@rolldown/pluginutils': 1.0.1
       vite: 8.2.2(@types/node@26.4.1)(jiti@2.7.0)
-
-  '@xterm/addon-fit@0.11.0': {}
 
   '@xterm/addon-unicode11@0.9.0': {}
 

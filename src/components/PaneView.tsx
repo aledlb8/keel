@@ -26,9 +26,11 @@ import {
   ContextMenuContent,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { applySession } from "@/lib/launch";
+import type { TitleSource } from "@/lib/paneTitle";
 import { agentAccent } from "@/lib/tokens";
-import { cn } from "@/lib/utils";
 import type { Agent, AgentAccount, Pane, PaneActivity } from "@/lib/types";
+import { cn } from "@/lib/utils";
 import { useKeel } from "@/state/store";
 
 export interface PaneViewProps {
@@ -54,6 +56,7 @@ export interface PaneViewProps {
   onAccountChange: (paneId: string, accountId: string | null) => void;
   onCreateAccount: (paneId: string, agentId: string, name: string) => void;
   onSpawnResult?: (paneId: string, ok: boolean, reason?: string) => void;
+  onTitle: (paneId: string, title: string, source: TitleSource) => void;
 }
 
 // A hairline of light along the slab's own top edge. Same trick as the glass
@@ -83,6 +86,7 @@ export const PaneView = memo(function PaneView({
   onAccountChange,
   onCreateAccount,
   onSpawnResult,
+  onTitle,
 }: PaneViewProps) {
   const renaming = useKeel(
     (state) =>
@@ -98,14 +102,15 @@ export const PaneView = memo(function PaneView({
           data-pane={pane.id}
           className={cn(
             "group/pane absolute flex flex-col overflow-hidden rounded-[var(--keel-r-window)]",
-            "transition-[box-shadow,border-color,opacity,visibility] duration-150 ease-out",
-            // Decks cross-fade rather than cut. `invisible` still lands once the
-            // fade ends (visibility switches discretely at the end of a
-            // transition), so nothing inside an off-screen pane can sit over
-            // this deck and eat clicks — and pointer events are cut the instant
-            // it starts hiding.
-            hidden ? "pointer-events-none invisible opacity-0" : "opacity-100",
+            "transition-[box-shadow,border-color] duration-150 ease-out",
+            // Instant hide, not a fade. Opacity-crossing a WebGL canvas blanks
+            // a frame and invalidates the chrome's compositing — that was the
+            // whole-app flash on deck/project switch. `invisible` keeps the
+            // node in layout (scrollback, GPU context) without covering the
+            // deck in front.
+            hidden && "pointer-events-none invisible",
           )}
+          aria-hidden={hidden}
           style={{
             left: rect?.left ?? 0,
             top: rect?.top ?? 0,
@@ -124,54 +129,62 @@ export const PaneView = memo(function PaneView({
           }}
         >
           <PaneHeader
-            pane={pane}
-            agent={agent}
-            accent={agentAccent(agent?.accent)}
-            accounts={accounts}
-            exited={exited}
-            focused={focused}
-            zoomed={zoomed}
-            cwd={cwd}
-            renaming={renaming}
-            onFocus={() => onFocus(pane.id)}
-            onSplit={(direction) => onSplit(pane.id, direction)}
-            onZoom={() => onZoom(pane.id)}
-            onClose={() => onClose(pane.id)}
-            onRestart={() => onRestart(pane.id)}
-            onAccountChange={(accountId) => onAccountChange(pane.id, accountId)}
-            onCreateAccount={(agentId, name) =>
-              onCreateAccount(pane.id, agentId, name)
-            }
-            onManageProfiles={() =>
-              useKeel.getState().openAgentSettings(agent?.id ?? null)
-            }
-            onStartRename={() =>
-              useKeel
-                .getState()
-                .startRename({ kind: "pane", id: pane.id, where: "pane" })
-            }
-            onRename={(title) =>
-              useKeel.getState().renamePane(projectId, pane.id, title)
-            }
-            onStopRename={() => useKeel.getState().stopRename()}
-          />
-
-          <div className="relative min-h-0 flex-1">
-            <TerminalSurface
-              paneId={pane.id}
-              cwd={cwd}
-              command={agent?.command ?? null}
-              accountEnv={agent?.accountEnv ?? null}
-              accountId={pane.accountId}
-              generation={generation}
-              visible={!hidden}
+              pane={pane}
+              agent={agent}
+              accent={agentAccent(agent?.accent)}
+              accounts={accounts}
+              exited={exited}
               focused={focused}
-              onOutput={onOutput}
-              onActivity={onActivity}
-              onFocus={onFocus}
-              onSpawnResult={onSpawnResult}
+              zoomed={zoomed}
+              cwd={cwd}
+              renaming={renaming}
+              onFocus={() => onFocus(pane.id)}
+              onSplit={(direction) => onSplit(pane.id, direction)}
+              onZoom={() => onZoom(pane.id)}
+              onClose={() => onClose(pane.id)}
+              onRestart={() => onRestart(pane.id)}
+              onAccountChange={(accountId) => onAccountChange(pane.id, accountId)}
+              onCreateAccount={(agentId, name) =>
+                onCreateAccount(pane.id, agentId, name)
+              }
+              onManageProfiles={() =>
+                useKeel.getState().openAgentSettings(agent?.id ?? null)
+              }
+              onStartRename={() =>
+                useKeel
+                  .getState()
+                  .startRename({ kind: "pane", id: pane.id, where: "pane" })
+              }
+              onRename={(title) =>
+                useKeel.getState().renamePane(projectId, pane.id, title)
+              }
+              onStopRename={() => useKeel.getState().stopRename()}
             />
-          </div>
+
+            <div className="relative min-h-0 flex-1">
+              <TerminalSurface
+                paneId={pane.id}
+                cwd={cwd}
+                command={
+                  pane.resumeAgent && agent
+                    ? applySession(agent.command, agent.session, {
+                        sessionId: pane.sessionId,
+                        sessionReady: pane.sessionReady,
+                      })
+                    : null
+                }
+                accountEnv={agent?.accountEnv ?? null}
+                accountId={pane.accountId}
+                generation={generation}
+                visible={!hidden}
+                focused={focused}
+                onOutput={onOutput}
+                onActivity={onActivity}
+                onFocus={onFocus}
+                onSpawnResult={onSpawnResult}
+                onTitle={onTitle}
+              />
+            </div>
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent>

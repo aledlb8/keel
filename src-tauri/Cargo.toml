@@ -27,6 +27,9 @@ serde_json = "1"
 portable-pty = "0.9"
 tauri-plugin-dialog = "2"
 
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["tlhelp32", "handleapi"] }
+
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

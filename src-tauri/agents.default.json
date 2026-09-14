@@ -3,6 +3,11 @@
     "id": "claude",
     "name": "Claude Code",
     "command": "claude",
+    "session": {
+      "start": "--session-id {id}",
+      "resume": "--resume {id}",
+      "store": "claude"
+    },
     "accountEnv": "CLAUDE_CONFIG_DIR",
     "short": "CC",
     "accent": "#d97757",
@@ -20,6 +25,10 @@
     "id": "codex",
     "name": "Codex",
     "command": "codex",
+    "session": {
+      "kind": "subcommand",
+      "resume": "resume {id}"
+    },
     "accountEnv": "CODEX_HOME",
     "short": "CX",
     "accent": "#10a37f",
@@ -37,6 +46,9 @@
     "id": "gemini",
     "name": "Gemini CLI",
     "command": "gemini",
+    "session": {
+      "resume": "--resume {id}"
+    },
     "accountEnv": "GEMINI_CLI_HOME",
     "short": "GM",
     "accent": "#4285f4",
@@ -53,6 +65,9 @@
     "id": "opencode",
     "name": "opencode",
     "command": "opencode",
+    "session": {
+      "resume": "--session {id}"
+    },
     "accountEnv": "XDG_DATA_HOME",
     "short": "OC",
     "accent": "#e5c07b",
@@ -70,6 +85,11 @@
     "id": "grok",
     "name": "Grok Build",
     "command": "grok",
+    "session": {
+      "start": "--session-id {id}",
+      "resume": "--resume {id}",
+      "store": "grok"
+    },
     "accountEnv": "GROK_HOME",
     "short": "GR",
     "accent": "#f5f5f5",
@@ -87,6 +107,9 @@
     "id": "cursor-agent",
     "name": "Cursor Agent",
     "command": "cursor-agent",
+    "session": {
+      "resume": "--resume {id}"
+    },
     "short": "CU",
     "accent": "#a0a0a0",
     "bins": ["cursor-agent"],
@@ -96,6 +119,9 @@
     "id": "aider",
     "name": "Aider",
     "command": "aider",
+    "session": {
+      "resume": "--restore-chat-history"
+    },
     "short": "AI",
     "accent": "#8b5cf6",
     "bins": ["aider"],

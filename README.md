@@ -144,8 +144,9 @@ Agent changes save as you type.
 The catalogue file only stores what differs from the built-in list, so a default that
 changes in a later release still reaches every agent you never touched.
 
-Live agent sessions do not survive a restart — layouts do. Reopening a project starts
-its shells again and retypes each agent command.
+Reopening a project starts its shells again. Agent panes that were still in a
+conversation resume that same chat (via each CLI's resume flag); panes you had
+already dropped back to a shell stay a shell.
 
 ## Checks
 

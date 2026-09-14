@@ -123,7 +123,7 @@ export function PaneHeader({
   return (
     <div
       data-no-select
-      className="flex h-7 shrink-0 items-center gap-1 border-b border-line pl-2.5 pr-1"
+      className="flex h-7 shrink-0 items-center gap-1 pl-2.5 pr-1"
       onMouseDown={(event) => {
         // The profile menu is portalled to <body>, but React still bubbles its
         // events up through here. Only presses that physically landed on the
