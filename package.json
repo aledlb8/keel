@@ -2,6 +2,16 @@
   "name": "keel",
   "private": true,
   "version": "0.1.0",
+  "description": "A desktop workspace for running many AI coding agents at once.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aledlb8/keel.git"
+  },
+  "homepage": "https://github.com/aledlb8/keel",
+  "bugs": {
+    "url": "https://github.com/aledlb8/keel/issues"
+  },
   "type": "module",
   "packageManager": "pnpm@11.25.0",
   "engines": {
@@ -10,9 +20,11 @@
   },
   "scripts": {
     "dev": "tauri dev",
+    "dev:web": "vite",
     "build:app": "tauri build && node scripts/artifacts.mjs",
     "build:app:debug": "tauri build --debug && node scripts/artifacts.mjs --debug",
-    "build": "tauri build --no-bundle && node scripts/artifacts.mjs",
+    "build": "tauri build --no-bundle && node scripts/artifacts.mjs --binary-only",
+    "build:web": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "tsc --noEmit -p tsconfig.test.json && node --test \"src/**/*.test.ts\"",

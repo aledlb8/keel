@@ -134,5 +134,5 @@ if (missing.length > 0) {
 if (optional.length > 0) {
   console.log(`${YELLOW}Ready to build.${RESET} Optional tooling absent: ${optional.map((r) => r.name).join(", ")}\n`);
 } else {
-  console.log(`${GREEN}Ready to build.${RESET} Run \`pnpm build:app\` for installers, or \`pnpm build:exe\` for just the binary.\n`);
+  console.log(`${GREEN}Ready to build.${RESET} Run \`pnpm build:app\` for installers, or \`pnpm build\` for just the binary.\n`);
 }
