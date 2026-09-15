@@ -520,9 +520,9 @@ function SidebarRail({
     <RailTipProvider>
       <nav aria-label="Projects" className="k-dock-rail" inert={hidden}>
         {/* The toggle's slot, level with the panel's header. */}
-        <div className="h-[44px] shrink-0" />
+        <div className="h-[44px] w-full shrink-0" />
 
-        <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto overflow-x-hidden pb-2 pt-1 [scrollbar-width:none]">
+        <div className="flex min-h-0 w-full flex-1 flex-col items-center gap-1 overflow-y-auto overflow-x-hidden pb-2 pt-1 [scrollbar-width:none]">
           {projects.map((project, index) => (
             <RailTile
               key={project.id}

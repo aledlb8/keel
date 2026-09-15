@@ -114,8 +114,8 @@ export function Inspector({
       <RailTipProvider>
         <nav aria-label="Files and git" className="k-dock-rail" inert={!collapsed}>
           {/* The toggle's slot, level with the panel's header. */}
-          <div className="h-[44px] shrink-0" />
-          <div className="flex flex-col gap-1 pt-1">
+          <div className="h-[44px] w-full shrink-0" />
+          <div className="flex w-full flex-col items-center gap-1 pt-1">
             <RailTip side="left" label="Files" detail={projectName ?? undefined}>
               <button
                 type="button"

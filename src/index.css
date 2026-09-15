@@ -530,6 +530,7 @@
 
     .k-dock > .k-dock-rail {
         width: calc(var(--rail-width) - 2px);
+        align-items: center;
         opacity: 0;
         filter: blur(4px);
         pointer-events: none;
@@ -567,6 +568,11 @@
         pointer-events: auto;
         transition-duration: 300ms, 420ms, 300ms;
         transition-delay: 120ms;
+    }
+
+    .k-dock[data-side="left"][data-collapsed="true"] > .k-dock-rail,
+    .k-dock[data-side="right"][data-collapsed="true"] > .k-dock-rail {
+        transform: none;
     }
 
     /* Unfolding: the reverse, so the panel settles in as the card widens. */
@@ -1044,6 +1050,7 @@
         position: relative;
         display: grid;
         place-items: center;
+        align-self: center;
         width: 36px;
         height: 36px;
         margin-inline: auto;
@@ -1322,6 +1329,14 @@
 /* Keep panel, menu and editor content steady as vertical overflow changes. */
 :where(.overflow-y-auto, .overflow-auto, .cm-scroller) {
     scrollbar-gutter: stable;
+}
+
+/* Unlayered on purpose: the rule above is unlayered, so a layered override
+   cannot win. A 50px rail has no spare strip for a gutter; reserving one
+   shoves every tile toward the window edge. */
+.k-dock-rail,
+.k-dock-rail * {
+    scrollbar-gutter: auto;
 }
 
 @media (prefers-reduced-motion: reduce) {
