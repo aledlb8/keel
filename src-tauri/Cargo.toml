@@ -39,6 +39,7 @@ winapi = { version = "0.3", features = [
     "ipmib",
     "winerror",
     "fileapi",
+    "ioapiset",
     "winbase",
     "namedpipeapi",
     "processthreadsapi",

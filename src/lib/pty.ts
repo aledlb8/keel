@@ -8,7 +8,7 @@
 import { Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
-import { invoke } from "@/lib/invoke";
+import { invoke } from "./invoke.ts";
 
 export interface SpawnOptions {
   id: string;

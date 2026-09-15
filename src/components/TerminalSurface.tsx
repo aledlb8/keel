@@ -12,7 +12,8 @@
  *     that disagrees with the PTY by a single column is what garbles agent TUIs.
  */
 
-import { memo, useEffect, useRef } from "react";
+import { memo, useEffect, useRef, useState } from "react";
+import { LoaderCircle } from "lucide-react";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
@@ -270,6 +271,11 @@ export const TerminalSurface = memo(function TerminalSurface({
   onTitle,
 }: TerminalSurfaceProps) {
   const spawnAllowed = useKeel((state) => state.vpn.spawnAllowed);
+  const restoring = useKeel((state) =>
+    state.restoreStatus === "restoring" && paneId in state.restorePanes,
+  );
+  const [settledGeneration, setSettledGeneration] = useState<number | null>(null);
+  const starting = settledGeneration !== generation;
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   /** Wired up by the setup effect; the later effects only ever call these. */
@@ -563,10 +569,13 @@ export const TerminalSurface = memo(function TerminalSurface({
         actions.current.syncPty();
         handlers.current.onSpawnResult?.(paneId, true);
       } catch (error) {
+        if (cancelled) return;
         const reason = String(error);
         // Keep a brief stream note; actionable UI lives in toast + Relaunch.
         term.writeln(`\r\n\x1b[31m${reason}\x1b[0m`);
-        if (!cancelled) handlers.current.onSpawnResult?.(paneId, false, reason);
+        handlers.current.onSpawnResult?.(paneId, false, reason);
+      } finally {
+        if (!cancelled) setSettledGeneration(generation);
       }
     };
 
@@ -588,10 +597,30 @@ export const TerminalSurface = memo(function TerminalSurface({
     // is a second frame of pane around theirs. `isolate` keeps xterm's
     // z-indexed layers from stacking over the header.
     <div
-      className="isolate h-full w-full overflow-hidden"
+      className="relative isolate h-full w-full overflow-hidden"
       onMouseDown={() => onFocus(paneId)}
     >
       <div ref={hostRef} className="h-full w-full overflow-hidden" />
+      {starting ? (
+        <div className="absolute inset-0 z-10 grid place-items-center bg-[color:var(--keel-term-solid)]">
+          <div role="status" className="flex max-w-64 flex-col items-center gap-2 px-4 text-center">
+            <LoaderCircle aria-hidden className="size-5 text-faint motion-safe:animate-spin" />
+            <p className="text-[13px] font-medium text-dim">
+              {!spawnAllowed ? "Waiting for VPN…" : restoring ? "Restoring terminal…" : "Starting terminal…"}
+            </p>
+            <p className="text-[12px] leading-relaxed text-faint">
+              {!spawnAllowed
+                ? "This terminal will start when the connection attempt finishes."
+                : "Opening the shell and preparing your session."}
+            </p>
+            {!spawnAllowed ? (
+              <button type="button" className="k-tag mt-1" onClick={() => useKeel.getState().openVpnSettings()}>
+                VPN settings
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 });

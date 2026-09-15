@@ -22,13 +22,14 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Manager};
 
 use crate::vpn_profile::{self, DiscoveredProfile};
 use crate::vpn_proxy::{self, ProxyHandle};
 use crate::vpn_service;
 
-const CONNECT_WAIT: Duration = Duration::from_secs(45);
+// One budget for service startup and both adapter attempts, not 45s per driver.
+const CONNECT_WAIT: Duration = Duration::from_secs(30);
 const LOG_POLL: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -85,6 +86,14 @@ enum OpenVpnProc {
 }
 
 impl OpenVpnProc {
+    fn is_running(&mut self) -> bool {
+        match self {
+            #[cfg(not(windows))]
+            Self::Child(child) => matches!(child.try_wait(), Ok(None)),
+            Self::Service { pid } => vpn_service::pid_running(*pid),
+        }
+    }
+
     fn terminate(&mut self) {
         match self {
             #[cfg(not(windows))]
@@ -119,6 +128,7 @@ impl Default for VpnState {
 #[derive(Default)]
 pub struct VpnManager {
     inner: Arc<Mutex<VpnState>>,
+    connecting: Mutex<()>,
 }
 
 impl VpnManager {
@@ -265,7 +275,11 @@ fn set_phase(
 }
 
 #[tauri::command]
-pub fn vpn_snapshot(manager: State<'_, VpnManager>) -> VpnSnapshot {
+pub async fn vpn_snapshot(app: AppHandle) -> Result<VpnSnapshot, String> {
+    crate::blocking::run(move || Ok(refresh_snapshot(app.state::<VpnManager>().inner()))).await
+}
+
+fn refresh_snapshot(manager: &VpnManager) -> VpnSnapshot {
     let mut snap = manager.snapshot();
     // Refresh discovery each time the UI asks — profiles appear after import.
     let profiles = vpn_profile::discover_profiles();
@@ -285,14 +299,36 @@ pub async fn vpn_connect(
     app: AppHandle,
     profile_id: Option<String>,
 ) -> Result<VpnSnapshot, String> {
-    tauri::async_runtime::spawn_blocking(move || connect_inner(&app, profile_id.as_deref()))
-        .await
-        .map_err(|err| err.to_string())?
+    crate::blocking::run(move || {
+        let state = app.state::<VpnManager>();
+        let manager = state.inner();
+        let _connecting = manager
+            .connecting
+            .try_lock()
+            .map_err(|_| "A VPN connection attempt is already running.".to_string())?;
+        let result = connect_inner(&app, profile_id.as_deref());
+        if let Err(error) = &result {
+            // Discovery/config/service failures must settle the backend too.
+            let _ = set_phase(manager, |snap| {
+                snap.phase = "error".into();
+                snap.error = Some(error.clone());
+            });
+        }
+        result
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn vpn_disconnect(manager: State<'_, VpnManager>) -> Result<VpnSnapshot, String> {
-    manager.disconnect()
+pub async fn vpn_disconnect(app: AppHandle) -> Result<VpnSnapshot, String> {
+    crate::blocking::run(move || {
+        let manager = app.state::<VpnManager>();
+        let _connecting = manager.connecting.try_lock().map_err(|_| {
+            "The VPN is still connecting. Wait for this attempt to finish.".to_string()
+        })?;
+        manager.disconnect()
+    })
+    .await
 }
 
 fn connect_inner(app: &AppHandle, wanted: Option<&str>) -> Result<VpnSnapshot, String> {
@@ -343,10 +379,15 @@ fn connect_inner(app: &AppHandle, wanted: Option<&str>) -> Result<VpnSnapshot, S
 
     let log_path = work_dir(app)?.join("openvpn.log");
     let config_path = openvpn_config_path()?;
+    let deadline = Instant::now() + CONNECT_WAIT;
     let drivers: [Option<&str>; 2] = [None, Some("tap-windows6")];
     let mut last_err: Option<String> = None;
 
     for (attempt, driver) in drivers.iter().enumerate() {
+        if Instant::now() >= deadline {
+            last_err = Some("The VPN connection attempt timed out after 30 seconds.".into());
+            break;
+        }
         let isolated = match *driver {
             Some(driver) => vpn_profile::isolate_profile_with(&source, Some(driver)),
             None => vpn_profile::isolate_profile(&source),
@@ -357,7 +398,7 @@ fn connect_inner(app: &AppHandle, wanted: Option<&str>) -> Result<VpnSnapshot, S
         std::fs::write(&config_path, &isolated).map_err(|err| err.to_string())?;
         let _ = std::fs::write(&log_path, b"");
 
-        let mut process = match start_openvpn(&openvpn, &config_path, &log_path) {
+        let mut process = match start_openvpn(&openvpn, &config_path, &log_path, deadline) {
             Ok(process) => process,
             Err(err) => {
                 last_err = Some(err);
@@ -365,7 +406,7 @@ fn connect_inner(app: &AppHandle, wanted: Option<&str>) -> Result<VpnSnapshot, S
             }
         };
 
-        match wait_for_tunnel(&log_path, Instant::now() + CONNECT_WAIT) {
+        match wait_for_tunnel(&log_path, deadline, || process.is_running()) {
             Ok(up) => match finish_connect(manager, process, chosen, up) {
                 Ok(snap) => return Ok(snap),
                 Err(err) => {
@@ -394,7 +435,10 @@ fn connect_inner(app: &AppHandle, wanted: Option<&str>) -> Result<VpnSnapshot, S
 
 fn is_adapter_ip_failure(err: &str) -> bool {
     let lower = err.to_ascii_lowercase();
-    (lower.contains("netsh") || lower.contains("tunnel ip") || lower.contains("adapter ip"))
+    (lower.contains("netsh")
+        || lower.contains("tunnel ip")
+        || lower.contains("adapter ip")
+        || lower.contains("dco adapter"))
         && !lower.contains("could not reach")
         && !lower.contains("could not talk")
 }
@@ -415,15 +459,21 @@ struct TunnelUp {
     isolated: bool,
 }
 
-fn start_openvpn(exe: &Path, config: &Path, log: &Path) -> Result<OpenVpnProc, String> {
+fn start_openvpn(
+    exe: &Path,
+    config: &Path,
+    log: &Path,
+    deadline: Instant,
+) -> Result<OpenVpnProc, String> {
     #[cfg(windows)]
     {
         let _ = exe;
-        let pid = vpn_service::start_openvpn(config, log)?;
+        let pid = vpn_service::start_openvpn(config, log, deadline)?;
         Ok(OpenVpnProc::Service { pid })
     }
     #[cfg(not(windows))]
     {
+        let _ = deadline;
         spawn_openvpn_direct(exe, config, log)
     }
 }
@@ -447,18 +497,28 @@ fn spawn_openvpn_direct(exe: &Path, config: &Path, log: &Path) -> Result<OpenVpn
         .map_err(|err| format!("Could not start openvpn.exe: {err}"))
 }
 
-fn wait_for_tunnel(log: &Path, deadline: Instant) -> Result<TunnelUp, String> {
+fn wait_for_tunnel(
+    log: &Path,
+    deadline: Instant,
+    mut is_running: impl FnMut() -> bool,
+) -> Result<TunnelUp, String> {
     loop {
         let text = std::fs::read_to_string(log).unwrap_or_default();
         if let Some(msg) = vpn_service::diagnose_log(&text) {
             return Err(msg);
+        }
+        if !is_running() {
+            return Err(
+                "OpenVPN stopped before the tunnel was ready. Check the profile and try again."
+                    .into(),
+            );
         }
         if Instant::now() > deadline {
             if let Some(msg) = vpn_service::diagnose_log(&text) {
                 return Err(msg);
             }
             return Err(
-                "The private tunnel did not come up in time. Open Help › OpenVPN and try again."
+                "The VPN server did not establish a tunnel within 30 seconds. Check your connection or try another profile."
                     .into(),
             );
         }
@@ -654,6 +714,69 @@ mod tests {
     use super::log_ifconfig_ip;
     use crate::vpn_service::diagnose_log;
 
+    struct TempLog(std::path::PathBuf);
+
+    impl TempLog {
+        fn new(text: &str) -> Self {
+            let nonce = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir()
+                .join(format!("keel-vpn-test-{}-{nonce}.log", std::process::id()));
+            std::fs::write(&path, text).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TempLog {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    #[test]
+    fn denied_dco_adapter_triggers_fallback_without_waiting_for_timeout() {
+        let log = TempLog::new("dco connect error: Access is denied. (errno=5)\nSIGUSR1[soft,dco-connect-error] received, process restarting\n");
+        let error = super::wait_for_tunnel(
+            &log.0,
+            std::time::Instant::now() + super::CONNECT_WAIT,
+            || true,
+        )
+        .err()
+        .expect("adapter failure");
+        assert!(super::is_adapter_ip_failure(&error));
+        assert!(!super::is_adapter_ip_failure(
+            "The VPN server rejected the login."
+        ));
+    }
+
+    #[test]
+    fn exited_process_fails_without_waiting_for_timeout() {
+        let log = TempLog::new("");
+        let error = super::wait_for_tunnel(
+            &log.0,
+            std::time::Instant::now() + super::CONNECT_WAIT,
+            || false,
+        )
+        .err()
+        .expect("process exited");
+        assert!(error.contains("stopped before"));
+    }
+
+    #[test]
+    fn exhausted_connection_budget_does_not_start_another_wait() {
+        let log = TempLog::new("Server poll timeout, restarting\n");
+        let error = super::wait_for_tunnel(
+            &log.0,
+            std::time::Instant::now() - std::time::Duration::from_millis(1),
+            || true,
+        )
+        .err()
+        .expect("deadline elapsed");
+        assert!(error.contains("30 seconds"));
+    }
+
     /// Opt-in: connects the profile named by KEEL_VPN_SMOKE_PROFILE and checks
     /// an HTTPS request through Keel's proxy. Never runs in the regular suite.
     #[cfg(windows)]
@@ -700,16 +823,26 @@ mod tests {
         };
         let before = default_route_if_index().expect("normal route is available");
         std::fs::write(&cleanup.config, vpn_profile::isolate_profile(&source)).unwrap();
-        cleanup.process =
-            Some(start_openvpn(&find_openvpn().unwrap(), &cleanup.config, &cleanup.log).unwrap());
-        let up =
-            wait_for_tunnel(&cleanup.log, Instant::now() + CONNECT_WAIT).unwrap_or_else(|err| {
-                let log = std::fs::read_to_string(&cleanup.log).unwrap_or_default();
-                for line in log.lines().filter(|line| line.contains("AUTH_FAILED")) {
-                    eprintln!("{line}");
-                }
-                panic!("{err}");
-            });
+        let deadline = Instant::now() + CONNECT_WAIT;
+        cleanup.process = Some(
+            start_openvpn(
+                &find_openvpn().unwrap(),
+                &cleanup.config,
+                &cleanup.log,
+                deadline,
+            )
+            .unwrap(),
+        );
+        let up = wait_for_tunnel(&cleanup.log, deadline, || {
+            cleanup.process.as_mut().unwrap().is_running()
+        })
+        .unwrap_or_else(|err| {
+            let log = std::fs::read_to_string(&cleanup.log).unwrap_or_default();
+            for line in log.lines().filter(|line| line.contains("AUTH_FAILED")) {
+                eprintln!("{line}");
+            }
+            panic!("{err}");
+        });
         assert!(up.isolated, "tunnel must not become the normal route");
         assert_eq!(default_route_if_index(), Some(before));
         let text = std::fs::read_to_string(&cleanup.log).unwrap();

@@ -55,6 +55,9 @@ pub fn parse_service_reply(text: &str) -> Result<u32, String> {
 /// Turn an OpenVPN log into one sentence the UI can show.
 pub fn diagnose_log(text: &str) -> Option<String> {
     let lower = text.to_ascii_lowercase();
+    if lower.contains("dco connect error:") && lower.contains("access is denied") {
+        return Some("Windows denied access to the OpenVPN DCO adapter. Trying the TAP adapter may resolve this.".into());
+    }
     if lower.contains("auth_failed") || lower.contains("auth-failure") {
         if lower.contains("license") && lower.contains("connection") {
             return Some("The VPN server has reached its licensed connection limit. Disconnect an unused VPN session or wait for the previous session to expire, then try again.".into());
@@ -98,38 +101,64 @@ fn last_meaningful_line(text: &str) -> Option<&str> {
 }
 
 #[cfg(windows)]
-pub fn start_openvpn(config: &std::path::Path, log: &std::path::Path) -> Result<u32, String> {
-    start_openvpn_windows(config, log)
+pub fn start_openvpn(
+    config: &std::path::Path,
+    log: &std::path::Path,
+    deadline: std::time::Instant,
+) -> Result<u32, String> {
+    start_openvpn_windows(config, log, deadline)
 }
 
 #[cfg(not(windows))]
-pub fn start_openvpn(config: &std::path::Path, log: &std::path::Path) -> Result<u32, String> {
-    let _ = (config, log);
+pub fn start_openvpn(
+    config: &std::path::Path,
+    log: &std::path::Path,
+    deadline: std::time::Instant,
+) -> Result<u32, String> {
+    let _ = (config, log, deadline);
     Err("The OpenVPN Interactive Service exists only on Windows.".into())
 }
 
 #[cfg(windows)]
-fn start_openvpn_windows(config: &std::path::Path, log: &std::path::Path) -> Result<u32, String> {
+fn start_openvpn_windows(
+    config: &std::path::Path,
+    log: &std::path::Path,
+    deadline: std::time::Instant,
+) -> Result<u32, String> {
     use winapi::shared::winerror::ERROR_FILE_NOT_FOUND;
 
     const PIPE_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
     const STARTUP_WAIT: std::time::Duration = std::time::Duration::from_secs(15);
 
-    let pipe = match open_service_pipe(false, PIPE_WAIT) {
+    let pipe = match open_service_pipe(
+        false,
+        PIPE_WAIT.min(deadline.saturating_duration_since(std::time::Instant::now())),
+    ) {
         Ok(pipe) => pipe,
         Err(err) if err.raw_os_error() == Some(ERROR_FILE_NOT_FOUND as i32) => {
-            try_start_interactive_service()?;
-            open_service_pipe(true, STARTUP_WAIT).map_err(describe_pipe_open_error)?
+            try_start_interactive_service(deadline)?;
+            open_service_pipe(
+                true,
+                STARTUP_WAIT.min(deadline.saturating_duration_since(std::time::Instant::now())),
+            )
+            .map_err(describe_pipe_open_error)?
         }
         Err(err) => return Err(describe_pipe_open_error(err)),
     };
 
-    send_startup(pipe, config, log)
+    send_startup(
+        pipe,
+        config,
+        log,
+        deadline.min(std::time::Instant::now() + std::time::Duration::from_secs(10)),
+    )
 }
 
 #[cfg(windows)]
-fn try_start_interactive_service() -> Result<(), String> {
-    recover_service_start(start_service_if_stopped(), start_service_elevated)
+fn try_start_interactive_service(deadline: std::time::Instant) -> Result<(), String> {
+    recover_service_start(start_service_if_stopped(), || {
+        start_service_elevated(deadline)
+    })
 }
 
 /// Only an access-rights failure warrants UAC. Missing/disabled services and
@@ -228,7 +257,7 @@ fn start_service_if_stopped() -> Result<(), std::io::Error> {
 /// Elevate only Windows' service-control utility with fixed arguments. Keel,
 /// terminals, profile contents, and the VPN engine retain the user's token.
 #[cfg(windows)]
-fn start_service_elevated() -> Result<(), std::io::Error> {
+fn start_service_elevated(deadline: std::time::Instant) -> Result<(), std::io::Error> {
     use winapi::shared::winerror::ERROR_TIMEOUT;
     use winapi::um::handleapi::CloseHandle;
     use winapi::um::processthreadsapi::GetExitCodeProcess;
@@ -272,7 +301,9 @@ fn start_service_elevated() -> Result<(), std::io::Error> {
             "Windows did not return the service starter process",
         ));
     }
-    let wait = unsafe { WaitForSingleObject(info.hProcess, 30_000) };
+    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+    let wait_ms = remaining.as_millis().min(u32::MAX as u128) as u32;
+    let wait = unsafe { WaitForSingleObject(info.hProcess, wait_ms) };
     let result = if wait == WAIT_OBJECT_0 {
         let mut code = 0;
         if unsafe { GetExitCodeProcess(info.hProcess, &mut code) } == 0 {
@@ -292,10 +323,10 @@ fn start_service_elevated() -> Result<(), std::io::Error> {
 }
 
 #[cfg(windows)]
-struct ServicePipe(winapi::shared::ntdef::HANDLE);
+struct OwnedHandle(winapi::shared::ntdef::HANDLE);
 
 #[cfg(windows)]
-impl Drop for ServicePipe {
+impl Drop for OwnedHandle {
     fn drop(&mut self) {
         unsafe {
             winapi::um::handleapi::CloseHandle(self.0);
@@ -323,13 +354,14 @@ fn service_pipe_name() -> Vec<u16> {
 fn open_service_pipe(
     wait_for_creation: bool,
     timeout: std::time::Duration,
-) -> Result<ServicePipe, std::io::Error> {
+) -> Result<OwnedHandle, std::io::Error> {
     use std::ptr::null_mut;
 
     use winapi::shared::winerror::{ERROR_FILE_NOT_FOUND, ERROR_PIPE_BUSY, ERROR_SEM_TIMEOUT};
     use winapi::um::fileapi::{CreateFileW, OPEN_EXISTING};
     use winapi::um::handleapi::INVALID_HANDLE_VALUE;
     use winapi::um::namedpipeapi::WaitNamedPipeW;
+    use winapi::um::winbase::FILE_FLAG_OVERLAPPED;
     use winapi::um::winnt::{GENERIC_READ, GENERIC_WRITE};
 
     const CREATION_POLL: std::time::Duration = std::time::Duration::from_millis(50);
@@ -344,12 +376,12 @@ fn open_service_pipe(
                 0,
                 null_mut(),
                 OPEN_EXISTING,
-                0,
+                FILE_FLAG_OVERLAPPED,
                 null_mut(),
             )
         };
         if handle != INVALID_HANDLE_VALUE {
-            return Ok(ServicePipe(handle));
+            return Ok(OwnedHandle(handle));
         }
 
         let open_error = std::io::Error::last_os_error();
@@ -409,9 +441,10 @@ fn describe_pipe_open_error(err: std::io::Error) -> String {
 
 #[cfg(windows)]
 fn send_startup(
-    pipe: ServicePipe,
+    pipe: OwnedHandle,
     config: &std::path::Path,
     log: &std::path::Path,
+    deadline: std::time::Instant,
 ) -> Result<u32, String> {
     use std::ptr::null_mut;
 
@@ -445,22 +478,18 @@ fn send_startup(
             msg.len() * std::mem::size_of::<u16>(),
         )
     };
-    let mut written: DWORD = 0;
-    let write_ok = unsafe {
+    let written = pipe_io(pipe.0, deadline, |overlapped, transferred| unsafe {
         WriteFile(
             pipe.0,
             bytes.as_ptr().cast(),
             bytes.len() as DWORD,
-            &mut written,
-            null_mut(),
+            transferred,
+            overlapped,
         )
-    };
-    if write_ok == 0 {
-        return Err(format!(
-            "Could not send the start request to the OpenVPN Interactive Service: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
+    })
+    .map_err(|err| {
+        format!("Could not send the start request to the OpenVPN Interactive Service: {err}")
+    })?;
     if written as usize != bytes.len() {
         return Err(format!(
             "Could not send the complete start request to the OpenVPN Interactive Service (wrote {written} of {} bytes).",
@@ -469,21 +498,18 @@ fn send_startup(
     }
 
     let mut buf = vec![0u8; 4096];
-    let mut read: DWORD = 0;
-    let read_ok = unsafe {
+    let read = pipe_io(pipe.0, deadline, |overlapped, transferred| unsafe {
         ReadFile(
             pipe.0,
             buf.as_mut_ptr().cast(),
             buf.len() as DWORD,
-            &mut read,
-            null_mut(),
+            transferred,
+            overlapped,
         )
-    };
-    if read_ok == 0 || read == 0 {
-        return Err(format!(
-            "The OpenVPN Interactive Service did not reply: {}",
-            std::io::Error::last_os_error()
-        ));
+    })
+    .map_err(|err| format!("The OpenVPN Interactive Service did not reply: {err}"))?;
+    if read == 0 {
+        return Err("The OpenVPN Interactive Service closed without a reply.".into());
     }
     if !read.is_multiple_of(2) {
         return Err("The OpenVPN Interactive Service returned malformed UTF-16 data.".into());
@@ -497,6 +523,87 @@ fn send_startup(
         .trim_end_matches('\0')
         .to_string();
     parse_service_reply(&text)
+}
+
+/// Bound both service writes and reads. Cancellation must finish before the
+/// OVERLAPPED and caller's buffer can leave scope (Windows still owns them).
+#[cfg(windows)]
+fn pipe_io(
+    pipe: winapi::shared::ntdef::HANDLE,
+    deadline: std::time::Instant,
+    start: impl FnOnce(*mut winapi::um::minwinbase::OVERLAPPED, *mut u32) -> i32,
+) -> Result<u32, std::io::Error> {
+    use std::ptr::null_mut;
+    use winapi::shared::winerror::ERROR_IO_PENDING;
+    use winapi::um::ioapiset::{CancelIoEx, GetOverlappedResult};
+    use winapi::um::synchapi::{CreateEventW, WaitForSingleObject};
+    use winapi::um::winbase::WAIT_OBJECT_0;
+
+    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+    if remaining.is_zero() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "VPN service timed out",
+        ));
+    }
+    let event = unsafe { CreateEventW(null_mut(), 1, 0, null_mut()) };
+    if event.is_null() {
+        return Err(std::io::Error::last_os_error());
+    }
+    let event = OwnedHandle(event);
+    let mut overlapped: winapi::um::minwinbase::OVERLAPPED = unsafe { std::mem::zeroed() };
+    overlapped.hEvent = event.0;
+    let mut transferred = 0;
+    if start(&mut overlapped, &mut transferred) != 0 {
+        return Ok(transferred);
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() != Some(ERROR_IO_PENDING as i32) {
+        return Err(error);
+    }
+    let wait_ms = remaining.as_millis().clamp(1, u32::MAX as u128) as u32;
+    if unsafe { WaitForSingleObject(event.0, wait_ms) } != WAIT_OBJECT_0 {
+        unsafe {
+            CancelIoEx(pipe, &mut overlapped);
+            GetOverlappedResult(pipe, &mut overlapped, &mut transferred, 1);
+        }
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "VPN service timed out",
+        ));
+    }
+    if unsafe { GetOverlappedResult(pipe, &mut overlapped, &mut transferred, 0) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(transferred)
+}
+
+#[cfg(windows)]
+pub fn pid_running(pid: u32) -> bool {
+    use winapi::shared::winerror::ERROR_INVALID_PARAMETER;
+    use winapi::um::handleapi::CloseHandle;
+    use winapi::um::processthreadsapi::OpenProcess;
+    use winapi::um::synchapi::WaitForSingleObject;
+    use winapi::um::winbase::WAIT_OBJECT_0;
+    use winapi::um::winnt::SYNCHRONIZE;
+
+    unsafe {
+        let handle = OpenProcess(SYNCHRONIZE, 0, pid);
+        if handle.is_null() {
+            // Only a missing PID proves exit. Access restrictions or a failed
+            // query must leave the log/deadline checks in charge.
+            return std::io::Error::last_os_error().raw_os_error()
+                != Some(ERROR_INVALID_PARAMETER as i32);
+        }
+        let running = WaitForSingleObject(handle, 0) != WAIT_OBJECT_0;
+        CloseHandle(handle);
+        running
+    }
+}
+
+#[cfg(not(windows))]
+pub fn pid_running(_pid: u32) -> bool {
+    false
 }
 
 #[cfg(windows)]
@@ -520,6 +627,105 @@ pub fn kill_pid(_pid: u32) {}
 #[cfg(test)]
 mod tests {
     use super::{diagnose_log, encode_startup, parse_service_reply};
+
+    #[cfg(windows)]
+    #[test]
+    fn service_read_timeout_cancels_io_and_preserves_the_pipe() {
+        use std::ptr::null_mut;
+        use std::time::{Duration, Instant};
+        use winapi::um::fileapi::{CreateFileW, ReadFile, WriteFile, OPEN_EXISTING};
+        use winapi::um::handleapi::INVALID_HANDLE_VALUE;
+        use winapi::um::namedpipeapi::CreateNamedPipeW;
+        use winapi::um::winbase::{
+            FILE_FLAG_OVERLAPPED, PIPE_ACCESS_DUPLEX, PIPE_READMODE_MESSAGE, PIPE_TYPE_MESSAGE,
+            PIPE_WAIT,
+        };
+        use winapi::um::winnt::{GENERIC_READ, GENERIC_WRITE};
+
+        // A private local test pipe: no OpenVPN service or network is involved.
+        let name: Vec<u16> = format!(
+            "\\\\.\\pipe\\keel-vpn-timeout-test-{}\0",
+            std::process::id()
+        )
+        .encode_utf16()
+        .collect();
+        let server = unsafe {
+            CreateNamedPipeW(
+                name.as_ptr(),
+                PIPE_ACCESS_DUPLEX,
+                PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+                1,
+                4096,
+                4096,
+                0,
+                null_mut(),
+            )
+        };
+        assert_ne!(server, INVALID_HANDLE_VALUE);
+        let server = super::OwnedHandle(server);
+        let client = unsafe {
+            CreateFileW(
+                name.as_ptr(),
+                GENERIC_READ | GENERIC_WRITE,
+                0,
+                null_mut(),
+                OPEN_EXISTING,
+                FILE_FLAG_OVERLAPPED,
+                null_mut(),
+            )
+        };
+        assert_ne!(client, INVALID_HANDLE_VALUE);
+        let client = super::OwnedHandle(client);
+        let mut buf = [0u8; 16];
+        let started = Instant::now();
+        let error = super::pipe_io(
+            client.0,
+            started + Duration::from_millis(30),
+            |overlapped, read| unsafe {
+                ReadFile(
+                    client.0,
+                    buf.as_mut_ptr().cast(),
+                    buf.len() as u32,
+                    read,
+                    overlapped,
+                )
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(2));
+
+        let mut written = 0;
+        assert_ne!(
+            unsafe { WriteFile(server.0, b"ok".as_ptr().cast(), 2, &mut written, null_mut()) },
+            0
+        );
+        let read = super::pipe_io(
+            client.0,
+            Instant::now() + Duration::from_secs(2),
+            |overlapped, read| unsafe {
+                ReadFile(
+                    client.0,
+                    buf.as_mut_ptr().cast(),
+                    buf.len() as u32,
+                    read,
+                    overlapped,
+                )
+            },
+        )
+        .unwrap();
+        assert_eq!(&buf[..read as usize], b"ok");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn exhausted_service_budget_does_not_send_a_request() {
+        let error = super::pipe_io(std::ptr::null_mut(), std::time::Instant::now(), |_, _| {
+            panic!("expired request must not start I/O")
+        })
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    }
 
     #[cfg(windows)]
     #[test]

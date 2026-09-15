@@ -11,9 +11,9 @@
 
 import { create } from "zustand";
 
-import * as backend from "@/lib/backend";
-import type { DropZone } from "@/lib/dock";
-import { lookingAt, waitingPanes } from "@/lib/island";
+import * as backend from "../lib/backend.ts";
+import type { DropZone } from "../lib/dock.ts";
+import { lookingAt, waitingPanes } from "../lib/island.ts";
 import {
   readKeybindingOverrides,
   setKeybindingOverrides,
@@ -22,16 +22,16 @@ import {
   type Binding,
   type KeybindingOverrides,
   type ShortcutId,
-} from "@/lib/keymap";
-import { pickCapturedSession, unboundSession } from "@/lib/launch";
+} from "../lib/keymap.ts";
+import { pickCapturedSession, unboundSession } from "../lib/launch.ts";
 import {
   briefFromOsc,
   briefFromPrompt,
   isGenericLabel,
   type TitleSource,
-} from "@/lib/paneTitle";
-import { moveTo } from "@/lib/order";
-import { killPty } from "@/lib/pty";
+} from "../lib/paneTitle.ts";
+import { moveTo } from "../lib/order.ts";
+import { killPty } from "../lib/pty.ts";
 import {
   balance,
   besideTree,
@@ -47,7 +47,7 @@ import {
   splitPane,
   swapPanes,
   type MoveDirection,
-} from "@/lib/tree";
+} from "../lib/tree.ts";
 import type {
   Agent,
   AgentAccount,
@@ -61,7 +61,7 @@ import type {
   Project,
   VpnSettings,
   VpnState,
-} from "@/lib/types";
+} from "../lib/types.ts";
 
 /** UI-only reopen chrome. Never written to PersistedState. */
 export type RestoreStatus = "idle" | "restoring" | "partial" | "failed";
@@ -589,6 +589,9 @@ function migrate(saved: unknown): Project[] {
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
 export const useKeel = create<KeelState>((set, get) => {
+  let vpnConnecting = false;
+  let vpnRevision = 0;
+
   /** Debounced write-through. Every mutation calls this; disk sees one write. */
   function persist(immediate = false) {
     if (!get().ready) return;
@@ -798,18 +801,8 @@ export const useKeel = create<KeelState>((set, get) => {
         void get().refreshVpn();
       }
 
-      // Safety: never leave Restoring… forever if a pane never settles.
-      if (paneCount > 0) {
-        window.setTimeout(() => {
-          const current = get();
-          if (current.restoreStatus !== "restoring") return;
-          const anyDead = Object.keys(current.exited).length > 0;
-          set({
-            restoreStatus: anyDead ? "partial" : "idle",
-            restoreLeft: 0,
-          });
-        }, 8_000);
-      }
+      // Each pane settles after its actual spawn attempt. VPN startup can take
+      // longer than eight seconds; a timer must not report those panes restored.
     },
 
     async retryRestore() {
@@ -1081,10 +1074,16 @@ export const useKeel = create<KeelState>((set, get) => {
     },
 
     async refreshVpn() {
+      const revision = vpnRevision;
       try {
         const snapshot = await backend.vpnSnapshot();
+        if (revision !== vpnRevision) return;
         set((state) => ({
-          vpn: vpnFromSnapshot(state.vpn, snapshot, state.vpn.spawnAllowed),
+          vpn: {
+            ...vpnFromSnapshot(state.vpn, snapshot, state.vpn.spawnAllowed),
+            // Discovery may finish before the connection command starts.
+            ...(vpnConnecting ? { phase: "connecting" as const, error: null } : {}),
+          },
         }));
       } catch {
         /* Discovery failing must not brick the session. */
@@ -1092,6 +1091,9 @@ export const useKeel = create<KeelState>((set, get) => {
     },
 
     async connectVpn(profileId) {
+      if (vpnConnecting) return;
+      vpnConnecting = true;
+      vpnRevision += 1;
       const chosen = profileId ?? get().vpn.profileId;
       set((state) => ({
         vpn: {
@@ -1123,10 +1125,15 @@ export const useKeel = create<KeelState>((set, get) => {
             error: String(error),
           },
         }));
+      } finally {
+        vpnConnecting = false;
+        vpnRevision += 1;
       }
     },
 
     async disconnectVpn() {
+      if (vpnConnecting) return;
+      vpnRevision += 1;
       try {
         const snapshot = await backend.vpnDisconnect();
         set((state) => ({
@@ -1141,6 +1148,8 @@ export const useKeel = create<KeelState>((set, get) => {
             error: String(error),
           },
         }));
+      } finally {
+        vpnRevision += 1;
       }
     },
 
@@ -1368,6 +1377,7 @@ export const useKeel = create<KeelState>((set, get) => {
       // The terminals only existed inside this project; take them with it.
       for (const deck of project?.decks ?? []) {
         for (const paneId of Object.keys(deck.panes)) {
+          get().settleRestore(paneId, true);
           void killPty(paneId).catch(() => {});
           activity.delete(paneId);
         }
@@ -1417,6 +1427,7 @@ export const useKeel = create<KeelState>((set, get) => {
       if (!project || !deck) return;
 
       for (const paneId of Object.keys(deck.panes)) {
+        get().settleRestore(paneId, true);
         void killPty(paneId).catch(() => {});
         activity.delete(paneId);
       }
@@ -1583,6 +1594,8 @@ export const useKeel = create<KeelState>((set, get) => {
     },
 
     closePane(projectId, paneId) {
+      // Closing a waiting pane cancels its restore obligation.
+      get().settleRestore(paneId, true);
       void killPty(paneId).catch(() => {});
       activity.delete(paneId);
       updateDeckOfPane(projectId, paneId, (deck) => {

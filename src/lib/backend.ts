@@ -1,6 +1,6 @@
 /** Everything else Rust exposes: agent detection, persistence, folders. */
 
-import { invoke } from "@/lib/invoke";
+import { invoke } from "./invoke.ts";
 import type { Agent, AgentSpec, PersistedState, VpnProfileInfo } from "./types";
 
 export function detectAgents(): Promise<Agent[]> {
