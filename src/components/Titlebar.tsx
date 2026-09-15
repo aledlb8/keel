@@ -122,11 +122,11 @@ export function Titlebar({ island, sidebarVisible, actions }: TitlebarProps) {
   return (
     <header
       data-tauri-drag-region
-      className="k-glass relative z-30 flex h-[38px] shrink-0 items-stretch border-b border-line"
+      className="k-glass relative z-30 grid h-[38px] shrink-0 grid-cols-[minmax(0,1fr)_minmax(0,auto)_minmax(0,1fr)] items-stretch border-b border-line"
     >
       <div
         data-tauri-drag-region
-        className="flex shrink-0 items-center pl-3.5"
+        className="relative z-10 flex min-w-0 items-center pl-3.5"
       >
         <span
           data-tauri-drag-region
@@ -153,17 +153,19 @@ export function Titlebar({ island, sidebarVisible, actions }: TitlebarProps) {
       </div>
 
       {/*
-       * The island: where you are, and whatever needs you. The band around it
-       * stays a drag region; the island itself is all buttons.
+       * The island: where you are, and whatever needs you. Equal 1fr columns
+       * on either side keep it centred in the window, not in the leftover
+       * space between the (wider) menus and the window buttons. The band
+       * around it stays a drag region; the island itself is all buttons.
        */}
       <div
         data-tauri-drag-region
-        className="flex min-w-0 flex-1 items-center justify-center px-4"
+        className="flex min-w-0 items-center justify-center px-4"
       >
         {island}
       </div>
 
-      <div className="flex items-stretch">
+      <div className="relative z-10 flex min-w-0 items-stretch justify-end">
         <WindowButton label="Minimize" onClick={() => void appWindow.minimize()}>
           <Minus className="size-3.5" />
         </WindowButton>
