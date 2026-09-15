@@ -606,27 +606,233 @@ pub fn pid_running(_pid: u32) -> bool {
     false
 }
 
+pub const KEEL_CONFIG_FILE: &str = "keel-app.ovpn";
+const KILL_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// True when an `openvpn.exe` command line is Keel's private tunnel, not the
+/// user's OpenVPN GUI or another app.
+pub fn is_keel_tunnel_command(command_line: &str) -> bool {
+    command_line
+        .to_ascii_lowercase()
+        .contains(&KEEL_CONFIG_FILE.to_ascii_lowercase())
+}
+
 #[cfg(windows)]
 pub fn kill_pid(pid: u32) {
+    if pid == 0 {
+        return;
+    }
     use winapi::um::handleapi::CloseHandle;
     use winapi::um::processthreadsapi::{OpenProcess, TerminateProcess};
-    use winapi::um::winnt::PROCESS_TERMINATE;
+    use winapi::um::synchapi::WaitForSingleObject;
+    use winapi::um::winnt::{PROCESS_TERMINATE, SYNCHRONIZE};
 
     unsafe {
-        let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
-        if !handle.is_null() {
-            let _ = TerminateProcess(handle, 1);
-            CloseHandle(handle);
+        let handle = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, 0, pid);
+        if handle.is_null() {
+            return;
         }
+        let _ = TerminateProcess(handle, 1);
+        let _ = WaitForSingleObject(handle, KILL_WAIT.as_millis() as u32);
+        CloseHandle(handle);
     }
 }
 
 #[cfg(not(windows))]
 pub fn kill_pid(_pid: u32) {}
 
+/// End every `openvpn.exe` that is still running Keel's private config.
+///
+/// The Interactive Service starts the engine as a sibling, not a child, so a
+/// missed PID or a previous crashed Keel leaves a tunnel in the background.
+/// Matching the config file name avoids killing the user's OpenVPN GUI.
+#[cfg(windows)]
+pub fn kill_keel_tunnels() {
+    for pid in keel_tunnel_pids() {
+        kill_pid(pid);
+    }
+}
+
+#[cfg(not(windows))]
+pub fn kill_keel_tunnels() {}
+
+/// A job whose members die when this handle is closed (Keel exiting or crashing).
+#[cfg(windows)]
+pub struct TunnelJob(OwnedHandle);
+
+#[cfg(windows)]
+unsafe impl Send for TunnelJob {}
+#[cfg(windows)]
+unsafe impl Sync for TunnelJob {}
+
+#[cfg(windows)]
+impl TunnelJob {
+    pub fn new() -> Option<Self> {
+        use std::ptr::null_mut;
+        use winapi::um::jobapi2::{CreateJobObjectW, SetInformationJobObject};
+        use winapi::um::winnt::{
+            JobObjectExtendedLimitInformation, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        };
+
+        unsafe {
+            let handle = CreateJobObjectW(null_mut(), null_mut());
+            if handle.is_null() {
+                return None;
+            }
+            let job = Self(OwnedHandle(handle));
+            let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let ok = SetInformationJobObject(
+                job.0 .0,
+                JobObjectExtendedLimitInformation,
+                std::ptr::addr_of_mut!(info).cast(),
+                std::mem::size_of_val(&info) as u32,
+            );
+            if ok == 0 {
+                return None;
+            }
+            Some(job)
+        }
+    }
+
+    pub fn adopt(&self, pid: u32) -> bool {
+        if pid == 0 {
+            return false;
+        }
+        use winapi::um::handleapi::CloseHandle;
+        use winapi::um::jobapi2::AssignProcessToJobObject;
+        use winapi::um::processthreadsapi::OpenProcess;
+        use winapi::um::winnt::{PROCESS_SET_QUOTA, PROCESS_TERMINATE};
+
+        unsafe {
+            let process = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid);
+            if process.is_null() {
+                return false;
+            }
+            let ok = AssignProcessToJobObject(self.0 .0, process) != 0;
+            CloseHandle(process);
+            ok
+        }
+    }
+}
+
+#[cfg(windows)]
+fn keel_tunnel_pids() -> Vec<u32> {
+    use std::mem::{size_of, zeroed};
+
+    use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
+    use winapi::um::tlhelp32::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+
+    let mut pids = Vec::new();
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snap.is_null() || snap == INVALID_HANDLE_VALUE {
+            return pids;
+        }
+        let mut entry: PROCESSENTRY32W = zeroed();
+        entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
+        if Process32FirstW(snap, &mut entry) != 0 {
+            loop {
+                let name = utf16_z(&entry.szExeFile);
+                if name.eq_ignore_ascii_case("openvpn.exe") {
+                    let pid = entry.th32ProcessID;
+                    if process_command_line(pid).is_some_and(|cmd| is_keel_tunnel_command(&cmd)) {
+                        pids.push(pid);
+                    }
+                }
+                if Process32NextW(snap, &mut entry) == 0 {
+                    break;
+                }
+            }
+        }
+        CloseHandle(snap);
+    }
+    pids
+}
+
+#[cfg(windows)]
+fn utf16_z(buf: &[u16]) -> String {
+    let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    String::from_utf16_lossy(&buf[..len])
+}
+
+#[cfg(windows)]
+fn process_command_line(pid: u32) -> Option<String> {
+    use std::ptr::null_mut;
+
+    use winapi::shared::ntdef::UNICODE_STRING;
+    use winapi::um::handleapi::CloseHandle;
+    use winapi::um::processthreadsapi::OpenProcess;
+    use winapi::um::winnt::PROCESS_QUERY_LIMITED_INFORMATION;
+
+    const PROCESS_COMMAND_LINE_INFORMATION: u32 = 60;
+
+    #[link(name = "ntdll")]
+    extern "system" {
+        fn NtQueryInformationProcess(
+            process: winapi::shared::ntdef::HANDLE,
+            class: u32,
+            info: *mut std::ffi::c_void,
+            length: u32,
+            returned: *mut u32,
+        ) -> i32;
+    }
+
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return None;
+        }
+        let mut needed = 0u32;
+        let _ = NtQueryInformationProcess(
+            handle,
+            PROCESS_COMMAND_LINE_INFORMATION,
+            null_mut(),
+            0,
+            &mut needed,
+        );
+        if needed == 0 {
+            CloseHandle(handle);
+            return None;
+        }
+        let mut buf = vec![0u8; needed as usize];
+        let status = NtQueryInformationProcess(
+            handle,
+            PROCESS_COMMAND_LINE_INFORMATION,
+            buf.as_mut_ptr().cast(),
+            needed,
+            &mut needed,
+        );
+        CloseHandle(handle);
+        if status != 0 || (needed as usize) < std::mem::size_of::<UNICODE_STRING>() {
+            return None;
+        }
+        let unicode = buf.as_ptr().cast::<UNICODE_STRING>().read_unaligned();
+        if unicode.Buffer.is_null() || unicode.Length == 0 {
+            return None;
+        }
+        let bytes = unicode.Length as usize;
+        let start = unicode.Buffer as usize;
+        let base = buf.as_ptr() as usize;
+        if start < base || start + bytes > base + buf.len() {
+            return None;
+        }
+        let offset = start - base;
+        if offset + bytes > buf.len() || !bytes.is_multiple_of(2) {
+            return None;
+        }
+        let raw = std::slice::from_raw_parts(buf[offset..].as_ptr().cast::<u16>(), bytes / 2);
+        Some(String::from_utf16_lossy(raw))
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{diagnose_log, encode_startup, parse_service_reply};
+    use super::{diagnose_log, encode_startup, is_keel_tunnel_command, parse_service_reply};
 
     #[cfg(windows)]
     #[test]
@@ -841,5 +1047,69 @@ ERROR: command failed: returned error code 1
         let msg = diagnose_log(log).unwrap();
         assert!(msg.contains("connection limit"));
         assert!(!msg.contains("password"));
+    }
+
+    #[test]
+    fn keel_tunnel_command_matches_private_config_only() {
+        assert!(is_keel_tunnel_command(
+            r#"openvpn.exe --config "C:\Users\developer\OpenVPN\config\keel-app.ovpn" --log x"#
+        ));
+        assert!(is_keel_tunnel_command(
+            r#"C:\Program Files\OpenVPN\bin\openvpn.exe --config keel-app.ovpn"#
+        ));
+        assert!(!is_keel_tunnel_command(
+            r#"openvpn.exe --config "C:\Users\developer\OpenVPN\config\office.ovpn""#
+        ));
+        assert!(!is_keel_tunnel_command("openvpn.exe"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn kill_pid_waits_until_the_process_exits() {
+        use std::process::{Command, Stdio};
+
+        let mut child = Command::new("ping")
+            .args(["-t", "127.0.0.1"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn ping");
+        let pid = child.id();
+        assert!(super::pid_running(pid));
+        super::kill_pid(pid);
+        assert!(!super::pid_running(pid));
+        let _ = child.wait();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn job_object_kills_members_when_closed() {
+        use std::process::{Command, Stdio};
+
+        let Some(job) = super::TunnelJob::new() else {
+            return;
+        };
+        let mut child = Command::new("ping")
+            .args(["-t", "127.0.0.1"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn ping");
+        let pid = child.id();
+        if !job.adopt(pid) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return;
+        }
+        drop(job);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while super::pid_running(pid) && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(
+            !super::pid_running(pid),
+            "closing the job must terminate adopted processes"
+        );
+        let _ = child.wait();
     }
 }

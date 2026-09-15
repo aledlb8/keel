@@ -74,15 +74,28 @@ pub fn run() {
             // Closing the window must take every child process with it, or the
             // agents keep running headless. The private OpenVPN tunnel is the
             // same: it exists only for this app.
-            if let tauri::WindowEvent::Destroyed = event {
-                if let Some(manager) = window.app_handle().try_state::<PtyManager>() {
-                    manager.shutdown_all();
-                }
-                if let Some(vpn) = window.app_handle().try_state::<VpnManager>() {
-                    vpn.shutdown();
-                }
+            if let tauri::WindowEvent::Destroyed | tauri::WindowEvent::CloseRequested { .. } = event
+            {
+                shutdown_managed(window.app_handle());
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|app, event| {
+            if matches!(
+                event,
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+            ) {
+                shutdown_managed(app);
+            }
+        });
+}
+
+fn shutdown_managed(app: &tauri::AppHandle) {
+    if let Some(manager) = app.try_state::<PtyManager>() {
+        manager.shutdown_all();
+    }
+    if let Some(vpn) = app.try_state::<VpnManager>() {
+        vpn.shutdown();
+    }
 }

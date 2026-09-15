@@ -16,6 +16,18 @@ OpenVPN's Windows Interactive Service listens on `\\.\pipe\openvpn\service`. The
 
 Launching `openvpn.exe` directly is insufficient for non-elevated Keel processes. The engine can establish TLS but privileged adapter operations then fail; the Interactive Service supplies the `--msg-channel` handle used for address, route, DNS, MTU, and related Windows changes.[^1]
 
+The service starts `openvpn.exe` as a sibling of Keel, not a child. Closing the window or calling disconnect used to fire `TerminateProcess` at a stored PID without waiting, and only from `WindowEvent::Destroyed`. That missed app-exit, panics (`panic = "abort"` in release), Task Manager kills, and any engine whose PID Keel had already forgotten. Leftover processes kept the licensed server slot and a background tunnel.
+
+Keel now:
+
+- assigns each engine PID to a Win32 job with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, so the OS kills the tunnel when Keel's last handle to the job is closed, including crash and abort;
+- waits after `TerminateProcess` so disconnect is not a lie;
+- on connect, disconnect, and shutdown, enumerates `openvpn.exe` and stops only those whose command line contains `keel-app.ovpn`, leaving OpenVPN GUI connections alone;
+- drops `OpenVpnProc` by terminating, so a failed connect cannot leak the engine;
+- shuts the tunnel down on window close, `RunEvent::ExitRequested`, and `RunEvent::Exit`.
+
+The Interactive Service still performs privileged adapter cleanup when the engine process dies.
+
 ## Error 231 root cause
 
 Windows returns `ERROR_PIPE_BUSY` (231) when a named pipe exists but every listening instance is currently connected. Microsoft specifies that a client must call `WaitNamedPipe`, then retry `CreateFile`. Even after a successful wait, another client can acquire the available instance first, so the open must remain in a retry loop.[^3][^4]

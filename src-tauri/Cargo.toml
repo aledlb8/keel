@@ -49,6 +49,7 @@ winapi = { version = "0.3", features = [
     "sysinfoapi",
     "synchapi",
     "winuser",
+    "jobapi2",
 ] }
 ipconfig = "0.3"
 

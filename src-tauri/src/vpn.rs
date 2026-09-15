@@ -107,6 +107,12 @@ impl OpenVpnProc {
     }
 }
 
+impl Drop for OpenVpnProc {
+    fn drop(&mut self) {
+        self.terminate();
+    }
+}
+
 struct LiveTunnel {
     process: OpenVpnProc,
     proxy: ProxyHandle,
@@ -126,10 +132,23 @@ impl Default for VpnState {
     }
 }
 
-#[derive(Default)]
 pub struct VpnManager {
     inner: Arc<Mutex<VpnState>>,
     connecting: Mutex<()>,
+    /// Members die with this process, including abort and Task Manager kills.
+    #[cfg(windows)]
+    job: Option<vpn_service::TunnelJob>,
+}
+
+impl Default for VpnManager {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(VpnState::default())),
+            connecting: Mutex::new(()),
+            #[cfg(windows)]
+            job: vpn_service::TunnelJob::new(),
+        }
+    }
 }
 
 impl VpnManager {
@@ -157,14 +176,22 @@ impl VpnManager {
     }
 
     fn disconnect(&self) -> Result<VpnSnapshot, String> {
+        let live = {
+            let mut guard = self
+                .inner
+                .lock()
+                .map_err(|_| "vpn state is poisoned".to_string())?;
+            guard.live.take()
+        };
+        if let Some(mut live) = live {
+            live.proxy.stop();
+            live.process.terminate();
+        }
+        vpn_service::kill_keel_tunnels();
         let mut guard = self
             .inner
             .lock()
             .map_err(|_| "vpn state is poisoned".to_string())?;
-        if let Some(mut live) = guard.live.take() {
-            live.proxy.stop();
-            live.process.terminate();
-        }
         guard.snapshot = VpnSnapshot::idle();
         Ok(guard.snapshot.clone())
     }
@@ -385,6 +412,7 @@ fn connect_inner(app: &AppHandle, wanted: Option<&str>) -> Result<VpnSnapshot, S
         snap.profile_name = Some(chosen.name.clone());
         snap.openvpn_path = Some(openvpn.to_string_lossy().into_owned());
     })?;
+    vpn_service::kill_keel_tunnels();
 
     let log_path = work_dir(app)?.join("openvpn.log");
     let config_path = openvpn_config_path()?;
@@ -414,6 +442,13 @@ fn connect_inner(app: &AppHandle, wanted: Option<&str>) -> Result<VpnSnapshot, S
                 break;
             }
         };
+        #[cfg(windows)]
+        {
+            let OpenVpnProc::Service { pid } = &process;
+            if let Some(job) = &manager.job {
+                job.adopt(*pid);
+            }
+        }
 
         match wait_for_tunnel(&log_path, deadline, || process.is_running()) {
             Ok(up) => match finish_connect(manager, process, chosen, up) {
@@ -458,7 +493,7 @@ fn openvpn_config_path() -> Result<PathBuf, String> {
         .join("OpenVPN")
         .join("config");
     std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
-    Ok(dir.join("keel-app.ovpn"))
+    Ok(dir.join(vpn_service::KEEL_CONFIG_FILE))
 }
 
 struct TunnelUp {
