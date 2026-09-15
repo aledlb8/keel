@@ -46,6 +46,19 @@ it("settles a failed connection and releases waiting terminals", async () => {
   assert.equal(state().vpn.spawnAllowed, true);
 });
 
+it("holds new terminals during a manual connect without restarting existing panes", async () => {
+  const pending = deferred<VpnSnapshot>();
+  mockIPC(() => pending.promise);
+  useKeel.setState({ vpn: { ...state().vpn, spawnAllowed: true, phase: "idle" }, generations: { running: 2 } });
+  const request = state().connectVpn("test");
+  assert.equal(state().vpn.spawnAllowed, false);
+  assert.deepEqual(state().generations, { running: 2 });
+  pending.resolve(connected);
+  await request;
+  assert.equal(state().vpn.spawnAllowed, true);
+  assert.deepEqual(state().generations, { running: 2 });
+});
+
 it("discovery cannot hide an active VPN connection attempt", async () => {
   const pending = deferred<VpnSnapshot>();
   mockIPC((cmd) => cmd === "vpn_connect" ? pending.promise : idle);

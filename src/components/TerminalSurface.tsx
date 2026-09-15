@@ -271,11 +271,21 @@ export const TerminalSurface = memo(function TerminalSurface({
   onTitle,
 }: TerminalSurfaceProps) {
   const spawnAllowed = useKeel((state) => state.vpn.spawnAllowed);
+  const vpnPhase = useKeel((state) => state.vpn.phase);
+  const proxyPort = useKeel((state) => state.vpn.proxyPort);
+  const startedGeneration = useRef<number | null>(null);
+  // A reconnect gates new shells, not the output stream of a running shell.
+  const canStart = spawnAllowed || startedGeneration.current === generation;
+  const [spawnedProxyPort, setSpawnedProxyPort] = useState<number | null>(null);
   const restoring = useKeel((state) =>
     state.restoreStatus === "restoring" && paneId in state.restorePanes,
   );
   const [settledGeneration, setSettledGeneration] = useState<number | null>(null);
   const starting = settledGeneration !== generation;
+  const needsVpnRestart =
+    !starting && vpnPhase === "connected" &&
+    proxyPort !== null && spawnedProxyPort !== proxyPort;
+  const vpnUnavailable = !starting && vpnPhase === "error";
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   /** Wired up by the setup effect; the later effects only ever call these. */
@@ -536,7 +546,11 @@ export const TerminalSurface = memo(function TerminalSurface({
     let cancelled = false;
     const term = termRef.current;
     if (!term) return;
-    if (!spawnAllowed) return;
+    if (!canStart) return;
+    startedGeneration.current = generation;
+    const networkAtStart = useKeel.getState().vpn;
+    const startingProxyPort =
+      networkAtStart.phase === "connected" ? networkAtStart.proxyPort : null;
     promptDraft.current.reset();
 
     const start = async () => {
@@ -564,6 +578,7 @@ export const TerminalSurface = memo(function TerminalSurface({
           },
         );
         if (cancelled) return;
+        setSpawnedProxyPort(startingProxyPort);
         pty.current = { ready: true, cols, rows };
         // The layout may have moved while the process was starting.
         actions.current.syncPty();
@@ -585,7 +600,7 @@ export const TerminalSurface = memo(function TerminalSurface({
     };
     // Spawn inputs are read at restart time; generation is the explicit trigger.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [paneId, generation, spawnAllowed]);
+  }, [paneId, generation, canStart]);
 
   // 4. Focus follows the layout, so keystrokes land where the border says.
   useEffect(() => {
@@ -597,10 +612,32 @@ export const TerminalSurface = memo(function TerminalSurface({
     // is a second frame of pane around theirs. `isolate` keeps xterm's
     // z-indexed layers from stacking over the header.
     <div
-      className="relative isolate h-full w-full overflow-hidden"
+      className="relative isolate flex h-full w-full flex-col overflow-hidden"
       onMouseDown={() => onFocus(paneId)}
     >
-      <div ref={hostRef} className="h-full w-full overflow-hidden" />
+      {needsVpnRestart || vpnUnavailable ? (
+        <div role="status" className="flex shrink-0 items-center justify-between gap-3 border-b border-line bg-[color:var(--keel-term-solid)] px-3 py-2 text-[12px] text-dim">
+          <span>
+            {needsVpnRestart
+              ? "Restart this terminal to use the connected VPN."
+              : spawnedProxyPort === null
+                ? "VPN unavailable. This terminal is using your normal connection."
+                : "The VPN connection was lost. Open VPN settings to reconnect."}
+          </span>
+          <button
+            type="button"
+            className="k-tag shrink-0"
+            onClick={() =>
+              needsVpnRestart
+                ? useKeel.getState().restartPane(paneId)
+                : useKeel.getState().openVpnSettings()
+            }
+          >
+            {needsVpnRestart ? "Restart terminal" : "VPN settings"}
+          </button>
+        </div>
+      ) : null}
+      <div ref={hostRef} className="min-h-0 w-full flex-1 overflow-hidden" />
       {starting ? (
         <div className="absolute inset-0 z-10 grid place-items-center bg-[color:var(--keel-term-solid)]">
           <div role="status" className="flex max-w-64 flex-col items-center gap-2 px-4 text-center">

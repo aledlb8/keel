@@ -1,9 +1,12 @@
 //! Local HTTP CONNECT proxy whose outbound sockets are pinned to one interface.
 //!
 //! Windows routing is destination-based. A TUN that has an address but no
-//! default route will not be used unless the socket is bound to it. The
-//! documented way to do that without touching the routing table is
-//! `IP_UNICAST_IF` (Vista+): it selects the outgoing interface by index.
+//! preferred default route will not be used unless the socket is bound to it.
+//! `IP_UNICAST_IF` selects the outgoing IPv4 interface by index (network byte
+//! order). That index must be the adapter's IPv4 `IfIndex`. OpenVPN DCO
+//! adapters are IPv4-only, so `Ipv6IfIndex` is 0 and pinning with it silently
+//! uses the default route. Sockets are also bound to the tunnel IPv4 address
+//! so a zero or stale index cannot leak.
 //!
 //! Keel does not inject a DLL into child processes (ForceBindIP does not follow
 //! agent CLIs reliably). Instead every pane inherits `HTTP_PROXY`/`HTTPS_PROXY`
@@ -38,23 +41,43 @@ impl ProxyHandle {
     }
 }
 
-/// Listen on 127.0.0.1:0 and send CONNECT destinations out `if_index`.
-pub fn start(if_index: u32) -> std::io::Result<ProxyHandle> {
+#[derive(Clone, Copy)]
+struct Egress {
+    if_index: u32,
+    bind_ip: Ipv4Addr,
+}
+
+/// Listen on 127.0.0.1:0 and send CONNECT destinations out `if_index`,
+/// sourcing from `bind_ip` on that interface.
+pub fn start(if_index: u32, bind_ip: Ipv4Addr) -> std::io::Result<ProxyHandle> {
+    if if_index == 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "interface index 0 would send VPN traffic out the default route",
+        ));
+    }
+    if bind_ip.is_unspecified() || bind_ip.is_loopback() || bind_ip.is_link_local() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("refusing to bind the VPN proxy to {bind_ip}"),
+        ));
+    }
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
     listener.set_nonblocking(true)?;
     let port = listener.local_addr()?.port();
     let running = Arc::new(AtomicBool::new(true));
     let flag = Arc::clone(&running);
+    let egress = Egress { if_index, bind_ip };
 
     thread::Builder::new()
         .name("keel-vpn-proxy".into())
-        .spawn(move || accept_loop(listener, flag, if_index))
+        .spawn(move || accept_loop(listener, flag, egress))
         .map_err(std::io::Error::other)?;
 
     Ok(ProxyHandle { port, running })
 }
 
-fn accept_loop(listener: TcpListener, running: Arc<AtomicBool>, if_index: u32) {
+fn accept_loop(listener: TcpListener, running: Arc<AtomicBool>, egress: Egress) {
     while running.load(Ordering::SeqCst) {
         match listener.accept() {
             Ok((stream, _)) => {
@@ -64,7 +87,7 @@ fn accept_loop(listener: TcpListener, running: Arc<AtomicBool>, if_index: u32) {
                 let _ = thread::Builder::new()
                     .name("keel-vpn-conn".into())
                     .spawn(move || {
-                        let _ = handle_client(stream, if_index);
+                        let _ = handle_client(stream, egress);
                     });
             }
             Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
@@ -75,7 +98,7 @@ fn accept_loop(listener: TcpListener, running: Arc<AtomicBool>, if_index: u32) {
     }
 }
 
-fn handle_client(mut client: TcpStream, if_index: u32) -> std::io::Result<()> {
+fn handle_client(mut client: TcpStream, egress: Egress) -> std::io::Result<()> {
     // Windows accepts inherit the listener's nonblocking mode. Header reads
     // and the bidirectional copy below are blocking operations; leaving that
     // flag set can abort TLS as soon as a client pauses between packets.
@@ -89,7 +112,7 @@ fn handle_client(mut client: TcpStream, if_index: u32) -> std::io::Result<()> {
         );
         return Ok(());
     };
-    let upstream = match dial_via_interface(&target.0, target.1, if_index) {
+    let upstream = match dial_via_interface(&target.0, target.1, egress) {
         Ok(stream) => stream,
         Err(_) => {
             let _ = client.write_all(
@@ -149,24 +172,33 @@ fn split_host_port(authority: &str) -> Option<(String, u16)> {
     Some((host.to_string(), port.parse().ok()?))
 }
 
-fn dial_via_interface(host: &str, port: u16, if_index: u32) -> std::io::Result<TcpStream> {
-    let ip = resolve_host(host, if_index)?;
+fn dial_via_interface(host: &str, port: u16, egress: Egress) -> std::io::Result<TcpStream> {
+    let ip = resolve_host(host, egress)?;
     let addr = SocketAddr::new(ip, port);
     let socket = socket2::Socket::new(
         socket2::Domain::for_address(addr),
         socket2::Type::STREAM,
         Some(socket2::Protocol::TCP),
     )?;
-    pin_socket_to_interface(&socket, if_index, addr.is_ipv6())?;
+    pin_socket_to_interface(&socket, egress.if_index, addr.is_ipv6())?;
+    socket.bind(&SocketAddr::from((egress.bind_ip, 0)).into())?;
+    socket.set_nodelay(true)?;
+    socket.set_keepalive(true)?;
     socket.connect_timeout(&addr.into(), CONNECT_TIMEOUT)?;
     Ok(socket.into())
 }
 
-fn resolve_host(host: &str, if_index: u32) -> std::io::Result<IpAddr> {
+fn resolve_host(host: &str, egress: Egress) -> std::io::Result<IpAddr> {
     if let Ok(ip) = host.parse::<IpAddr>() {
+        if ip.is_ipv6() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AddrNotAvailable,
+                format!("IPv6 CONNECT to {host} is not supported on the IPv4 tunnel"),
+            ));
+        }
         return Ok(ip);
     }
-    if let Ok(ip) = dns_a_via_interface(host, if_index) {
+    if let Ok(ip) = dns_a_via_interface(host, egress) {
         return Ok(IpAddr::V4(ip));
     }
     // Last resort: system resolver. Prefer A so we can pin IPv4 to the TUN.
@@ -182,14 +214,15 @@ fn resolve_host(host: &str, if_index: u32) -> std::io::Result<IpAddr> {
 }
 
 /// DNS A lookup sent out the VPN interface, so the name query is not an ISP leak.
-fn dns_a_via_interface(name: &str, if_index: u32) -> std::io::Result<Ipv4Addr> {
+fn dns_a_via_interface(name: &str, egress: Egress) -> std::io::Result<Ipv4Addr> {
     let query = build_dns_query(name);
     let socket = socket2::Socket::new(
         socket2::Domain::IPV4,
         socket2::Type::DGRAM,
         Some(socket2::Protocol::UDP),
     )?;
-    pin_socket_to_interface(&socket, if_index, false)?;
+    pin_socket_to_interface(&socket, egress.if_index, false)?;
+    socket.bind(&SocketAddr::from((egress.bind_ip, 0)).into())?;
     let udp: UdpSocket = socket.into();
     udp.set_read_timeout(Some(DNS_TIMEOUT))?;
     udp.set_write_timeout(Some(DNS_TIMEOUT))?;
@@ -269,6 +302,12 @@ fn pin_socket_to_interface(
     if_index: u32,
     ipv6: bool,
 ) -> std::io::Result<()> {
+    if if_index == 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "interface index 0 would send VPN traffic out the default route",
+        ));
+    }
     #[cfg(windows)]
     {
         use std::os::windows::io::AsRawSocket;
@@ -336,7 +375,15 @@ mod tests {
         let (server, _) = listener.accept().unwrap();
         // Reproduce Windows' accepted-socket state on every test platform.
         server.set_nonblocking(true).unwrap();
-        let handler = thread::spawn(move || handle_client(server, 0));
+        let handler = thread::spawn(move || {
+            handle_client(
+                server,
+                Egress {
+                    if_index: 0,
+                    bind_ip: Ipv4Addr::LOCALHOST,
+                },
+            )
+        });
         thread::sleep(Duration::from_millis(30));
         client.write_all(b"GET / HTTP/1.1\r\n").unwrap();
         thread::sleep(Duration::from_millis(30));
@@ -367,5 +414,35 @@ mod tests {
         assert_eq!(q[20], 3);
         assert_eq!(&q[21..24], b"com");
         assert_eq!(q[24], 0);
+    }
+
+    #[test]
+    fn start_rejects_interface_index_zero() {
+        let err = match start(0, Ipv4Addr::new(10, 8, 0, 2)) {
+            Err(err) => err,
+            Ok(_) => panic!("index 0 must not start a proxy"),
+        };
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn start_rejects_link_local_bind_ip() {
+        let err = match start(6, Ipv4Addr::new(169, 254, 1, 1)) {
+            Err(err) => err,
+            Ok(_) => panic!("link-local bind must be rejected"),
+        };
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn pin_rejects_interface_index_zero() {
+        let socket = socket2::Socket::new(
+            socket2::Domain::IPV4,
+            socket2::Type::STREAM,
+            Some(socket2::Protocol::TCP),
+        )
+        .unwrap();
+        let err = pin_socket_to_interface(&socket, 0, false).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }
 }

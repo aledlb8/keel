@@ -45,7 +45,16 @@ Canceled approval, disabled or missing services, and other startup errors retain
 
 `route-nopull` prevents server-pushed routes, DNS settings, and `block-outside-dns` from changing the host. `pull-filter ignore` rules provide explicit filtering for default-route, DNS, and IPv6 directives. OpenVPN still configures the tunnel interface address, which is required before Keel can select it for outbound sockets.[^5]
 
-The local CONNECT proxy applies Windows' `IP_UNICAST_IF` socket option before connecting upstream. Microsoft defines this option as selecting the outgoing interface for IPv4 traffic on multihomed systems.[^6] DNS A queries are sent from a UDP socket with the same interface selection before the proxy falls back to the system resolver.
+The local CONNECT proxy applies Windows' `IP_UNICAST_IF` socket option before connecting upstream. Microsoft defines this option as selecting the outgoing interface for IPv4 traffic on multihomed systems.[^6] The value is the adapter's **IPv4** `IfIndex`, in network byte order. OpenVPN DCO adapters on this machine have no IPv6 stack, so `GetAdaptersAddresses.Ipv6IfIndex` is 0. `IP_UNICAST_IF` with index 0 is a silent no-op: CONNECT still returns 200, but packets use the default route. The previous client used `ipconfig::Adapter::ipv6_if_index()` because that crate does not expose the IPv4 index; Grok still worked because xAI accepts the normal-route address, while Anthropic and OpenAI return geo-block 403s from it.
+
+The corrected client:
+
+- resolves the IPv4 interface index with `GetBestInterface` on the tunnel address;
+- binds each upstream socket to that IPv4 address as well as setting `IP_UNICAST_IF`;
+- refuses interface index 0 and link-local bind addresses;
+- after starting the proxy, fetches a public IPv4 through it and through the normal route, and fails the connection if they match.
+
+DNS A queries are sent from a UDP socket with the same interface selection and bind before the proxy falls back to the system resolver.
 
 The real HTTPS smoke test exposed a second failure after tunnel establishment: Windows returned `WSAENETUNREACH` (10051) because the selected interface had no route to public destinations. Selecting an interface does not supply a route. The generated profile now removes inherited explicit routes and adds `route 0.0.0.0 0.0.0.0 vpn_gateway 9999`. This low-priority route serves sockets pinned to the tunnel while the ordinary route wins for unpinned sockets. Keel rejects the tunnel if it cannot verify a preferred normal route, and checks every 250 ms while connected, closing its own tunnel if that condition stops holding. It no longer attempts to delete global `/1` routes belonging to other connections.
 
@@ -58,9 +67,43 @@ Two boundaries remain intentional:
 
 A future requirement for mandatory coverage of arbitrary child-process sockets would need a Windows Filtering Platform policy, a per-process virtual network namespace equivalent, or another enforcement layer. Environment variables alone cannot enforce that property.
 
+## Terminal proxy lifecycle
+
+Proxy environment variables are captured when a shell starts. Connecting or
+reconnecting the VPN cannot change the environment of an existing shell or its
+agents. Keel now holds new and restarted shells during manual connection attempts
+as well as automatic startup. Running shells retain their output channels. Once
+connected, a terminal with an older proxy setting shows a restart action; Keel
+does not automatically interrupt its process. Failed startup retains the existing
+normal-connection fallback, with a visible notice inside the terminal.
+
+The native monitor checks both the ordinary route and the OpenVPN process. A
+stopped process closes the proxy and changes the VPN state to an error. While
+connected, the UI refreshes the state every three seconds, scheduling each poll
+after the previous response to avoid overlapping requests.
+
+Codex CLI 0.154.0 and Claude Code 2.1.272 send HTTP CONNECT through the
+existing proxy variables; Codex's WebSocket transport does so too. Keel also
+sets `WS_PROXY`/`WSS_PROXY`, `CLAUDE_CODE_PROXY_RESOLVES_HOSTS=1` (so Claude
+CONNECT uses hostnames rather than IPv6 literals on the IPv4 tunnel), and
+`NODE_USE_ENV_PROXY=1` for Node children. Those env vars are not a substitute
+for pinning: a local CONNECT logger can show the CLIs using the proxy while
+the upstream sockets still leave via the default route.
+
 ## Verification
 
 The protocol parser and encoder are covered by Rust unit tests, including rejection of a zero process ID. The complete repository check runs TypeScript checking, frontend tests, Rust formatting, and Clippy with warnings denied.
+
+Connection finalization itself compares the public IPv4 seen through the proxy
+with the public IPv4 seen on the normal route. Matching addresses fail the
+connect instead of reporting success. Set `KEEL_VPN_SMOKE_PROVIDERS=1`
+alongside `KEEL_VPN_SMOKE_PROFILE` to include unauthenticated OpenAI, Codex,
+and Anthropic reachability checks in the live tunnel test. These assert the
+expected API responses (401 for OpenAI/Codex; 405 for a GET to Anthropic's
+messages endpoint), rather than a Cloudflare geo-block 403. They do not
+validate an account's login or run a model prompt. The live test also stops
+its own OpenVPN process and verifies that the monitor clears the proxy and
+reports the connection loss.
 
 Startup regression tests cover access-denied recovery, avoiding elevation for other failures, canceled approval, and another client starting the service. An ignored `live_private_tunnel` test accepts a local autologin profile through `KEEL_VPN_SMOKE_PROFILE`, establishes a tunnel through the real service, checks HTTPS through Keel's proxy and the normal route, and cleans up its process and temporary files. Run it explicitly with `cargo test --manifest-path src-tauri/Cargo.toml live_private_tunnel --lib -- --ignored --nocapture`.
 

@@ -95,12 +95,30 @@ export default function App() {
   }, [inspector]);
 
   const ready = useKeel((state) => state.ready);
+  const vpnConnected = useKeel((state) => state.vpn.phase === "connected");
   const projects = useKeel((state) => state.projects);
   const agents = useKeel((state) => state.agents);
   const activeProjectId = useKeel((state) => state.activeProjectId);
   // Menus, tooltips and hints print the active chords. Re-render the shell when
   // they change so every label follows at once.
   useKeel((state) => state.keybindings);
+
+  useEffect(() => {
+    if (!vpnConnected) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const refresh = async () => {
+      await useKeel.getState().refreshVpn();
+      if (!cancelled) timer = setTimeout(refresh, 3_000);
+    };
+    // The native monitor can close a failed tunnel independently of the UI.
+    // Schedule after each response so a slow host never accumulates polls.
+    timer = setTimeout(refresh, 3_000);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [vpnConnected]);
 
   useEffect(() => {
     void useKeel.getState().init();

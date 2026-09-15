@@ -1177,6 +1177,7 @@ export const useKeel = create<KeelState>((set, get) => {
           ...state.vpn,
           profileId: chosen ?? state.vpn.profileId,
           phase: "connecting",
+          spawnAllowed: false,
           error: null,
         },
       }));
