@@ -415,29 +415,51 @@
     }
 
     /*
-     * The sidebar folds down to a rail rather than disappearing, so the places
-     * you can go never leave the screen. The band's width is the one thing that
-     * moves; the full panel and the rail are both laid out at their final size
-     * and cross over inside it, so no row ever reflows or re-wraps mid-flight.
-     * The curve is the island's: quick to start, soft to land, no overshoot.
+     * Docks — the two sidebars.
+     *
+     * They float exactly the way a pane does: inset half a gutter from
+     * everything around them, rounded at the window radius, lifted by the same
+     * soft shadow. So the air between a dock and a terminal is the same 12px as
+     * the air between two terminals, and the middle of the window reads as one
+     * arrangement of objects on the ground rather than a canvas with bars
+     * bolted to either side. Only the fill differs: chrome, a step above a
+     * terminal slab, so a dock reads as a tool beside the work.
+     *
+     * Folding narrows the card. The full panel and the rail are both laid out
+     * at their final sizes and cross over inside it, so no row ever reflows
+     * mid-flight. The curve is the island's: quick to start, soft to land.
      */
-    .k-sidebar {
+    .k-dock {
         --k-fold: cubic-bezier(0.32, 0.72, 0, 1);
+        --dock-width: 248px;
+        --rail-width: 52px;
         position: relative;
-        width: 240px;
+        flex-shrink: 0;
+        width: var(--dock-width);
+        margin: 6px;
         overflow: hidden;
+        border: 1px solid var(--keel-term-border);
+        border-radius: var(--keel-r-window);
+        background: var(--keel-chrome);
+        box-shadow:
+            inset 0 1px 0 0 var(--keel-sheen),
+            0 2px 10px -6px rgba(0, 0, 0, 0.6);
         transition: width 420ms var(--k-fold);
     }
 
-    .k-sidebar[data-collapsed="true"] {
-        width: 52px;
+    /* Git paths want the extra characters. */
+    .k-dock[data-side="right"] {
+        --dock-width: 288px;
     }
 
-    .k-sidebar-panel,
-    .k-sidebar-rail {
+    .k-dock[data-collapsed="true"] {
+        width: var(--rail-width);
+    }
+
+    .k-dock > .k-dock-panel,
+    .k-dock > .k-dock-rail {
         position: absolute;
         inset-block: 0;
-        left: 0;
         display: flex;
         flex-direction: column;
         transition:
@@ -446,29 +468,53 @@
             filter 260ms ease;
     }
 
-    .k-sidebar-panel {
-        width: 240px;
+    /* Anchored to the window edge, so folding pulls them toward it. */
+    .k-dock[data-side="left"] > :is(.k-dock-panel, .k-dock-rail) {
+        left: 0;
     }
 
-    .k-sidebar-rail {
-        width: 52px;
+    .k-dock[data-side="right"] > :is(.k-dock-panel, .k-dock-rail) {
+        right: 0;
+    }
+
+    /* Measured inside the border, hence the two pixels. */
+    .k-dock > .k-dock-panel {
+        width: calc(var(--dock-width) - 2px);
+    }
+
+    .k-dock > .k-dock-rail {
+        width: calc(var(--rail-width) - 2px);
         opacity: 0;
-        transform: translateX(-6px);
         filter: blur(4px);
         pointer-events: none;
         transition-duration: 140ms, 420ms, 140ms;
     }
 
+    .k-dock[data-side="left"] > .k-dock-rail {
+        transform: translateX(-6px);
+    }
+
+    .k-dock[data-side="right"] > .k-dock-rail {
+        transform: translateX(6px);
+    }
+
     /* Folding: the panel leaves quickly, the rail arrives once there is room. */
-    .k-sidebar[data-collapsed="true"] .k-sidebar-panel {
+    .k-dock[data-collapsed="true"] > .k-dock-panel {
         opacity: 0;
-        transform: translateX(-18px);
         filter: blur(4px);
         pointer-events: none;
         transition-duration: 180ms, 420ms, 180ms;
     }
 
-    .k-sidebar[data-collapsed="true"] .k-sidebar-rail {
+    .k-dock[data-side="left"][data-collapsed="true"] > .k-dock-panel {
+        transform: translateX(-18px);
+    }
+
+    .k-dock[data-side="right"][data-collapsed="true"] > .k-dock-panel {
+        transform: translateX(18px);
+    }
+
+    .k-dock[data-collapsed="true"] > .k-dock-rail {
         opacity: 1;
         transform: none;
         filter: none;
@@ -477,45 +523,531 @@
         transition-delay: 120ms;
     }
 
-    /* Unfolding: the reverse, so the panel settles in as the band widens. */
-    .k-sidebar[data-collapsed="false"] .k-sidebar-panel {
+    /* Unfolding: the reverse, so the panel settles in as the card widens. */
+    .k-dock[data-collapsed="false"] > .k-dock-panel {
         transition-delay: 90ms;
     }
 
     /*
-     * The one toggle. It rides the band's right edge, so as the sidebar folds it
-     * travels with the edge and lands centred on the rail — one control moving,
-     * not two swapping — while its chevron turns to point the other way.
+     * The one toggle per dock. It rides the dock's inner edge, so as the card
+     * folds it travels with that edge and lands centred on the rail — one
+     * control moving, not two swapping — while its chevron turns around.
      */
-    .k-sidebar-toggle {
+    .k-dock > .k-dock-toggle {
         position: absolute;
         z-index: 1;
-        top: 5px;
-        right: 8px;
+        top: 10px;
         transition:
+            left 420ms var(--k-fold),
             right 420ms var(--k-fold),
             background-color 110ms ease,
             color 110ms ease;
     }
 
-    .k-sidebar[data-collapsed="true"] .k-sidebar-toggle {
-        right: 14px;
+    .k-dock[data-side="left"] > .k-dock-toggle {
+        right: 10px;
     }
 
-    .k-sidebar-toggle .k-chevron {
+    .k-dock[data-side="right"] > .k-dock-toggle {
+        left: 10px;
+    }
+
+    /* Centred on the 50px inside of the rail. */
+    .k-dock[data-side="left"][data-collapsed="true"] > .k-dock-toggle {
+        right: 13px;
+    }
+
+    .k-dock[data-side="right"][data-collapsed="true"] > .k-dock-toggle {
+        left: 13px;
+    }
+
+    .k-dock-toggle .k-chevron {
         transform-box: fill-box;
         transform-origin: center;
         transition: transform 420ms var(--k-fold);
     }
 
-    .k-sidebar[data-collapsed="true"] .k-sidebar-toggle .k-chevron {
+    .k-dock[data-collapsed="true"] > .k-dock-toggle .k-chevron {
         transform: rotate(180deg);
     }
 
+    /* A small tally beside a heading or inside a tab. */
+    .k-count {
+        display: inline-grid;
+        place-items: center;
+        min-width: 18px;
+        height: 16px;
+        padding-inline: 5px;
+        border-radius: 999px;
+        background: var(--keel-veil-2);
+        color: var(--keel-text-dim);
+        font-size: 10px;
+        font-weight: 500;
+        font-variant-numeric: tabular-nums;
+        line-height: 1;
+    }
+
     /*
-     * A project on the rail: a monogram tile. It borrows the row's states
-     * exactly — veil on hover, brighter veil and the sheen when current — so
-     * folding the sidebar changes the shape of a place, not its language.
+     * A guide line down a group of nested rows, so depth reads at a glance
+     * instead of by comparing indents. Set `--guide` to where it runs.
+     */
+    .k-tree-group {
+        position: relative;
+    }
+
+    .k-tree-group::before {
+        content: "";
+        position: absolute;
+        top: 3px;
+        bottom: 3px;
+        left: var(--guide, 18px);
+        width: 1px;
+        background: var(--keel-line);
+        pointer-events: none;
+    }
+
+    /* The file tree's version: one per ancestor, drawn inside the row. */
+    .k-guide {
+        position: absolute;
+        top: -1px;
+        bottom: -1px;
+        width: 1px;
+        background: var(--keel-line);
+        pointer-events: none;
+    }
+
+    /*
+     * A text field in the chrome: a recessed well with a hairline ring that
+     * brightens while you type in it. An icon before the input takes the ring's
+     * colour, so the whole field lights up together.
+     */
+    .k-field {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        height: 30px;
+        padding-inline: 9px;
+        border-radius: var(--keel-r-control);
+        background: var(--keel-veil-1);
+        box-shadow: inset 0 0 0 1px var(--keel-line);
+        color: var(--keel-text-faint);
+        transition:
+            background-color 120ms ease,
+            box-shadow 120ms ease,
+            color 120ms ease;
+    }
+
+    .k-field:focus-within {
+        background: var(--keel-veil-2);
+        box-shadow: inset 0 0 0 1px var(--keel-line-strong);
+        color: var(--keel-text-dim);
+    }
+
+    .k-field > input {
+        min-width: 0;
+        flex: 1;
+        height: 100%;
+        background: transparent;
+        color: var(--keel-text);
+        font-size: 13px;
+        outline: none;
+    }
+
+    .k-field > input::placeholder {
+        color: var(--keel-text-faint);
+    }
+
+    .k-field > input:focus-visible {
+        outline: none;
+    }
+
+    /* The same well, as a button that opens something. */
+    .k-field-button {
+        cursor: default;
+    }
+
+    .k-field-button:hover,
+    .k-field-button[data-state="open"] {
+        background: var(--keel-veil-2);
+        color: var(--keel-text-dim);
+    }
+
+    .k-field-button[data-state="open"] {
+        box-shadow: inset 0 0 0 1px var(--keel-line-strong);
+    }
+
+    /* A multi-line well with a footer of its own, for commit messages. */
+    .k-composer {
+        border-radius: var(--keel-r-control);
+        background: var(--keel-veil-1);
+        box-shadow: inset 0 0 0 1px var(--keel-line);
+        transition:
+            background-color 120ms ease,
+            box-shadow 120ms ease;
+    }
+
+    .k-composer:focus-within {
+        background: var(--keel-veil-2);
+        box-shadow: inset 0 0 0 1px var(--keel-line-strong);
+    }
+
+    .k-composer > textarea {
+        display: block;
+        width: 100%;
+        resize: none;
+        background: transparent;
+        padding: 9px 10px 4px;
+        color: var(--keel-text);
+        font-size: 13px;
+        line-height: 1.45;
+        outline: none;
+    }
+
+    .k-composer > textarea::placeholder {
+        color: var(--keel-text-faint);
+    }
+
+    .k-composer > textarea:focus-visible {
+        outline: none;
+    }
+
+    /*
+     * The primary action with its alternatives behind a chevron. Light on dark,
+     * like every primary button here: the chrome has no accent to spend.
+     */
+    .k-split {
+        display: flex;
+        align-items: stretch;
+        height: 26px;
+        overflow: hidden;
+        border-radius: var(--keel-r-chip);
+        background: var(--keel-text);
+        color: var(--keel-void);
+        transition: opacity 120ms ease;
+    }
+
+    .k-split[data-disabled="true"] {
+        opacity: 0.35;
+    }
+
+    .k-split > button {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 12px;
+        font-weight: 500;
+        transition: background-color 110ms ease;
+    }
+
+    .k-split > button:hover:not(:disabled) {
+        background: rgba(0, 0, 0, 0.1);
+    }
+
+    .k-split-main {
+        padding-inline: 8px 9px;
+    }
+
+    .k-split-more {
+        padding-inline: 5px;
+        border-left: 1px solid rgba(0, 0, 0, 0.16);
+    }
+
+    /* Git's letter on a chip tinted with its own hue. Set `--git`. */
+    .k-git-letter {
+        display: grid;
+        flex-shrink: 0;
+        place-items: center;
+        width: 16px;
+        height: 16px;
+        border-radius: 4px;
+        background: color-mix(in srgb, var(--git) 14%, transparent);
+        color: var(--git);
+        font-size: 10px;
+        font-weight: 600;
+        line-height: 1;
+    }
+
+    .k-hash {
+        flex-shrink: 0;
+        padding-inline: 5px;
+        border-radius: 4px;
+        background: var(--keel-veil-2);
+        color: var(--keel-text-dim);
+        font-family: var(--keel-font-mono);
+        font-size: 10.5px;
+        line-height: 18px;
+    }
+
+    .k-kbd {
+        display: grid;
+        flex-shrink: 0;
+        place-items: center;
+        min-width: 18px;
+        height: 16px;
+        padding-inline: 4px;
+        border-radius: 4px;
+        background: var(--keel-veil-2);
+        color: var(--keel-text-faint);
+        font-family: inherit;
+        font-size: 10px;
+    }
+
+    .k-tag {
+        display: inline-flex;
+        align-items: center;
+        height: 18px;
+        padding-inline: 6px;
+        border-radius: 5px;
+        background: var(--keel-veil-2);
+        color: var(--keel-text-dim);
+        font-size: 10.5px;
+        font-weight: 500;
+    }
+
+    button.k-tag {
+        transition:
+            background-color 110ms ease,
+            color 110ms ease;
+    }
+
+    button.k-tag:hover {
+        background: var(--keel-veil-3);
+        color: var(--keel-text);
+    }
+
+    /*
+     * A recessed track of options where one is lit: the files/git tabs, the
+     * sync buttons, ready/draft.
+     */
+    .k-seg {
+        display: flex;
+        align-items: center;
+        gap: 1px;
+        padding: 2px;
+        border-radius: var(--keel-r-control);
+        background: var(--keel-veil-1);
+        box-shadow: inset 0 0 0 1px var(--keel-line);
+    }
+
+    .k-seg-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        height: 26px;
+        padding: 0 9px;
+        border-radius: calc(var(--keel-r-control) - 2px);
+        color: var(--keel-text-faint);
+        font-size: 12px;
+        font-weight: 500;
+        transition:
+            background-color 110ms ease,
+            color 110ms ease;
+    }
+
+    .k-seg-btn:hover:not(:disabled) {
+        color: var(--keel-text);
+    }
+
+    .k-seg-btn[data-active="true"] {
+        background: var(--keel-veil-3);
+        box-shadow: inset 0 1px 0 0 var(--keel-sheen);
+        color: var(--keel-text);
+    }
+
+    /*
+     * The editor, docked beside the terminals. The column is a slot like a
+     * pane's — half a gutter of padding around the slab — so the seam between
+     * the last terminal and the editor is one gutter wide.
+     */
+    .k-editor-dock {
+        position: relative;
+        z-index: 1;
+        flex-shrink: 0;
+        min-width: 360px;
+        max-width: calc(100% - 240px);
+        padding: 6px;
+    }
+
+    .k-editor-dock[data-maximized="true"] {
+        position: absolute;
+        inset: 0;
+        z-index: 45;
+        min-width: 0;
+        max-width: none;
+    }
+
+    .k-editor-seam {
+        position: absolute;
+        top: 6px;
+        bottom: 6px;
+        left: -6px;
+        z-index: 2;
+        display: grid;
+        width: 12px;
+        place-items: center;
+        cursor: col-resize;
+        touch-action: none;
+    }
+
+    /* The same slab as a pane, and the same brighter hairline while focused. */
+    .k-editor {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        min-height: 0;
+        overflow: hidden;
+        border: 1px solid var(--keel-term-border);
+        border-radius: var(--keel-r-window);
+        background: var(--keel-term-solid);
+        box-shadow:
+            inset 0 1px 0 0 rgba(255, 255, 255, 0.045),
+            var(--keel-lift);
+        transition: border-color 150ms ease-out;
+        animation: k-dock-in 380ms cubic-bezier(0.32, 0.72, 0, 1) both;
+    }
+
+    .k-editor:focus-within {
+        border-color: var(--keel-term-border-focus);
+    }
+
+    .k-tab {
+        display: flex;
+        flex-shrink: 0;
+        align-items: center;
+        gap: 4px;
+        height: 28px;
+        max-width: 220px;
+        padding-inline: 8px 4px;
+        border-radius: var(--keel-r-control);
+        color: var(--keel-text-faint);
+        font-size: 12px;
+        transition:
+            background-color 110ms ease,
+            color 110ms ease;
+    }
+
+    .k-tab:hover {
+        background: var(--keel-veil-1);
+        color: var(--keel-text-dim);
+    }
+
+    .k-tab[data-active="true"] {
+        background: var(--keel-veil-2);
+        box-shadow: inset 0 1px 0 0 var(--keel-sheen);
+        color: var(--keel-text);
+    }
+
+    .cm-editor {
+        height: 100%;
+        background: transparent;
+    }
+
+    .cm-editor .cm-scroller {
+        font-family: var(--keel-font-mono);
+        font-size: 13px;
+        line-height: 1.55;
+    }
+
+    .cm-editor.cm-focused {
+        outline: none;
+    }
+
+    /*
+     * Diffs. The code keeps its colour; the ground under a line says what
+     * happened, and its gutter carries a stronger tint of the same hue.
+     */
+    .k-diff {
+        font-family: var(--keel-font-mono);
+        font-size: 12px;
+        line-height: 20px;
+    }
+
+    .k-diff-hunk {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        height: 28px;
+        padding-inline: 14px;
+        border-block: 1px solid var(--keel-line);
+        background: var(--keel-term-solid);
+        color: var(--keel-text-faint);
+        font-size: 11px;
+    }
+
+    .k-diff-hunk:first-child {
+        border-top-color: transparent;
+    }
+
+    .k-diff-line {
+        display: flex;
+        white-space: pre;
+        color: var(--keel-term-fg);
+    }
+
+    .k-diff-line[data-kind="ctx"] {
+        color: var(--keel-text-dim);
+    }
+
+    .k-diff-line[data-kind="meta"] {
+        color: var(--keel-text-faint);
+        font-style: italic;
+    }
+
+    .k-diff-line[data-kind="add"] {
+        background: color-mix(in srgb, var(--keel-done) 9%, transparent);
+    }
+
+    .k-diff-line[data-kind="del"] {
+        background: color-mix(in srgb, var(--keel-dead) 9%, transparent);
+    }
+
+    .k-diff-no {
+        flex-shrink: 0;
+        width: 46px;
+        padding-right: 10px;
+        color: var(--keel-text-faint);
+        font-variant-numeric: tabular-nums;
+        text-align: right;
+        user-select: none;
+    }
+
+    .k-diff-line[data-kind="add"] .k-diff-no {
+        background: color-mix(in srgb, var(--keel-done) 12%, transparent);
+        color: color-mix(in srgb, var(--keel-done) 55%, var(--keel-text-faint));
+    }
+
+    .k-diff-line[data-kind="del"] .k-diff-no {
+        background: color-mix(in srgb, var(--keel-dead) 12%, transparent);
+        color: color-mix(in srgb, var(--keel-dead) 55%, var(--keel-text-faint));
+    }
+
+    .k-diff-sign {
+        flex-shrink: 0;
+        width: 22px;
+        text-align: center;
+        user-select: none;
+    }
+
+    .k-diff-line[data-kind="add"] .k-diff-sign {
+        color: var(--keel-done);
+    }
+
+    .k-diff-line[data-kind="del"] .k-diff-sign {
+        color: var(--keel-dead);
+    }
+
+    .k-diff-text {
+        padding-right: 20px;
+    }
+
+    /*
+     * A place on a rail: a tile. It borrows the row's states exactly — veil on
+     * hover, brighter veil and the sheen when current — so folding a dock
+     * changes the shape of a place, not its language.
      */
     .k-rail-tile {
         position: relative;
@@ -525,10 +1057,10 @@
         height: 36px;
         margin-inline: auto;
         border-radius: var(--keel-r-control);
+        color: var(--keel-text-dim);
         font-size: 12px;
         font-weight: 500;
         letter-spacing: 0.01em;
-        color: var(--keel-text-dim);
         cursor: default;
         transition:
             background-color 110ms ease,
@@ -548,37 +1080,19 @@
         color: var(--keel-text);
     }
 
-    /* The current project also gets a short bar on the window edge. */
-    .k-rail-tile::before {
-        content: "";
-        position: absolute;
-        left: -8px;
-        top: 50%;
-        width: 3px;
-        height: 0;
-        border-radius: 0 2px 2px 0;
-        background: var(--keel-text);
-        opacity: 0;
-        transform: translateY(-50%);
-        transition:
-            height 320ms var(--k-fold),
-            opacity 160ms ease;
-    }
-
-    .k-rail-tile[data-selected="true"]::before {
-        height: 16px;
-        opacity: 0.9;
-    }
-
     /* Tiles arrive one after another, top down, as the rail fades in. */
-    .k-sidebar[data-collapsed="false"] .k-rail-tile {
+    .k-dock[data-collapsed="false"] .k-rail-tile {
         opacity: 0;
         transform: translateX(-4px);
     }
 
-    .k-sidebar[data-collapsed="true"] .k-rail-tile {
-        transition-delay: 0ms, 0ms,
-            calc(140ms + min(var(--i, 0), 10) * 22ms),
+    .k-dock[data-side="right"][data-collapsed="false"] .k-rail-tile {
+        transform: translateX(4px);
+    }
+
+    .k-dock[data-collapsed="true"] .k-rail-tile {
+        transition-delay:
+            0ms, 0ms, calc(140ms + min(var(--i, 0), 10) * 22ms),
             calc(140ms + min(var(--i, 0), 10) * 22ms);
     }
 
@@ -591,6 +1105,26 @@
         height: 7px;
         border-radius: 999px;
         box-shadow: 0 0 0 2px var(--keel-chrome);
+    }
+
+    /* A number in the same corner, for the git tile. */
+    .k-rail-count {
+        position: absolute;
+        top: 1px;
+        right: 0;
+        display: grid;
+        place-items: center;
+        min-width: 16px;
+        height: 16px;
+        padding-inline: 4px;
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--keel-text) 18%, var(--keel-chrome));
+        box-shadow: 0 0 0 2px var(--keel-chrome);
+        color: var(--keel-text);
+        font-size: 9.5px;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+        line-height: 1;
     }
 
     /*
@@ -711,6 +1245,14 @@
     from {
         flex-grow: 0;
         opacity: 0;
+    }
+}
+
+/* The editor arriving beside the terminals as they make room for it. */
+@keyframes k-dock-in {
+    from {
+        opacity: 0;
+        transform: translateX(16px) scale(0.99);
     }
 }
 

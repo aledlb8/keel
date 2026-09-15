@@ -261,6 +261,7 @@ export function goBarMenu(actions: TitlebarActions): MenuEntry[] {
 export function viewBarMenu(
   actions: TitlebarActions,
   sidebarVisible: boolean,
+  inspectorVisible: boolean,
 ): MenuEntry[] {
   const { deck, focused } = inFront();
   const zoomed = Boolean(focused && deck?.zoomed === focused);
@@ -272,6 +273,13 @@ export function viewBarMenu(
       checked: sidebarVisible,
       shortcut: shortcutKeys("toggleSidebar"),
       onChange: actions.toggleSidebar,
+    },
+    {
+      kind: "check",
+      label: "Files and git",
+      checked: inspectorVisible,
+      shortcut: shortcutKeys("toggleInspector"),
+      onChange: actions.toggleInspector,
     },
     { kind: "separator" },
     {

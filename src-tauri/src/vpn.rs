@@ -741,7 +741,9 @@ mod tests {
         assert_eq!(cleanup.manager.snapshot().phase, "connected");
         println!("Private tunnel established; HTTPS proxy request passed; normal route unchanged.");
         if std::env::var_os("KEEL_VPN_SMOKE_USAGE").is_some() {
-            crate::usage::tests::live_usage_through_proxy(Some(&format!("http://127.0.0.1:{port}")));
+            crate::usage::tests::live_usage_through_proxy(Some(&format!(
+                "http://127.0.0.1:{port}"
+            )));
         }
     }
 

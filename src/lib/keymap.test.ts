@@ -61,6 +61,10 @@ describe("matchShortcut", () => {
     assert.deepEqual(matchShortcut(chord("KeyB", { ctrlKey: true })), {
       action: "toggleSidebar",
     });
+    assert.deepEqual(
+      matchShortcut(chord("KeyB", { ctrlKey: true, shiftKey: true })),
+      { action: "toggleInspector" },
+    );
     assert.deepEqual(matchShortcut(chord("Tab", { ctrlKey: true })), {
       action: "nextPane",
     });

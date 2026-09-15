@@ -1,10 +1,12 @@
 /**
- * The app shell: titlebar, sidebar, canvas, status bar.
+ * The app shell: titlebar, two docks, the canvas, status bar.
  *
- * Four docked bands and one floating layer. The titlebar, sidebar and status bar
- * are square, flush to their edges and separated by hairlines; the canvas in the
- * middle is the only place anything floats, and everything that floats there is
- * rounded. That split is the entire visual system.
+ * Two bands and a floor. The titlebar and status bar are square, flush to the
+ * window edges and separated by hairlines. Everything between them floats on
+ * the ground as a rounded object — the projects dock on the left, the files and
+ * git dock on the right, every terminal, and the editor when a file is open —
+ * and every one of them sits half a gutter inside its slot, so the air between
+ * any two neighbours is the same 12px whatever they are.
  *
  * Every deck of every project stays mounted for the whole session â€” only the
  * active one is visible. Hiding rather than unmounting is what lets you switch
@@ -26,6 +28,8 @@ import { LaunchDialog } from "@/components/LaunchDialog";
 import { Overview } from "@/components/Overview";
 import { RestoreChrome } from "@/components/RestoreChrome";
 import { ShortcutsDialog } from "@/components/ShortcutsDialog";
+import { EditorDock } from "@/components/editor/EditorDock";
+import { Inspector } from "@/components/inspector/Inspector";
 import { Sidebar } from "@/components/Sidebar";
 import { StatusBar } from "@/components/StatusBar";
 import { Titlebar, type TitlebarActions } from "@/components/Titlebar";
@@ -42,8 +46,10 @@ import {
 } from "@/lib/keymap";
 import { onPtyAgentExit, onPtyAgentStart, onPtyExit } from "@/lib/pty";
 import { activeDeck, startAttentionTracking, useKeel } from "@/state/store";
+import { useWorkspace } from "@/state/workspace";
 
 const SIDEBAR_KEY = "keel.sidebar";
+const INSPECTOR_KEY = "keel.inspector";
 
 export default function App() {
   const launching = useKeel((state) => state.launcher);
@@ -59,6 +65,14 @@ export default function App() {
       return true;
     }
   });
+  // Files and git start folded: the terminals get the room until you ask.
+  const [inspector, setInspector] = useState(() => {
+    try {
+      return localStorage.getItem(INSPECTOR_KEY) === "expanded";
+    } catch {
+      return false;
+    }
+  });
 
   useEffect(() => {
     try {
@@ -67,6 +81,14 @@ export default function App() {
       // Storage unavailable: the choice just lasts for this session.
     }
   }, [sidebar]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(INSPECTOR_KEY, inspector ? "expanded" : "collapsed");
+    } catch {
+      // Storage unavailable: the choice just lasts for this session.
+    }
+  }, [inspector]);
 
   const ready = useKeel((state) => state.ready);
   const projects = useKeel((state) => state.projects);
@@ -152,6 +174,25 @@ export default function App() {
         return;
       }
 
+      const editorNode =
+        event.target instanceof Element
+          ? event.target
+          : event.target instanceof Node
+            ? event.target.parentElement
+            : null;
+      const inEditor = Boolean(editorNode?.closest(".k-editor"));
+
+      if (inEditor && matchesBinding(event, bindingFor("closePane"))) {
+        const workspace = useWorkspace.getState();
+        if (workspace.activeEditor) {
+          event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation();
+          workspace.closeEditor(workspace.activeEditor);
+        }
+        return;
+      }
+
       if (isEditableTarget(event.target)) return;
 
       const matched = matchShortcut(event);
@@ -189,6 +230,10 @@ export default function App() {
         case "toggleSidebar":
           claim();
           setSidebar((previous) => !previous);
+          return;
+        case "toggleInspector":
+          claim();
+          setInspector((previous) => !previous);
           return;
         case "menuBar":
           claim();
@@ -284,6 +329,7 @@ export default function App() {
     nextPane: () => project && useKeel.getState().cyclePane(project.id, 1),
     prevPane: () => project && useKeel.getState().cyclePane(project.id, -1),
     toggleSidebar: () => setSidebar((previous) => !previous),
+    toggleInspector: () => setInspector((previous) => !previous),
     showShortcuts: () => setShortcuts(true),
     openCatalogue: () => useKeel.getState().openAgentSettings(null),
     openVpn: () => useKeel.getState().openVpnSettings(),
@@ -324,10 +370,13 @@ export default function App() {
           <Island actions={actions} onNavigate={() => setOverview(false)} />
         }
         sidebarVisible={sidebar}
+        inspectorVisible={inspector}
         actions={actions}
       />
 
-      <div className="flex min-h-0 flex-1">
+      {/* Half a gutter of padding here, and half again inside every dock,
+          pane and the editor, so all the air in the middle is one gutter. */}
+      <div className="flex min-h-0 flex-1 p-[6px]">
         <Sidebar
           activeProjectId={activeProjectId}
           collapsed={!sidebar}
@@ -338,44 +387,55 @@ export default function App() {
           onNavigate={() => setOverview(false)}
         />
 
-        {/* Half a gutter of padding, so the air around the outermost panes
-            matches the air between two neighbours. */}
-        <main className="relative min-h-0 min-w-0 flex-1 p-[6px]">
-          <Canvas
-            projects={projects}
-            activeProjectId={activeProjectId}
-            onAddTerminals={() => setLaunching(true)}
-          />
-
-          <RestoreChrome />
-
-          {ready && projects.length === 0 ? (
-            <div className="absolute inset-0 grid place-items-center">
-              {/* The first screen anyone sees. It names the one thing to do and
-                  gives the reason in a line, rather than explaining the app. */}
-              <div className="w-[340px] text-center">
-                <p className="text-[19px] leading-snug text-foreground">
-                  Point Keel at a folder
-                </p>
-                <p className="mx-auto mt-2 max-w-[280px] text-[13px] leading-relaxed text-dim">
-                  Every terminal you open belongs to a project, so Keel can bring
-                  the whole arrangement back next time.
-                </p>
-                <Button className="mt-5" onClick={() => void pickFolder()}>
-                  Add a folder
-                </Button>
-              </div>
-            </div>
-          ) : null}
-
-          {overview && project ? (
-            <Overview
-              project={project}
-              agents={agents}
-              onClose={() => setOverview(false)}
+        {/* The terminals and the editor share this row. Opening a file takes
+            a column on the right and the panes reflow into the rest. */}
+        <main className="relative flex min-h-0 min-w-0 flex-1">
+          <div className="relative min-h-0 min-w-0 flex-1">
+            <Canvas
+              projects={projects}
+              activeProjectId={activeProjectId}
+              onAddTerminals={() => setLaunching(true)}
             />
-          ) : null}
+
+            <RestoreChrome />
+
+            {ready && projects.length === 0 ? (
+              <div className="absolute inset-0 grid place-items-center">
+                {/* The first screen anyone sees. It names the one thing to do
+                    and gives the reason in a line, rather than explaining. */}
+                <div className="w-[340px] text-center">
+                  <p className="text-[19px] leading-snug text-foreground">
+                    Point Keel at a folder
+                  </p>
+                  <p className="mx-auto mt-2 max-w-[280px] text-[13px] leading-relaxed text-dim">
+                    Every terminal you open belongs to a project, so Keel can
+                    bring the whole arrangement back next time.
+                  </p>
+                  <Button className="mt-5" onClick={() => void pickFolder()}>
+                    Add a folder
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+
+            {overview && project ? (
+              <Overview
+                project={project}
+                agents={agents}
+                onClose={() => setOverview(false)}
+              />
+            ) : null}
+          </div>
+
+          <EditorDock />
         </main>
+
+        <Inspector
+          collapsed={!inspector}
+          onToggleCollapsed={() => setInspector((previous) => !previous)}
+          projectPath={project?.path ?? null}
+          projectName={project?.name ?? null}
+        />
       </div>
 
       <StatusBar

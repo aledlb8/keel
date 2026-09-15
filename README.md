@@ -123,7 +123,8 @@ terminal actually uses (`Ctrl+D` is EOF, `Ctrl+S` is XOFF).
 | `Ctrl+Shift+←/→/↑/↓` | Move the focused pane to another side |
 | `Ctrl+N` | New deck |
 | `Ctrl+O` | Overview of every deck |
-| `Ctrl+B` | Show or hide the sidebar |
+| `Ctrl+B` | Collapse or expand the sidebar |
+| `Ctrl+Shift+B` | Collapse or expand files and git |
 | `F2` | Rename |
 
 These are handled in the **capture phase**, ahead of xterm. xterm calls

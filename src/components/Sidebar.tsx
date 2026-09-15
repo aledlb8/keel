@@ -43,9 +43,9 @@ import {
   type SetStateAction,
 } from "react";
 import { ChevronRight, Ellipsis, FolderPlus, Plus, X } from "lucide-react";
-import { Tooltip as TooltipPrimitive } from "radix-ui";
 
 import { AgentMark } from "@/components/AgentMark";
+import { DockToggle, RailTip, RailTipProvider } from "@/components/Dock";
 import { InlineRename } from "@/components/InlineRename";
 import { StatusDot } from "@/components/StatusDot";
 import {
@@ -84,8 +84,22 @@ import {
   type RenameTarget,
 } from "@/state/store";
 
-/** Left padding per level, added to the row's own 8px. */
-const INDENT = [0, 14, 26];
+/**
+ * Left padding per level, added to the row's own 8px. The third level leaves
+ * room for the guide line under its deck's number badge.
+ */
+const INDENT = [0, 14, 32];
+
+/**
+ * Where a group's guide line runs, from the dock's inner edge: under the
+ * project's chevron for terminals straight under a project, under the deck's
+ * number badge for terminals in a deck.
+ */
+const GUIDE = { project: 18, deck: 36 };
+
+function guideAt(x: number): CSSProperties {
+  return { ["--guide" as string]: `${x}px` };
+}
 
 /** Which row of the selected project carries the fill. */
 type Leaf =
@@ -375,23 +389,34 @@ export function Sidebar({
 
   return (
     <aside
+      data-side="left"
       data-collapsed={collapsed}
-      className="k-sidebar k-glass shrink-0 border-r border-line"
+      aria-label="Projects"
+      className="k-dock"
     >
-      <SidebarToggle collapsed={collapsed} onToggle={onToggleCollapsed} />
+      <DockToggle
+        side="left"
+        collapsed={collapsed}
+        what="sidebar"
+        onToggle={onToggleCollapsed}
+      />
 
       {/* Both layers stay mounted so folding is a crossfade, never a remount.
           Whichever is hidden is inert: no focus, no hover, no tooltips. */}
-      <div className="k-sidebar-panel" inert={collapsed}>
+      <div className="k-dock-panel" inert={collapsed}>
         {/* Right padding leaves the toggle its own slot. */}
-        <div className="flex h-[34px] shrink-0 items-center justify-between pr-[38px]">
-          <h2 className="k-label">Projects</h2>
+        <div className="flex h-[44px] shrink-0 items-center gap-2 pl-[14px] pr-[38px]">
+          <h2 className="text-[12px] font-medium text-dim">Projects</h2>
+          {projects.length ? (
+            <span className="k-count">{projects.length}</span>
+          ) : null}
+          <span className="flex-1" />
           <button
             type="button"
             title="Add a folder"
             aria-label="Add a folder"
             onClick={() => void pickProjectFolder()}
-            className="k-icon-btn size-[24px]"
+            className="k-icon-btn size-6"
           >
             <Plus className="size-3.5" />
           </button>
@@ -437,46 +462,6 @@ export function Sidebar({
         onNavigate={onNavigate}
       />
     </aside>
-  );
-}
-
-/**
- * Fold and unfold. A panel outline with a chevron inside it, drawn here rather
- * than swapping two icons, so the chevron can turn instead of blinking.
- */
-function SidebarToggle({
-  collapsed,
-  onToggle,
-}: {
-  collapsed: boolean;
-  onToggle: () => void;
-}) {
-  const label = collapsed ? "Expand sidebar" : "Collapse sidebar";
-  return (
-    <button
-      type="button"
-      title={label}
-      aria-label={label}
-      aria-expanded={!collapsed}
-      onClick={onToggle}
-      className="k-icon-btn k-sidebar-toggle size-[24px]"
-    >
-      <svg
-        width="15"
-        height="15"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.75"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        aria-hidden
-      >
-        <rect x="3" y="3.5" width="18" height="17" rx="3.5" />
-        <path d="M9 3.5v17" />
-        <path className="k-chevron" d="m16 9.5-2.5 2.5 2.5 2.5" />
-      </svg>
-    </button>
   );
 }
 
@@ -530,10 +515,10 @@ function SidebarRail({
   onNavigate: () => void;
 }) {
   return (
-    <TooltipPrimitive.Provider delayDuration={200} skipDelayDuration={400}>
-      <nav aria-label="Projects" className="k-sidebar-rail" inert={hidden}>
+    <RailTipProvider>
+      <nav aria-label="Projects" className="k-dock-rail" inert={hidden}>
         {/* The toggle's slot, level with the panel's header. */}
-        <div className="h-[34px] shrink-0" />
+        <div className="h-[44px] shrink-0" />
 
         <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto overflow-x-hidden pb-2 pt-1 [scrollbar-width:none]">
           {projects.map((project, index) => (
@@ -567,7 +552,7 @@ function SidebarRail({
           </RailTip>
         </div>
       </nav>
-    </TooltipPrimitive.Provider>
+    </RailTipProvider>
   );
 }
 
@@ -623,36 +608,6 @@ function RailTile({
         <ContextMenuEntries entries={() => projectMenu(project.id)} />
       </ContextMenuContent>
     </ContextMenu>
-  );
-}
-
-/** A name to the right of a rail tile, in the chrome's own colours. */
-function RailTip({
-  label,
-  detail,
-  children,
-}: {
-  label: string;
-  detail?: string;
-  children: ReactNode;
-}) {
-  return (
-    <TooltipPrimitive.Root>
-      <TooltipPrimitive.Trigger asChild>{children}</TooltipPrimitive.Trigger>
-      <TooltipPrimitive.Portal>
-        <TooltipPrimitive.Content
-          side="right"
-          sideOffset={10}
-          collisionPadding={8}
-          className="z-50 flex items-center gap-2 rounded-[var(--keel-r-chip)] border border-line-strong bg-popover px-2 py-1 text-[12px] text-foreground shadow-[var(--keel-lift)] duration-150 animate-in fade-in-0 slide-in-from-left-1"
-        >
-          {label}
-          {detail ? (
-            <span className="text-[11px] tabular-nums text-faint">{detail}</span>
-          ) : null}
-        </TooltipPrimitive.Content>
-      </TooltipPrimitive.Portal>
-    </TooltipPrimitive.Root>
   );
 }
 
@@ -964,13 +919,15 @@ function ProjectSection({
             />
           ))
         ) : soloDeck && total > 0 ? (
-          <PaneRows
-            project={project}
-            deck={soloDeck}
-            depth={1}
-            leaf={leaf}
-            {...tree}
-          />
+          <div className="k-tree-group" style={guideAt(GUIDE.project)}>
+            <PaneRows
+              project={project}
+              deck={soloDeck}
+              depth={1}
+              leaf={leaf}
+              {...tree}
+            />
+          </div>
         ) : soloDeck ? (
           <EmptyRow
             project={project}
@@ -1079,13 +1036,15 @@ function DeckGroup({
           onAdd={addHere}
         />
       ) : (
-        <PaneRows
-          project={project}
-          deck={deck}
-          depth={2}
-          leaf={active ? leaf : null}
-          {...tree}
-        />
+        <div className="k-tree-group" style={guideAt(GUIDE.deck)}>
+          <PaneRows
+            project={project}
+            deck={deck}
+            depth={2}
+            leaf={active ? leaf : null}
+            {...tree}
+          />
+        </div>
       )}
     </>
   );

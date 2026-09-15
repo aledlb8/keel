@@ -54,6 +54,7 @@ export interface TitlebarActions {
   nextPane: () => void;
   prevPane: () => void;
   toggleSidebar: () => void;
+  toggleInspector: () => void;
   showShortcuts: () => void;
   openCatalogue: () => void;
   openVpn: () => void;
@@ -66,6 +67,7 @@ export interface TitlebarProps {
   /** Sits in the middle of the bar: where you are, and what needs you. */
   island: ReactNode;
   sidebarVisible: boolean;
+  inspectorVisible: boolean;
   actions: TitlebarActions;
 }
 
@@ -100,7 +102,12 @@ function KeelMark() {
   );
 }
 
-export function Titlebar({ island, sidebarVisible, actions }: TitlebarProps) {
+export function Titlebar({
+  island,
+  sidebarVisible,
+  inspectorVisible,
+  actions,
+}: TitlebarProps) {
   const [maximized, setMaximized] = useState(false);
   const openMenu = useKeel((state) => state.menubar);
   const setOpenMenu = useKeel((state) => state.setMenubar);
@@ -146,7 +153,7 @@ export function Titlebar({ island, sidebarVisible, actions }: TitlebarProps) {
           <BarMenu
             value="view"
             label="View"
-            entries={() => viewBarMenu(actions, sidebarVisible)}
+            entries={() => viewBarMenu(actions, sidebarVisible, inspectorVisible)}
           />
           <BarMenu value="help" label="Help" entries={() => helpBarMenu(actions)} />
         </Menubar>
@@ -165,7 +172,10 @@ export function Titlebar({ island, sidebarVisible, actions }: TitlebarProps) {
         {island}
       </div>
 
-      <div className="relative z-10 flex min-w-0 items-stretch justify-end">
+      <div
+        data-tauri-drag-region
+        className="relative z-10 flex min-w-0 items-stretch justify-end"
+      >
         <WindowButton label="Minimize" onClick={() => void appWindow.minimize()}>
           <Minus className="size-3.5" />
         </WindowButton>

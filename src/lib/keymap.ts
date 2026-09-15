@@ -47,6 +47,7 @@ export type ShortcutId =
   | "newDeck"
   | "overview"
   | "toggleSidebar"
+  | "toggleInspector"
   | "menuBar"
   | "rename";
 
@@ -202,6 +203,16 @@ export const SHORTCUTS: Shortcut[] = [
     group: "View",
     family: "single",
     defaults: bind("KeyB", { ctrl: true }),
+  },
+  {
+    id: "toggleInspector",
+    label: "Collapse or expand files and git",
+    group: "View",
+    family: "single",
+    // A letter, not Backslash: on Spanish, German and other layouts "\" needs
+    // AltGr, which Windows reports as Ctrl+Alt, so Ctrl+\ could never be typed.
+    // Shift+B pairs it with Ctrl+B for the sidebar on the other side.
+    defaults: bind("KeyB", { ctrl: true, shift: true }),
   },
   {
     id: "menuBar",
@@ -459,6 +470,7 @@ export type ShortcutMatch =
   | { action: "newDeck" }
   | { action: "overview" }
   | { action: "toggleSidebar" }
+  | { action: "toggleInspector" }
   | { action: "menuBar" };
 
 export interface Chord {

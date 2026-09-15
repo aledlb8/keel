@@ -40,6 +40,7 @@ import {
   LayoutGrid,
   LoaderCircle,
   PanelLeft,
+  PanelRight,
   Plus,
   Search,
   ShieldCheck,
@@ -816,6 +817,7 @@ function Switcher({
       action("agents", "Agents & profiles", <UsersRound className="size-3.5" />, actions.openCatalogue),
       action("vpn", "Private VPN", <ShieldCheck className="size-3.5" />, actions.openVpn),
       action("sidebar", "Collapse or expand the sidebar", <PanelLeft className="size-3.5" />, actions.toggleSidebar, shortcutKeys("toggleSidebar")),
+      action("inspector", "Collapse or expand files and git", <PanelRight className="size-3.5" />, actions.toggleInspector, shortcutKeys("toggleInspector")),
       action("shortcuts", "Keyboard shortcuts", <Keyboard className="size-3.5" />, actions.showShortcuts),
     );
 
