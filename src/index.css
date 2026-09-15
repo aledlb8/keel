@@ -1299,6 +1299,11 @@
     scrollbar-color: var(--keel-line-strong) transparent;
 }
 
+/* Keep panel, menu and editor content steady as vertical overflow changes. */
+:where(.overflow-y-auto, .overflow-auto, .cm-scroller) {
+    scrollbar-gutter: stable;
+}
+
 @media (prefers-reduced-motion: reduce) {
     *,
     *::before,
