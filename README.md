@@ -9,6 +9,10 @@
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue.svg" /></a>
 </p>
 
+<p align="center">
+  <img src="docs/images/keel-workspace.png" alt="Keel workspace with parallel terminals, the integrated editor, and project navigation" width="1200" />
+</p>
+
 Keel combines persistent terminal panes, project and deck navigation, an integrated editor, Git tools, agent status, usage information, and workspace restoration in a Tauri application. It uses the agent CLIs already installed on your machine rather than wrapping a hosted agent service.
 
 Built with Tauri 2, React 19, TypeScript, Rust, Vite, CodeMirror, and xterm.js.
