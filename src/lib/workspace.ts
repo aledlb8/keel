@@ -1,6 +1,6 @@
 /** Project files and git, as Rust exposes them. */
 
-import { invoke } from "@/lib/invoke";
+import { invoke } from "./invoke.ts";
 
 export interface WorkspaceEntry {
   name: string;

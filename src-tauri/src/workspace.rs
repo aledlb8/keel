@@ -49,7 +49,15 @@ fn sort_entries(entries: &mut [WorkspaceEntry]) {
 
 /// Immediate children of a folder inside the project.
 #[tauri::command]
-pub fn workspace_list(
+pub async fn workspace_list(
+    root: String,
+    rel: String,
+    show_hidden: bool,
+) -> Result<Vec<WorkspaceEntry>, String> {
+    crate::blocking::run(move || workspace_list_blocking(root, rel, show_hidden)).await
+}
+
+fn workspace_list_blocking(
     root: String,
     rel: String,
     show_hidden: bool,
@@ -94,7 +102,11 @@ pub fn workspace_list(
 
 /// UTF-8 text, or a binary flag. Truncates huge files rather than loading them.
 #[tauri::command]
-pub fn workspace_read(root: String, rel: String) -> Result<FileContents, String> {
+pub async fn workspace_read(root: String, rel: String) -> Result<FileContents, String> {
+    crate::blocking::run(move || workspace_read_blocking(root, rel)).await
+}
+
+fn workspace_read_blocking(root: String, rel: String) -> Result<FileContents, String> {
     let path = resolve_existing(Path::new(&root), &rel)?;
     if path.is_dir() {
         return Err(format!("{} is a folder", path.display()));
@@ -127,7 +139,11 @@ pub fn workspace_read(root: String, rel: String) -> Result<FileContents, String>
 }
 
 #[tauri::command]
-pub fn workspace_write(root: String, rel: String, contents: String) -> Result<(), String> {
+pub async fn workspace_write(root: String, rel: String, contents: String) -> Result<(), String> {
+    crate::blocking::run(move || workspace_write_blocking(root, rel, contents)).await
+}
+
+fn workspace_write_blocking(root: String, rel: String, contents: String) -> Result<(), String> {
     let path = resolve_target(Path::new(&root), &rel)?;
     if path.is_dir() {
         return Err(format!("{} is a folder", path.display()));
@@ -144,7 +160,11 @@ pub fn workspace_write(root: String, rel: String, contents: String) -> Result<()
 }
 
 #[tauri::command]
-pub fn workspace_create(root: String, rel: String, kind: String) -> Result<(), String> {
+pub async fn workspace_create(root: String, rel: String, kind: String) -> Result<(), String> {
+    crate::blocking::run(move || workspace_create_blocking(root, rel, kind)).await
+}
+
+fn workspace_create_blocking(root: String, rel: String, kind: String) -> Result<(), String> {
     let path = resolve_target(Path::new(&root), &rel)?;
     if path.exists() {
         return Err(format!("{} already exists", path.display()));
@@ -162,7 +182,11 @@ pub fn workspace_create(root: String, rel: String, kind: String) -> Result<(), S
 }
 
 #[tauri::command]
-pub fn workspace_delete(root: String, rel: String) -> Result<(), String> {
+pub async fn workspace_delete(root: String, rel: String) -> Result<(), String> {
+    crate::blocking::run(move || workspace_delete_blocking(root, rel)).await
+}
+
+fn workspace_delete_blocking(root: String, rel: String) -> Result<(), String> {
     let path = resolve_existing(Path::new(&root), &rel)?;
     let root_canon = canonicalize_dir(Path::new(&root))?;
     if path == root_canon {
@@ -176,7 +200,15 @@ pub fn workspace_delete(root: String, rel: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn workspace_rename(root: String, from_rel: String, to_rel: String) -> Result<(), String> {
+pub async fn workspace_rename(
+    root: String,
+    from_rel: String,
+    to_rel: String,
+) -> Result<(), String> {
+    crate::blocking::run(move || workspace_rename_blocking(root, from_rel, to_rel)).await
+}
+
+fn workspace_rename_blocking(root: String, from_rel: String, to_rel: String) -> Result<(), String> {
     let from = resolve_existing(Path::new(&root), &from_rel)?;
     let to = resolve_target(Path::new(&root), &to_rel)?;
     let root_canon = canonicalize_dir(Path::new(&root))?;
@@ -195,7 +227,11 @@ pub fn workspace_rename(root: String, from_rel: String, to_rel: String) -> Resul
 /// Filename search. Prefers `git ls-files` so ignored noise stays out; walks
 /// the tree otherwise. Caps the result so a huge repo cannot flood the UI.
 #[tauri::command]
-pub fn workspace_search(root: String, query: String) -> Result<Vec<WorkspaceEntry>, String> {
+pub async fn workspace_search(root: String, query: String) -> Result<Vec<WorkspaceEntry>, String> {
+    crate::blocking::run(move || workspace_search_blocking(root, query)).await
+}
+
+fn workspace_search_blocking(root: String, query: String) -> Result<Vec<WorkspaceEntry>, String> {
     let needle = query.trim().to_lowercase();
     if needle.len() < 2 {
         return Ok(Vec::new());
@@ -284,8 +320,12 @@ mod tests {
     #[test]
     fn lists_the_project_root() {
         let root = repo_root();
-        let entries = workspace_list(root.to_string_lossy().into_owned(), String::new(), false)
-            .expect("list root");
+        let entries = tauri::async_runtime::block_on(workspace_list(
+            root.to_string_lossy().into_owned(),
+            String::new(),
+            false,
+        ))
+        .expect("list root");
         assert!(
             entries
                 .iter()
@@ -305,8 +345,11 @@ mod tests {
     #[test]
     fn reads_a_source_file() {
         let root = repo_root();
-        let file = workspace_read(root.to_string_lossy().into_owned(), "package.json".into())
-            .expect("read package.json");
+        let file = tauri::async_runtime::block_on(workspace_read(
+            root.to_string_lossy().into_owned(),
+            "package.json".into(),
+        ))
+        .expect("read package.json");
         assert!(!file.binary);
         assert!(file.text.contains("\"name\": \"keel\""));
     }
@@ -314,8 +357,11 @@ mod tests {
     #[test]
     fn rejects_escape() {
         let root = repo_root();
-        let err = workspace_read(root.to_string_lossy().into_owned(), "../secret".into())
-            .expect_err("escaped");
+        let err = tauri::async_runtime::block_on(workspace_read(
+            root.to_string_lossy().into_owned(),
+            "../secret".into(),
+        ))
+        .expect_err("escaped");
         assert!(err.to_lowercase().contains("outside"));
     }
 }

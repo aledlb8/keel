@@ -34,6 +34,7 @@ import { CodeEditor } from "@/components/editor/CodeEditor";
 import { DiffView } from "@/components/editor/DiffView";
 import { languageName } from "@/components/editor/language";
 import { FileIcon } from "@/components/inspector/FileIcon";
+import { LoadingRows } from "@/components/inspector/LoadingRows";
 import { diffStats } from "@/lib/git";
 import { listPanes } from "@/lib/tree";
 import { cn } from "@/lib/utils";
@@ -81,6 +82,8 @@ export function EditorDock() {
   const buffers = useWorkspace((state) => state.buffers);
   const originals = useWorkspace((state) => state.originals);
   const diffs = useWorkspace((state) => state.diffs);
+  const editorLoading = useWorkspace((state) => state.editorLoading);
+  const editorErrors = useWorkspace((state) => state.editorErrors);
   const [share, setShare] = useState(readShare);
   const [maximized, setMaximized] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
@@ -208,7 +211,17 @@ export function EditorDock() {
         />
 
         <div className="relative min-h-0 flex-1">
-          {snapshot?.binary ? (
+          {editorLoading[active.id] ? (
+            <LoadingRows label={active.kind === "diff" ? "Loading diff" : "Loading file"} rows={12} />
+          ) : editorErrors[active.id] ? (
+            <div className="flex h-full flex-col items-center justify-center gap-2">
+              <DockNotice icon={FileDiff} title="Couldn't load this file" detail={editorErrors[active.id]!} />
+              <button type="button" className="k-tag" onClick={() => {
+                const workspace = useWorkspace.getState();
+                void (active.kind === "diff" ? workspace.openDiff(active.rel, active.staged) : workspace.openFile(active.rel));
+              }}>Retry</button>
+            </div>
+          ) : snapshot?.binary ? (
             <DockNotice
               icon={FileImage}
               title="Binary file"

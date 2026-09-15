@@ -8,8 +8,9 @@
 import { create } from "zustand";
 import { toast } from "sonner";
 
-import { fileName, joinRel, parentRel } from "@/lib/git";
-import * as api from "@/lib/workspace";
+import { fileName, joinRel, parentRel } from "../lib/git.ts";
+import * as api from "../lib/workspace.ts";
+import { WorkspaceReads } from "../lib/workspaceReads.ts";
 import type {
   FileContents,
   GitBranches,
@@ -20,6 +21,7 @@ import type {
 } from "@/lib/workspace";
 
 export type InspectorTab = "files" | "git";
+export type GitMetaSection = "branches" | "prs" | "history";
 
 export type EditorKind = "file" | "diff";
 
@@ -57,7 +59,9 @@ interface WorkspaceState {
   gitError: string | null;
   branches: GitBranches | null;
   prs: PrList | null;
-  commits: api.GitCommit[];
+  commits: api.GitCommit[] | null;
+  metaLoading: Partial<Record<GitMetaSection, boolean>>;
+  metaErrors: Partial<Record<GitMetaSection, string | null>>;
   commitMessage: string;
 
   editors: EditorTab[];
@@ -66,6 +70,8 @@ interface WorkspaceState {
   originals: Record<string, string>;
   snapshots: Record<string, FileContents>;
   diffs: Record<string, GitDiff>;
+  editorLoading: Record<string, boolean>;
+  editorErrors: Record<string, string | null>;
   busy: boolean;
 
   setRoot: (root: string | null) => void;
@@ -77,8 +83,11 @@ interface WorkspaceState {
   toggleExpanded: (rel: string) => void;
   loadDir: (rel: string) => Promise<void>;
   refreshTree: () => Promise<void>;
-  refreshGit: () => Promise<void>;
+  refreshGit: (afterPending?: boolean) => Promise<void>;
   refreshMeta: () => Promise<void>;
+  refreshBranches: (afterPending?: boolean) => Promise<void>;
+  refreshPrs: (afterPending?: boolean) => Promise<void>;
+  refreshHistory: (afterPending?: boolean) => Promise<void>;
   search: (query: string) => Promise<void>;
 
   openFile: (rel: string) => Promise<void>;
@@ -123,23 +132,118 @@ function isDirty(state: WorkspaceState, id: string): boolean {
   return (state.buffers[id] ?? "") !== (state.originals[id] ?? "");
 }
 
+const reads = new WorkspaceReads();
+let projectVersion = 0;
+let editorReadId = 0;
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function openEditor(
+  tab: EditorTab,
+  set: (partial: Partial<WorkspaceState>) => void,
+  get: () => WorkspaceState,
+) {
+  const root = get().root;
+  if (!root) return Promise.resolve();
+  const { id, rel } = tab;
+  const existing = get().editors.find((item) => item.id === id);
+  const focus = {
+    activeEditor: id,
+    selectedRel: rel,
+    ...(tab.kind === "diff" ? { tab: "git" as const } : {}),
+  };
+  if (existing && (
+    get().editorLoading[id] ||
+    (tab.kind === "file" && !get().editorErrors[id])
+  )) {
+    set(focus);
+    return Promise.resolve();
+  }
+  set({
+    ...focus,
+    editors: existing
+      ? get().editors.map((item) => item.id === id ? tab : item)
+      : [...get().editors, tab],
+    editorLoading: { ...get().editorLoading, [id]: true },
+    editorErrors: { ...get().editorErrors, [id]: null },
+  });
+  return reads.run(`editor:${++editorReadId}`, async (isCurrent) => {
+    // Identity also rejects reads for a tab that was closed and reopened.
+    const isOpen = () => isCurrent() && get().editors.includes(tab);
+    try {
+      if (tab.kind === "diff") {
+        const diff = await api.gitDiff(root, rel, tab.staged);
+        if (isOpen()) set({ diffs: { ...get().diffs, [id]: diff } });
+      } else {
+        const contents = await api.workspaceRead(root, rel);
+        if (isOpen()) {
+          set({
+            buffers: { ...get().buffers, [id]: contents.text },
+            originals: { ...get().originals, [id]: contents.text },
+            snapshots: { ...get().snapshots, [id]: contents },
+          });
+        }
+      }
+    } catch (error) {
+      if (isOpen()) {
+        set({ editorErrors: { ...get().editorErrors, [id]: errorMessage(error) } });
+      }
+    } finally {
+      if (isOpen()) set({ editorLoading: { ...get().editorLoading, [id]: false } });
+    }
+  });
+}
+
+function refreshMetadata<T>(
+  section: GitMetaSection,
+  load: (root: string) => Promise<T>,
+  apply: (value: T) => void,
+  set: (partial: Partial<WorkspaceState>) => void,
+  get: () => WorkspaceState,
+  afterPending = false,
+) {
+  const root = get().root;
+  if (!root) return Promise.resolve();
+  return reads.run(section, async (isCurrent) => {
+    set({ metaLoading: { ...get().metaLoading, [section]: true } });
+    try {
+      const value = await load(root);
+      if (!isCurrent()) return;
+      apply(value);
+      set({ metaErrors: { ...get().metaErrors, [section]: null } });
+    } catch (error) {
+      if (isCurrent()) {
+        set({ metaErrors: { ...get().metaErrors, [section]: errorMessage(error) } });
+      }
+    } finally {
+      if (isCurrent()) {
+        set({ metaLoading: { ...get().metaLoading, [section]: false } });
+      }
+    }
+  }, afterPending);
+}
+
 async function runGit(
   set: (partial: Partial<WorkspaceState>) => void,
   get: () => WorkspaceState,
   work: (root: string) => Promise<string | void>,
 ) {
   const root = get().root;
-  if (!root) return;
+  if (!root || get().busy) return;
+  const version = projectVersion;
   set({ busy: true });
   try {
     const message = await work(root);
     if (message) toast.success(message);
-    await get().refreshGit();
-    await get().refreshMeta();
+    if (version !== projectVersion) return;
+    await get().refreshGit(true);
+    if (version === projectVersion) void get().refreshMeta();
   } catch (error) {
     toast.error(error instanceof Error ? error.message : String(error));
   } finally {
-    set({ busy: false });
+    if (version === projectVersion) set({ busy: false });
   }
 }
 
@@ -160,7 +264,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   gitError: null,
   branches: null,
   prs: null,
-  commits: [],
+  commits: null,
+  metaLoading: {},
+  metaErrors: {},
   commitMessage: "",
 
   editors: [],
@@ -169,11 +275,15 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   originals: {},
   snapshots: {},
   diffs: {},
+  editorLoading: {},
+  editorErrors: {},
   busy: false,
 
   setRoot: (root) => {
     const previous = get().root;
     if (previous === root) return;
+    projectVersion += 1;
+    reads.reset();
     set({
       root,
       tree: {},
@@ -184,16 +294,22 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       searchHits: null,
       query: "",
       git: null,
+      gitLoading: false,
       gitError: null,
       branches: null,
       prs: null,
-      commits: [],
+      commits: null,
+      metaLoading: {},
+      metaErrors: {},
       editors: [],
       activeEditor: null,
       buffers: {},
       originals: {},
       snapshots: {},
       diffs: {},
+      editorLoading: {},
+      editorErrors: {},
+      busy: false,
     });
     if (root) {
       void get().loadDir("");
@@ -203,10 +319,6 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
 
   setTab: (tab) => {
     set({ tab });
-    if (tab === "git") {
-      void get().refreshGit();
-      void get().refreshMeta();
-    }
   },
   setShowHidden: (showHidden) => {
     set({ showHidden, tree: {} });
@@ -228,8 +340,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   loadDir: async (rel) => {
     const root = get().root;
     if (!root) return;
+    const version = projectVersion;
+    const showHidden = get().showHidden;
     try {
-      const entries = await api.workspaceList(root, rel, get().showHidden);
+      const entries = await api.workspaceList(root, rel, showHidden);
+      if (version !== projectVersion || showHidden !== get().showHidden) return;
       set({ tree: { ...get().tree, [rel]: entries } });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
@@ -243,39 +358,39 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     await Promise.all(dirs.map((rel) => get().loadDir(rel)));
   },
 
-  refreshGit: async () => {
+  refreshGit: (afterPending = false) => {
     const root = get().root;
-    if (!root) return;
-    set({ gitLoading: true });
-    try {
-      const git = await api.gitStatus(root);
-      set({ git, gitError: null, gitLoading: false });
-    } catch (error) {
-      set({
-        gitError: error instanceof Error ? error.message : String(error),
-        gitLoading: false,
-      });
-    }
+    if (!root) return Promise.resolve();
+    return reads.run("status", async (isCurrent) => {
+      set({ gitLoading: true });
+      try {
+        const git = await api.gitStatus(root);
+        if (isCurrent()) set({ git, gitError: null, gitLoading: false });
+      } catch (error) {
+        if (isCurrent()) set({ gitError: errorMessage(error), gitLoading: false });
+      }
+    }, afterPending);
   },
 
   refreshMeta: async () => {
-    const root = get().root;
-    if (!root) return;
-    try {
-      const [branches, prs, commits] = await Promise.all([
-        api.gitBranches(root).catch(() => null),
-        api.prList(root).catch(() => null),
-        api.gitLog(root, 20).catch(() => [] as api.GitCommit[]),
-      ]);
-      set({
-        branches: branches ?? get().branches,
-        prs: prs ?? get().prs,
-        commits,
-      });
-    } catch {
-      // Individual calls already swallow; keep whatever we had.
-    }
+    // Refresh only sections the user has requested during this project visit.
+    const requested = get().metaLoading;
+    await Promise.all([
+      requested.branches !== undefined ? get().refreshBranches(true) : undefined,
+      requested.prs !== undefined ? get().refreshPrs(true) : undefined,
+      requested.history !== undefined ? get().refreshHistory(true) : undefined,
+    ]);
   },
+
+  refreshBranches: (afterPending) => refreshMetadata(
+    "branches", api.gitBranches, (branches) => set({ branches }), set, get, afterPending,
+  ),
+  refreshPrs: (afterPending) => refreshMetadata(
+    "prs", api.prList, (prs) => set({ prs }), set, get, afterPending,
+  ),
+  refreshHistory: (afterPending) => refreshMetadata(
+    "history", (root) => api.gitLog(root, 20), (commits) => set({ commits }), set, get, afterPending,
+  ),
 
   search: async (query) => {
     const root = get().root;
@@ -293,64 +408,13 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     }
   },
 
-  openFile: async (rel) => {
-    const root = get().root;
-    if (!root) return;
-    const id = fileTabId(rel);
-    const existing = get().editors.find((tab) => tab.id === id);
-    if (existing) {
-      set({ activeEditor: id, selectedRel: rel });
-      return;
-    }
-    try {
-      const contents = await api.workspaceRead(root, rel);
-      const tab: EditorTab = {
-        id,
-        kind: "file",
-        rel,
-        staged: false,
-        name: fileName(rel),
-      };
-      set({
-        editors: [...get().editors, tab],
-        activeEditor: id,
-        selectedRel: rel,
-        buffers: { ...get().buffers, [id]: contents.text },
-        originals: { ...get().originals, [id]: contents.text },
-        snapshots: { ...get().snapshots, [id]: contents },
-      });
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
-    }
-  },
+  openFile: (rel) => openEditor({
+    id: fileTabId(rel), kind: "file", rel, staged: false, name: fileName(rel),
+  }, set, get),
 
-  openDiff: async (rel, staged) => {
-    const root = get().root;
-    if (!root) return;
-    const id = diffTabId(rel, staged);
-    try {
-      const diff = await api.gitDiff(root, rel, staged);
-      const existing = get().editors.some((tab) => tab.id === id);
-      const tab: EditorTab = {
-        id,
-        kind: "diff",
-        rel,
-        staged,
-        name: fileName(rel),
-      };
-      set({
-        editors: existing
-          ? get().editors.map((item) => (item.id === id ? tab : item))
-          : [...get().editors, tab],
-        activeEditor: id,
-        selectedRel: rel,
-        diffs: { ...get().diffs, [id]: diff },
-        tab: "git",
-      });
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
-    }
-  },
+  openDiff: (rel, staged) => openEditor({
+    id: diffTabId(rel, staged), kind: "diff", rel, staged, name: fileName(rel),
+  }, set, get),
 
   closeEditor: (id) => {
     const state = get();
@@ -366,11 +430,13 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const { [id]: _o, ...originals } = state.originals;
     const { [id]: _s, ...snapshots } = state.snapshots;
     const { [id]: _d, ...diffs } = state.diffs;
+    const { [id]: _l, ...editorLoading } = state.editorLoading;
+    const { [id]: _e, ...editorErrors } = state.editorErrors;
     const activeEditor =
       state.activeEditor === id
         ? (editors[editors.length - 1]?.id ?? null)
         : state.activeEditor;
-    set({ editors, buffers, originals, snapshots, diffs, activeEditor });
+    set({ editors, buffers, originals, snapshots, diffs, editorLoading, editorErrors, activeEditor });
   },
 
   closeAllEditors: () => {
@@ -390,6 +456,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       originals: {},
       snapshots: {},
       diffs: {},
+      editorLoading: {},
+      editorErrors: {},
     });
   },
 
@@ -407,7 +475,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const root = state.root;
     const tab = state.editors.find((item) => item.id === id);
     if (!root || !tab || tab.kind !== "file") return;
-    if (state.snapshots[id]?.binary) return;
+    if (!state.snapshots[id] || state.editorLoading[id] || state.editorErrors[id]) return;
+    if (state.snapshots[id].binary) return;
     try {
       await api.workspaceWrite(root, tab.rel, state.buffers[id] ?? "");
       set({
@@ -525,7 +594,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   commit: async (andPush = false) => {
     const root = get().root;
     const message = get().commitMessage.trim();
-    if (!root) return;
+    if (!root || get().busy) return;
+    const version = projectVersion;
     if (!message) {
       toast.error("Write a commit message first.");
       return;
@@ -542,18 +612,19 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         );
       }
       const hash = await api.gitCommit(root, message);
-      set({ commitMessage: "" });
+      if (version === projectVersion) set({ commitMessage: "" });
       toast.success(`Committed ${hash}`);
       if (andPush) {
         const pushed = await api.gitPush(root, !git?.upstream);
         toast.success(pushed);
       }
-      await get().refreshGit();
-      await get().refreshMeta();
+      if (version !== projectVersion) return;
+      await get().refreshGit(true);
+      if (version === projectVersion) void get().refreshMeta();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
     } finally {
-      set({ busy: false });
+      if (version === projectVersion) set({ busy: false });
     }
   },
 

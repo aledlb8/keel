@@ -44,6 +44,7 @@ import { toast } from "sonner";
 import { DockNotice } from "@/components/Dock";
 import { FileIcon } from "@/components/inspector/FileIcon";
 import { GitLetter } from "@/components/inspector/GitLetter";
+import { LoadingRows } from "@/components/inspector/LoadingRows";
 import {
   ContextMenuEntries,
   type MenuEntry,
@@ -79,7 +80,7 @@ import type {
   PrList,
   PullRequest,
 } from "@/lib/workspace";
-import { useWorkspace } from "@/state/workspace";
+import { useWorkspace, type GitMetaSection } from "@/state/workspace";
 
 type SectionId =
   | "conflict"
@@ -128,8 +129,17 @@ export function GitPanel() {
 
   useEffect(() => {
     void useWorkspace.getState().refreshGit();
-    void useWorkspace.getState().refreshMeta();
   }, [root]);
+
+  useEffect(() => {
+    if (sections.branches) void useWorkspace.getState().refreshBranches();
+  }, [root, sections.branches]);
+  useEffect(() => {
+    if (sections.prs) void useWorkspace.getState().refreshPrs();
+  }, [root, sections.prs]);
+  useEffect(() => {
+    if (sections.history) void useWorkspace.getState().refreshHistory();
+  }, [root, sections.history]);
 
   const groups = useMemo(() => groupGitFiles(git?.files ?? []), [git]);
   const stagedCount = groups.staged.length;
@@ -140,6 +150,10 @@ export function GitPanel() {
     groups.untracked.length;
 
   if (!root) return null;
+
+  if (!git && !gitError) {
+    return <LoadingRows label="Loading Git" rows={9} />;
+  }
 
   if (git && !git.git) {
     return (
@@ -289,7 +303,9 @@ export function GitPanel() {
             open={sections.branches}
             onToggle={toggle}
           >
-            <BranchList branches={branches} busy={busy} focusKey={focusBranchInput} />
+            <MetaContent section="branches" loaded={branches !== null}>
+              <BranchList branches={branches} busy={busy} focusKey={focusBranchInput} />
+            </MetaContent>
           </Section>
         </div>
         <Section
@@ -299,7 +315,9 @@ export function GitPanel() {
           open={sections.prs}
           onToggle={toggle}
         >
-          <PullRequests prs={prs} busy={busy} />
+          <MetaContent section="prs" loaded={prs !== null}>
+            <PullRequests prs={prs} busy={busy} />
+          </MetaContent>
         </Section>
         <Section
           id="history"
@@ -307,7 +325,9 @@ export function GitPanel() {
           open={sections.history}
           onToggle={toggle}
         >
-          <History commits={commits} />
+          <MetaContent section="history" loaded={commits !== null}>
+            <History commits={commits ?? []} />
+          </MetaContent>
         </Section>
       </div>
     </div>
@@ -333,10 +353,13 @@ function BranchBar({
   const published = Boolean(git?.upstream);
   const local = branches?.items.filter((item) => !item.remote) ?? [];
   const workspace = useWorkspace.getState;
+  const branchesError = useWorkspace((state) => state.metaErrors.branches);
 
   return (
     <div className="flex shrink-0 items-center gap-1.5 px-[var(--keel-inset)] pb-2">
-      <DropdownMenu modal={false}>
+      <DropdownMenu modal={false} onOpenChange={(open) => {
+        if (open) void workspace().refreshBranches();
+      }}>
         <DropdownMenuTrigger asChild>
           <button
             type="button"
@@ -356,7 +379,14 @@ function BranchBar({
           onCloseAutoFocus={(event) => event.preventDefault()}
         >
           <DropdownMenuLabel>Switch branch</DropdownMenuLabel>
-          {local.length === 0 ? (
+          {!branches ? (
+            branchesError ? (
+              <DropdownMenuItem onSelect={(event) => {
+                event.preventDefault();
+                void workspace().refreshBranches();
+              }}>Couldn't load branches. Retry</DropdownMenuItem>
+            ) : <LoadingRows label="Loading branches" rows={3} />
+          ) : local.length === 0 ? (
             <DropdownMenuItem disabled>No local branches</DropdownMenuItem>
           ) : (
             local.map((item) => (
@@ -836,6 +866,30 @@ function Hint({ children }: { children: ReactNode }) {
       {children}
     </p>
   );
+}
+
+const META_LABELS = { branches: "branches", prs: "pull requests", history: "history" };
+const META_REFRESH = { branches: "refreshBranches", prs: "refreshPrs", history: "refreshHistory" } as const;
+
+function MetaContent({ section, loaded, children }: {
+  section: GitMetaSection;
+  loaded: boolean;
+  children: ReactNode;
+}) {
+  const error = useWorkspace((state) => state.metaErrors[section]);
+  const loading = useWorkspace((state) => state.metaLoading[section]);
+  if (!loaded && (!error || loading)) {
+    return <LoadingRows label={`Loading ${META_LABELS[section]}`} />;
+  }
+  return <>
+    {error ? <Hint>
+      {error}{" "}
+      <button type="button" disabled={loading} className="underline" onClick={() => {
+        void useWorkspace.getState()[META_REFRESH[section]]();
+      }}>Retry</button>
+    </Hint> : null}
+    {loaded ? children : null}
+  </>;
 }
 
 // ---- Branches -------------------------------------------------------------

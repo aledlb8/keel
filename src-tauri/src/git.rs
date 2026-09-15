@@ -489,7 +489,11 @@ pub fn ls_files(root: &Path) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-pub fn git_status(root: String) -> Result<GitStatus, String> {
+pub async fn git_status(root: String) -> Result<GitStatus, String> {
+    crate::blocking::run(move || git_status_blocking(root)).await
+}
+
+fn git_status_blocking(root: String) -> Result<GitStatus, String> {
     if !git_installed() {
         return Ok(empty_status(false, false));
     }
@@ -515,7 +519,11 @@ pub fn git_status(root: String) -> Result<GitStatus, String> {
 }
 
 #[tauri::command]
-pub fn git_diff(root: String, path: String, staged: bool) -> Result<GitDiff, String> {
+pub async fn git_diff(root: String, path: String, staged: bool) -> Result<GitDiff, String> {
+    crate::blocking::run(move || git_diff_blocking(root, path, staged)).await
+}
+
+fn git_diff_blocking(root: String, path: String, staged: bool) -> Result<GitDiff, String> {
     let root = canonicalize_dir(Path::new(&root))?;
     let rel = rel_arg(&root, &path)?;
     let mut args = vec!["diff", "--no-color", "--unified=3"];
@@ -568,7 +576,11 @@ pub fn git_diff(root: String, path: String, staged: bool) -> Result<GitDiff, Str
 }
 
 #[tauri::command]
-pub fn git_stage(root: String, paths: Vec<String>) -> Result<(), String> {
+pub async fn git_stage(root: String, paths: Vec<String>) -> Result<(), String> {
+    crate::blocking::run(move || git_stage_blocking(root, paths)).await
+}
+
+fn git_stage_blocking(root: String, paths: Vec<String>) -> Result<(), String> {
     let root = canonicalize_dir(Path::new(&root))?;
     let rels = rels(&root, &paths)?;
     if rels.is_empty() {
@@ -581,7 +593,11 @@ pub fn git_stage(root: String, paths: Vec<String>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn git_unstage(root: String, paths: Vec<String>) -> Result<(), String> {
+pub async fn git_unstage(root: String, paths: Vec<String>) -> Result<(), String> {
+    crate::blocking::run(move || git_unstage_blocking(root, paths)).await
+}
+
+fn git_unstage_blocking(root: String, paths: Vec<String>) -> Result<(), String> {
     let root = canonicalize_dir(Path::new(&root))?;
     let rels = rels(&root, &paths)?;
     if rels.is_empty() {
@@ -594,9 +610,13 @@ pub fn git_unstage(root: String, paths: Vec<String>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn git_discard(root: String, paths: Vec<String>) -> Result<(), String> {
+pub async fn git_discard(root: String, paths: Vec<String>) -> Result<(), String> {
+    crate::blocking::run(move || git_discard_blocking(root, paths)).await
+}
+
+fn git_discard_blocking(root: String, paths: Vec<String>) -> Result<(), String> {
     let root = canonicalize_dir(Path::new(&root))?;
-    let status = git_status(root.to_string_lossy().into_owned())?;
+    let status = git_status_blocking(root.to_string_lossy().into_owned())?;
     let mut tracked = Vec::new();
     let mut untracked = Vec::new();
     for path in paths {
@@ -626,7 +646,11 @@ pub fn git_discard(root: String, paths: Vec<String>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn git_commit(root: String, message: String) -> Result<String, String> {
+pub async fn git_commit(root: String, message: String) -> Result<String, String> {
+    crate::blocking::run(move || git_commit_blocking(root, message)).await
+}
+
+fn git_commit_blocking(root: String, message: String) -> Result<String, String> {
     let message = message.trim().to_string();
     if message.is_empty() {
         return Err("Write a commit message first.".into());
@@ -678,7 +702,11 @@ fn default_remote(root: &Path) -> String {
 }
 
 #[tauri::command]
-pub fn git_push(root: String, set_upstream: bool) -> Result<String, String> {
+pub async fn git_push(root: String, set_upstream: bool) -> Result<String, String> {
+    crate::blocking::run(move || git_push_blocking(root, set_upstream)).await
+}
+
+fn git_push_blocking(root: String, set_upstream: bool) -> Result<String, String> {
     let root = canonicalize_dir(Path::new(&root))?;
     let has_upstream = git_ok(
         &root,
@@ -710,7 +738,11 @@ pub fn git_push(root: String, set_upstream: bool) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn git_pull(root: String) -> Result<String, String> {
+pub async fn git_pull(root: String) -> Result<String, String> {
+    crate::blocking::run(move || git_pull_blocking(root)).await
+}
+
+fn git_pull_blocking(root: String) -> Result<String, String> {
     let root = canonicalize_dir(Path::new(&root))?;
     git_ok(&root, &["pull", "--ff-only"]).map(|s| {
         let t = s.trim();
@@ -723,7 +755,11 @@ pub fn git_pull(root: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn git_fetch(root: String) -> Result<String, String> {
+pub async fn git_fetch(root: String) -> Result<String, String> {
+    crate::blocking::run(move || git_fetch_blocking(root)).await
+}
+
+fn git_fetch_blocking(root: String) -> Result<String, String> {
     let root = canonicalize_dir(Path::new(&root))?;
     git_ok(&root, &["fetch", "--all", "--prune"]).map(|s| {
         let t = s.trim();
@@ -736,7 +772,11 @@ pub fn git_fetch(root: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn git_branches(root: String) -> Result<GitBranches, String> {
+pub async fn git_branches(root: String) -> Result<GitBranches, String> {
+    crate::blocking::run(move || git_branches_blocking(root)).await
+}
+
+fn git_branches_blocking(root: String) -> Result<GitBranches, String> {
     let root = canonicalize_dir(Path::new(&root))?;
     let detached = git_ok(&root, &["symbolic-ref", "-q", "HEAD"]).is_err();
     let current = git_ok(&root, &["rev-parse", "--abbrev-ref", "HEAD"])
@@ -785,7 +825,11 @@ pub fn git_branches(root: String) -> Result<GitBranches, String> {
 }
 
 #[tauri::command]
-pub fn git_checkout(root: String, name: String) -> Result<(), String> {
+pub async fn git_checkout(root: String, name: String) -> Result<(), String> {
+    crate::blocking::run(move || git_checkout_blocking(root, name)).await
+}
+
+fn git_checkout_blocking(root: String, name: String) -> Result<(), String> {
     let name = name.trim();
     if name.is_empty() || name.contains("..") || name.starts_with('-') {
         return Err("That is not a branch name.".into());
@@ -795,7 +839,11 @@ pub fn git_checkout(root: String, name: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn git_branch_create(root: String, name: String, checkout: bool) -> Result<(), String> {
+pub async fn git_branch_create(root: String, name: String, checkout: bool) -> Result<(), String> {
+    crate::blocking::run(move || git_branch_create_blocking(root, name, checkout)).await
+}
+
+fn git_branch_create_blocking(root: String, name: String, checkout: bool) -> Result<(), String> {
     let name = name.trim();
     if name.is_empty()
         || name.contains("..")
@@ -813,7 +861,11 @@ pub fn git_branch_create(root: String, name: String, checkout: bool) -> Result<(
 }
 
 #[tauri::command]
-pub fn git_branch_delete(root: String, name: String) -> Result<(), String> {
+pub async fn git_branch_delete(root: String, name: String) -> Result<(), String> {
+    crate::blocking::run(move || git_branch_delete_blocking(root, name)).await
+}
+
+fn git_branch_delete_blocking(root: String, name: String) -> Result<(), String> {
     let name = name.trim();
     if name.is_empty() || name.contains("..") || name.starts_with('-') {
         return Err("That is not a branch name.".into());
@@ -823,7 +875,11 @@ pub fn git_branch_delete(root: String, name: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn git_log(root: String, limit: u32) -> Result<Vec<GitCommit>, String> {
+pub async fn git_log(root: String, limit: u32) -> Result<Vec<GitCommit>, String> {
+    crate::blocking::run(move || git_log_blocking(root, limit)).await
+}
+
+fn git_log_blocking(root: String, limit: u32) -> Result<Vec<GitCommit>, String> {
     let root = canonicalize_dir(Path::new(&root))?;
     let n = limit.clamp(1, 100).to_string();
     let raw = git_ok(
@@ -883,7 +939,11 @@ struct GhAuthor {
 }
 
 #[tauri::command]
-pub fn pr_list(root: String) -> Result<PrList, String> {
+pub async fn pr_list(root: String) -> Result<PrList, String> {
+    crate::blocking::run(move || pr_list_blocking(root)).await
+}
+
+fn pr_list_blocking(root: String) -> Result<PrList, String> {
     if !gh_installed() {
         return Ok(PrList {
             available: false,
@@ -934,7 +994,17 @@ pub fn pr_list(root: String) -> Result<PrList, String> {
 }
 
 #[tauri::command]
-pub fn pr_create(
+pub async fn pr_create(
+    root: String,
+    title: String,
+    body: String,
+    base: Option<String>,
+    draft: bool,
+) -> Result<PullRequest, String> {
+    crate::blocking::run(move || pr_create_blocking(root, title, body, base, draft)).await
+}
+
+fn pr_create_blocking(
     root: String,
     title: String,
     body: String,
@@ -987,7 +1057,11 @@ pub fn pr_create(
 }
 
 #[tauri::command]
-pub fn pr_checkout(root: String, number: u32) -> Result<(), String> {
+pub async fn pr_checkout(root: String, number: u32) -> Result<(), String> {
+    crate::blocking::run(move || pr_checkout_blocking(root, number)).await
+}
+
+fn pr_checkout_blocking(root: String, number: u32) -> Result<(), String> {
     if !gh_installed() {
         return Err("Install GitHub CLI (gh) to check out a pull request.".into());
     }

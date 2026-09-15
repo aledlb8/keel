@@ -1,4 +1,5 @@
 mod agents;
+mod blocking;
 mod git;
 mod paths;
 mod procs;
