@@ -415,6 +415,185 @@
     }
 
     /*
+     * The sidebar folds down to a rail rather than disappearing, so the places
+     * you can go never leave the screen. The band's width is the one thing that
+     * moves; the full panel and the rail are both laid out at their final size
+     * and cross over inside it, so no row ever reflows or re-wraps mid-flight.
+     * The curve is the island's: quick to start, soft to land, no overshoot.
+     */
+    .k-sidebar {
+        --k-fold: cubic-bezier(0.32, 0.72, 0, 1);
+        position: relative;
+        width: 240px;
+        overflow: hidden;
+        transition: width 420ms var(--k-fold);
+    }
+
+    .k-sidebar[data-collapsed="true"] {
+        width: 52px;
+    }
+
+    .k-sidebar-panel,
+    .k-sidebar-rail {
+        position: absolute;
+        inset-block: 0;
+        left: 0;
+        display: flex;
+        flex-direction: column;
+        transition:
+            opacity 260ms ease,
+            transform 420ms var(--k-fold),
+            filter 260ms ease;
+    }
+
+    .k-sidebar-panel {
+        width: 240px;
+    }
+
+    .k-sidebar-rail {
+        width: 52px;
+        opacity: 0;
+        transform: translateX(-6px);
+        filter: blur(4px);
+        pointer-events: none;
+        transition-duration: 140ms, 420ms, 140ms;
+    }
+
+    /* Folding: the panel leaves quickly, the rail arrives once there is room. */
+    .k-sidebar[data-collapsed="true"] .k-sidebar-panel {
+        opacity: 0;
+        transform: translateX(-18px);
+        filter: blur(4px);
+        pointer-events: none;
+        transition-duration: 180ms, 420ms, 180ms;
+    }
+
+    .k-sidebar[data-collapsed="true"] .k-sidebar-rail {
+        opacity: 1;
+        transform: none;
+        filter: none;
+        pointer-events: auto;
+        transition-duration: 300ms, 420ms, 300ms;
+        transition-delay: 120ms;
+    }
+
+    /* Unfolding: the reverse, so the panel settles in as the band widens. */
+    .k-sidebar[data-collapsed="false"] .k-sidebar-panel {
+        transition-delay: 90ms;
+    }
+
+    /*
+     * The one toggle. It rides the band's right edge, so as the sidebar folds it
+     * travels with the edge and lands centred on the rail — one control moving,
+     * not two swapping — while its chevron turns to point the other way.
+     */
+    .k-sidebar-toggle {
+        position: absolute;
+        z-index: 1;
+        top: 5px;
+        right: 8px;
+        transition:
+            right 420ms var(--k-fold),
+            background-color 110ms ease,
+            color 110ms ease;
+    }
+
+    .k-sidebar[data-collapsed="true"] .k-sidebar-toggle {
+        right: 14px;
+    }
+
+    .k-sidebar-toggle .k-chevron {
+        transform-box: fill-box;
+        transform-origin: center;
+        transition: transform 420ms var(--k-fold);
+    }
+
+    .k-sidebar[data-collapsed="true"] .k-sidebar-toggle .k-chevron {
+        transform: rotate(180deg);
+    }
+
+    /*
+     * A project on the rail: a monogram tile. It borrows the row's states
+     * exactly — veil on hover, brighter veil and the sheen when current — so
+     * folding the sidebar changes the shape of a place, not its language.
+     */
+    .k-rail-tile {
+        position: relative;
+        display: grid;
+        place-items: center;
+        width: 36px;
+        height: 36px;
+        margin-inline: auto;
+        border-radius: var(--keel-r-control);
+        font-size: 12px;
+        font-weight: 500;
+        letter-spacing: 0.01em;
+        color: var(--keel-text-dim);
+        cursor: default;
+        transition:
+            background-color 110ms ease,
+            color 110ms ease,
+            opacity 300ms ease,
+            transform 420ms var(--k-fold);
+    }
+
+    .k-rail-tile:hover {
+        background: var(--keel-veil-1);
+        color: var(--keel-text);
+    }
+
+    .k-rail-tile[data-selected="true"] {
+        background: var(--keel-veil-2);
+        box-shadow: inset 0 1px 0 0 var(--keel-sheen);
+        color: var(--keel-text);
+    }
+
+    /* The current project also gets a short bar on the window edge. */
+    .k-rail-tile::before {
+        content: "";
+        position: absolute;
+        left: -8px;
+        top: 50%;
+        width: 3px;
+        height: 0;
+        border-radius: 0 2px 2px 0;
+        background: var(--keel-text);
+        opacity: 0;
+        transform: translateY(-50%);
+        transition:
+            height 320ms var(--k-fold),
+            opacity 160ms ease;
+    }
+
+    .k-rail-tile[data-selected="true"]::before {
+        height: 16px;
+        opacity: 0.9;
+    }
+
+    /* Tiles arrive one after another, top down, as the rail fades in. */
+    .k-sidebar[data-collapsed="false"] .k-rail-tile {
+        opacity: 0;
+        transform: translateX(-4px);
+    }
+
+    .k-sidebar[data-collapsed="true"] .k-rail-tile {
+        transition-delay: 0ms, 0ms,
+            calc(140ms + min(var(--i, 0), 10) * 22ms),
+            calc(140ms + min(var(--i, 0), 10) * 22ms);
+    }
+
+    /* What a project's agents are doing, pinned to the tile's corner. */
+    .k-rail-badge {
+        position: absolute;
+        top: 4px;
+        right: 4px;
+        width: 7px;
+        height: 7px;
+        border-radius: 999px;
+        box-shadow: 0 0 0 2px var(--keel-chrome);
+    }
+
+    /*
      * The launcher's stage. A pane that was just added grows into its row from
      * nothing, so its neighbours visibly make room — the same reflow the canvas
      * is about to do. flex-grow animates where a width in a flex row cannot.

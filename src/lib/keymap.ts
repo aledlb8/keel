@@ -198,7 +198,7 @@ export const SHORTCUTS: Shortcut[] = [
   },
   {
     id: "toggleSidebar",
-    label: "Show or hide the sidebar",
+    label: "Collapse or expand the sidebar",
     group: "View",
     family: "single",
     defaults: bind("KeyB", { ctrl: true }),

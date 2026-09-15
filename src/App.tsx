@@ -43,12 +43,30 @@ import {
 import { onPtyAgentExit, onPtyAgentStart, onPtyExit } from "@/lib/pty";
 import { activeDeck, startAttentionTracking, useKeel } from "@/state/store";
 
+const SIDEBAR_KEY = "keel.sidebar";
+
 export default function App() {
   const launching = useKeel((state) => state.launcher);
   const setLaunching = useKeel((state) => state.setLauncher);
   const [shortcuts, setShortcuts] = useState(false);
   const [overview, setOverview] = useState(false);
-  const [sidebar, setSidebar] = useState(true);
+  // Expanded or folded to the rail. A view preference, so it lives with the
+  // window rather than in the saved projects.
+  const [sidebar, setSidebar] = useState(() => {
+    try {
+      return localStorage.getItem(SIDEBAR_KEY) !== "collapsed";
+    } catch {
+      return true;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SIDEBAR_KEY, sidebar ? "expanded" : "collapsed");
+    } catch {
+      // Storage unavailable: the choice just lasts for this session.
+    }
+  }, [sidebar]);
 
   const ready = useKeel((state) => state.ready);
   const projects = useKeel((state) => state.projects);
@@ -310,15 +328,15 @@ export default function App() {
       />
 
       <div className="flex min-h-0 flex-1">
-        {sidebar ? (
-          <Sidebar
-            activeProjectId={activeProjectId}
-            // Going somewhere from the sidebar has to lift the overview, which
-            // is an opaque sheet over the canvas — otherwise the deck really
-            // does change underneath and the click looks like it was ignored.
-            onNavigate={() => setOverview(false)}
-          />
-        ) : null}
+        <Sidebar
+          activeProjectId={activeProjectId}
+          collapsed={!sidebar}
+          onToggleCollapsed={() => setSidebar((previous) => !previous)}
+          // Going somewhere from the sidebar has to lift the overview, which
+          // is an opaque sheet over the canvas — otherwise the deck really
+          // does change underneath and the click looks like it was ignored.
+          onNavigate={() => setOverview(false)}
+        />
 
         {/* Half a gutter of padding, so the air around the outermost panes
             matches the air between two neighbours. */}

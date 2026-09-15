@@ -25,6 +25,10 @@
  * fill goes to the deepest thing that is actually current — the focused
  * terminal, else the active deck, else the project — and the rows above it say
  * "you are inside me" with weight and text colour instead. See `leafOf`.
+ *
+ * **Folded, it is a rail.** One toggle rides the sidebar's right edge; folding
+ * narrows the band to a column of project monograms carrying the same hover and
+ * selection states, a status badge, and the same context menu. See `SidebarRail`.
  */
 
 import {
@@ -39,6 +43,7 @@ import {
   type SetStateAction,
 } from "react";
 import { ChevronRight, Ellipsis, FolderPlus, Plus, X } from "lucide-react";
+import { Tooltip as TooltipPrimitive } from "radix-ui";
 
 import { AgentMark } from "@/components/AgentMark";
 import { InlineRename } from "@/components/InlineRename";
@@ -75,6 +80,7 @@ import {
   activeDeck,
   deckAttention,
   useKeel,
+  type Attention,
   type RenameTarget,
 } from "@/state/store";
 
@@ -290,6 +296,9 @@ function indentStyle(indent: number): CSSProperties {
 
 export interface SidebarProps {
   activeProjectId: string | null;
+  /** Folded down to the rail. */
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
   /**
    * Fired whenever a row moves you somewhere. The canvas can be covered by the
    * overview, and navigating from over here has to get you out from under it —
@@ -352,7 +361,12 @@ function isControl(target: EventTarget): boolean {
   return target instanceof Element && target.closest("button, input") !== null;
 }
 
-export function Sidebar({ activeProjectId, onNavigate }: SidebarProps) {
+export function Sidebar({
+  activeProjectId,
+  collapsed,
+  onToggleCollapsed,
+  onNavigate,
+}: SidebarProps) {
   const agents = useKeel((state) => state.agents);
   const accounts = useKeel((state) => state.accounts);
   const projects = useKeel((state) => state.projects);
@@ -360,51 +374,285 @@ export function Sidebar({ activeProjectId, onNavigate }: SidebarProps) {
   const [sort, setSort] = useState<SortState>(IDLE);
 
   return (
-    <aside className="k-glass flex w-[240px] shrink-0 flex-col border-r border-line">
-      <div className="flex h-[34px] shrink-0 items-center justify-between pr-2">
-        <h2 className="k-label">Projects</h2>
-        <button
-          type="button"
-          title="Add a folder"
-          aria-label="Add a folder"
-          onClick={() => void pickProjectFolder()}
-          className="k-icon-btn size-[24px]"
-        >
-          <Plus className="size-3.5" />
-        </button>
+    <aside
+      data-collapsed={collapsed}
+      className="k-sidebar k-glass shrink-0 border-r border-line"
+    >
+      <SidebarToggle collapsed={collapsed} onToggle={onToggleCollapsed} />
+
+      {/* Both layers stay mounted so folding is a crossfade, never a remount.
+          Whichever is hidden is inert: no focus, no hover, no tooltips. */}
+      <div className="k-sidebar-panel" inert={collapsed}>
+        {/* Right padding leaves the toggle its own slot. */}
+        <div className="flex h-[34px] shrink-0 items-center justify-between pr-[38px]">
+          <h2 className="k-label">Projects</h2>
+          <button
+            type="button"
+            title="Add a folder"
+            aria-label="Add a folder"
+            onClick={() => void pickProjectFolder()}
+            className="k-icon-btn size-[24px]"
+          >
+            <Plus className="size-3.5" />
+          </button>
+        </div>
+
+        <SortContext.Provider value={{ state: sort, setState: setSort }}>
+          <ContextMenu>
+            <ContextMenuTrigger asChild>
+              <div
+                className="min-h-0 flex-1 overflow-y-auto pb-2 pt-0.5"
+                // A drop that lands between rows still has to end the drag.
+                onDrop={() => setSort(IDLE)}
+              >
+                {projects.length === 0 ? (
+                  <EmptyProjects />
+                ) : (
+                  projects.map((project) => (
+                    <ProjectSection
+                      key={project.id}
+                      project={project}
+                      agents={agents}
+                      accounts={accounts}
+                      status={status}
+                      selected={project.id === activeProjectId}
+                      onNavigate={onNavigate}
+                    />
+                  ))
+                )}
+              </div>
+            </ContextMenuTrigger>
+            <ContextMenuContent>
+              <ContextMenuEntries entries={sidebarMenu} />
+            </ContextMenuContent>
+          </ContextMenu>
+        </SortContext.Provider>
       </div>
 
-      <SortContext.Provider value={{ state: sort, setState: setSort }}>
-        <ContextMenu>
-          <ContextMenuTrigger asChild>
-            <div
-              className="min-h-0 flex-1 overflow-y-auto pb-2 pt-0.5"
-              // A drop that lands between rows still has to end the drag.
-              onDrop={() => setSort(IDLE)}
-            >
-              {projects.length === 0 ? (
-                <EmptyProjects />
-              ) : (
-                projects.map((project) => (
-                  <ProjectSection
-                    key={project.id}
-                    project={project}
-                    agents={agents}
-                    accounts={accounts}
-                    status={status}
-                    selected={project.id === activeProjectId}
-                    onNavigate={onNavigate}
-                  />
-                ))
-              )}
-            </div>
-          </ContextMenuTrigger>
-          <ContextMenuContent>
-            <ContextMenuEntries entries={sidebarMenu} />
-          </ContextMenuContent>
-        </ContextMenu>
-      </SortContext.Provider>
+      <SidebarRail
+        hidden={!collapsed}
+        projects={projects}
+        status={status}
+        activeProjectId={activeProjectId}
+        onNavigate={onNavigate}
+      />
     </aside>
+  );
+}
+
+/**
+ * Fold and unfold. A panel outline with a chevron inside it, drawn here rather
+ * than swapping two icons, so the chevron can turn instead of blinking.
+ */
+function SidebarToggle({
+  collapsed,
+  onToggle,
+}: {
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
+  const label = collapsed ? "Expand sidebar" : "Collapse sidebar";
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      aria-expanded={!collapsed}
+      onClick={onToggle}
+      className="k-icon-btn k-sidebar-toggle size-[24px]"
+    >
+      <svg
+        width="15"
+        height="15"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden
+      >
+        <rect x="3" y="3.5" width="18" height="17" rx="3.5" />
+        <path d="M9 3.5v17" />
+        <path className="k-chevron" d="m16 9.5-2.5 2.5 2.5 2.5" />
+      </svg>
+    </button>
+  );
+}
+
+// ---- Rail ------------------------------------------------------------------
+
+/** Two initials for a multi-word name, else the first two letters: "Ke", "MA". */
+function monogram(name: string): string {
+  const [first = "", second = ""] = name.split(/[\s._-]+/).filter(Boolean);
+  if (second) return (first.charAt(0) + second.charAt(0)).toUpperCase();
+  return first.charAt(0).toUpperCase() + first.charAt(1).toLowerCase();
+}
+
+/** The loudest thing any agent in the project is doing. */
+function projectAttention(
+  project: Project,
+  status: Record<string, PaneStatus>,
+): Attention | null {
+  let best: Attention | null = null;
+  for (const deck of project.decks) {
+    const attention = deckAttention(deck, status);
+    if (attention === "working") return attention;
+    best ??= attention;
+  }
+  return best;
+}
+
+const BADGE: Record<Attention, string> = {
+  working: "var(--keel-working)",
+  done: "var(--keel-done)",
+};
+
+function tileDelay(index: number): CSSProperties {
+  return { ["--i" as string]: index };
+}
+
+/**
+ * The folded sidebar. Every project is a tile you can click, right-click and
+ * hover for its name; nothing else competes for 52 pixels.
+ */
+function SidebarRail({
+  hidden,
+  projects,
+  status,
+  activeProjectId,
+  onNavigate,
+}: {
+  hidden: boolean;
+  projects: Project[];
+  status: Record<string, PaneStatus>;
+  activeProjectId: string | null;
+  onNavigate: () => void;
+}) {
+  return (
+    <TooltipPrimitive.Provider delayDuration={200} skipDelayDuration={400}>
+      <nav aria-label="Projects" className="k-sidebar-rail" inert={hidden}>
+        {/* The toggle's slot, level with the panel's header. */}
+        <div className="h-[34px] shrink-0" />
+
+        <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto overflow-x-hidden pb-2 pt-1 [scrollbar-width:none]">
+          {projects.map((project, index) => (
+            <RailTile
+              key={project.id}
+              project={project}
+              index={index}
+              selected={project.id === activeProjectId}
+              attention={projectAttention(project, status)}
+              onNavigate={onNavigate}
+            />
+          ))}
+
+          {projects.length > 0 ? (
+            <span
+              aria-hidden
+              className="mx-auto my-1 h-px w-4 shrink-0 bg-line-strong"
+            />
+          ) : null}
+
+          <RailTip label="Add a folder">
+            <button
+              type="button"
+              aria-label="Add a folder"
+              onClick={() => void pickProjectFolder()}
+              style={tileDelay(projects.length)}
+              className="k-rail-tile shrink-0 text-faint"
+            >
+              <Plus className="size-4" />
+            </button>
+          </RailTip>
+        </div>
+      </nav>
+    </TooltipPrimitive.Provider>
+  );
+}
+
+function RailTile({
+  project,
+  index,
+  selected,
+  attention,
+  onNavigate,
+}: {
+  project: Project;
+  index: number;
+  selected: boolean;
+  attention: Attention | null;
+  onNavigate: () => void;
+}) {
+  const total = project.decks.reduce(
+    (sum, deck) => sum + listPanes(deck.tree).length,
+    0,
+  );
+
+  return (
+    <ContextMenu>
+      <RailTip
+        label={project.name}
+        detail={total ? `${total} ${total === 1 ? "terminal" : "terminals"}` : undefined}
+      >
+        <ContextMenuTrigger asChild>
+          <button
+            type="button"
+            aria-label={project.name}
+            aria-current={selected ? "page" : undefined}
+            data-selected={selected}
+            style={tileDelay(index)}
+            className="k-rail-tile shrink-0"
+            onClick={() => {
+              useKeel.getState().selectProject(project.id);
+              onNavigate();
+            }}
+          >
+            {monogram(project.name)}
+            {attention ? (
+              <span
+                aria-hidden
+                className="k-rail-badge"
+                style={{ background: BADGE[attention] }}
+              />
+            ) : null}
+          </button>
+        </ContextMenuTrigger>
+      </RailTip>
+      <ContextMenuContent>
+        <ContextMenuEntries entries={() => projectMenu(project.id)} />
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
+/** A name to the right of a rail tile, in the chrome's own colours. */
+function RailTip({
+  label,
+  detail,
+  children,
+}: {
+  label: string;
+  detail?: string;
+  children: ReactNode;
+}) {
+  return (
+    <TooltipPrimitive.Root>
+      <TooltipPrimitive.Trigger asChild>{children}</TooltipPrimitive.Trigger>
+      <TooltipPrimitive.Portal>
+        <TooltipPrimitive.Content
+          side="right"
+          sideOffset={10}
+          collisionPadding={8}
+          className="z-50 flex items-center gap-2 rounded-[var(--keel-r-chip)] border border-line-strong bg-popover px-2 py-1 text-[12px] text-foreground shadow-[var(--keel-lift)] duration-150 animate-in fade-in-0 slide-in-from-left-1"
+        >
+          {label}
+          {detail ? (
+            <span className="text-[11px] tabular-nums text-faint">{detail}</span>
+          ) : null}
+        </TooltipPrimitive.Content>
+      </TooltipPrimitive.Portal>
+    </TooltipPrimitive.Root>
   );
 }
 

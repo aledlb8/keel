@@ -815,7 +815,7 @@ function Switcher({
       action("folder", "Add a folder", <FolderPlus className="size-3.5" />, actions.addFolder),
       action("agents", "Agents & profiles", <UsersRound className="size-3.5" />, actions.openCatalogue),
       action("vpn", "Private VPN", <ShieldCheck className="size-3.5" />, actions.openVpn),
-      action("sidebar", "Show or hide the sidebar", <PanelLeft className="size-3.5" />, actions.toggleSidebar, shortcutKeys("toggleSidebar")),
+      action("sidebar", "Collapse or expand the sidebar", <PanelLeft className="size-3.5" />, actions.toggleSidebar, shortcutKeys("toggleSidebar")),
       action("shortcuts", "Keyboard shortcuts", <Keyboard className="size-3.5" />, actions.showShortcuts),
     );
 
