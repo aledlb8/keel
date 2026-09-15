@@ -63,7 +63,7 @@
     "@xterm/addon-webgl": "^0.19.0",
     "@xterm/xterm": "^6.0.0",
     "class-variance-authority": "^0.7.1",
-    "cn": "^0.2.5",
+    "cn": "^0.3.0",
     "lucide-react": "^1.41.0",
     "next-themes": "^0.4.6",
     "radix-ui": "^1.6.7",
