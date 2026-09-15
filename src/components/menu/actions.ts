@@ -56,6 +56,7 @@ import {
   useKeel,
   type RenameTarget,
 } from "@/state/store";
+import { useWorkspace } from "@/state/workspace";
 
 const DEFAULT_PROFILE = "__default__";
 
@@ -542,6 +543,8 @@ export function paneMenu(
 
   const agent = state.agents.find((item) => item.id === pane.agentId) ?? null;
   const cwd = pane.cwd ?? project.path;
+  /** An editor pane runs nothing: no profile, no restart, no working directory. */
+  const isEditor = pane.editor !== undefined;
   const otherDecks = project.decks.filter((item) => item.id !== deck.id);
   const profiles = agent?.accountEnv
     ? state.accounts.filter((account) => account.agentId === agent.id)
@@ -602,7 +605,7 @@ export function paneMenu(
       ],
     },
     { kind: "separator" },
-    ...(profiles && agent
+    ...(profiles && agent && !isEditor
       ? [
           {
             kind: "sub",
@@ -637,33 +640,37 @@ export function paneMenu(
           } satisfies MenuEntry,
         ]
       : []),
-    {
-      kind: "item",
-      label: "Restart",
-      icon: RotateCw,
-      onSelect: () => state.restartPane(paneId),
-    },
+    ...(isEditor
+      ? []
+      : ([
+          {
+            kind: "item",
+            label: "Restart",
+            icon: RotateCw,
+            onSelect: () => state.restartPane(paneId),
+          },
+          { kind: "separator" },
+          {
+            kind: "item",
+            label: "Copy working directory",
+            icon: Copy,
+            onSelect: () => copyText(cwd),
+          },
+          {
+            kind: "item",
+            label: REVEAL_LABEL,
+            icon: FolderOpen,
+            onSelect: () => void revealItemInDir(cwd).catch(() => {}),
+          },
+        ] satisfies MenuEntry[])),
     { kind: "separator" },
     {
       kind: "item",
-      label: "Copy working directory",
-      icon: Copy,
-      onSelect: () => copyText(cwd),
-    },
-    {
-      kind: "item",
-      label: REVEAL_LABEL,
-      icon: FolderOpen,
-      onSelect: () => void revealItemInDir(cwd).catch(() => {}),
-    },
-    { kind: "separator" },
-    {
-      kind: "item",
-      label: "Close terminal",
+      label: isEditor ? "Close editor" : "Close terminal",
       icon: X,
       shortcut: shortcutKeys("closePane"),
       destructive: true,
-      onSelect: () => state.closePane(projectId, paneId),
+      onSelect: () => useWorkspace.getState().closePaneSafely(projectId, paneId),
     },
   ];
 }

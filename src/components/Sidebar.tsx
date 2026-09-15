@@ -47,6 +47,7 @@ import { ChevronRight, Ellipsis, FolderPlus, Plus, X } from "lucide-react";
 import { AgentMark } from "@/components/AgentMark";
 import { DockToggle, RailTip, RailTipProvider } from "@/components/Dock";
 import { InlineRename } from "@/components/InlineRename";
+import { FileIcon } from "@/components/inspector/FileIcon";
 import { StatusDot } from "@/components/StatusDot";
 import {
   ContextMenuEntries,
@@ -83,6 +84,7 @@ import {
   type Attention,
   type RenameTarget,
 } from "@/state/store";
+import { useWorkspace } from "@/state/workspace";
 
 /**
  * Left padding per level, added to the row's own 8px. The third level leaves
@@ -1144,12 +1146,16 @@ function PaneRow({
       onRename={() => startRename("pane", pane.id)}
     >
       <StatusDot status={status} />
-      <AgentMark
-        agentId={agent?.id ?? pane.agentId ?? null}
-        name={agent?.name}
-        accent={agentAccent(agent?.accent)}
-        size={16}
-      />
+      {pane.editor ? (
+        <FileIcon name={pane.title} />
+      ) : (
+        <AgentMark
+          agentId={agent?.id ?? pane.agentId ?? null}
+          name={agent?.name}
+          accent={agentAccent(agent?.accent)}
+          size={16}
+        />
+      )}
 
       {renaming ? (
         <InlineRename
@@ -1182,9 +1188,11 @@ function PaneRow({
           <RowActions group="pane">
             <MoreButton />
             <RowButton
-              label="Close terminal"
+              label={pane.editor ? "Close editor" : "Close terminal"}
               danger
-              onClick={() => useKeel.getState().closePane(project.id, pane.id)}
+              onClick={() =>
+                useWorkspace.getState().closePaneSafely(project.id, pane.id)
+              }
             >
               <X className="size-3" />
             </RowButton>

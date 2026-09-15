@@ -28,7 +28,6 @@ import { LaunchDialog } from "@/components/LaunchDialog";
 import { Overview } from "@/components/Overview";
 import { RestoreChrome } from "@/components/RestoreChrome";
 import { ShortcutsDialog } from "@/components/ShortcutsDialog";
-import { EditorDock } from "@/components/editor/EditorDock";
 import { Inspector } from "@/components/inspector/Inspector";
 import { Sidebar } from "@/components/Sidebar";
 import { StatusBar } from "@/components/StatusBar";
@@ -45,7 +44,12 @@ import {
   matchShortcut,
 } from "@/lib/keymap";
 import { onPtyAgentExit, onPtyAgentStart, onPtyExit } from "@/lib/pty";
-import { activeDeck, startAttentionTracking, useKeel } from "@/state/store";
+import {
+  activeDeck,
+  deckOfPane,
+  startAttentionTracking,
+  useKeel,
+} from "@/state/store";
 import { useWorkspace } from "@/state/workspace";
 
 const SIDEBAR_KEY = "keel.sidebar";
@@ -180,15 +184,23 @@ export default function App() {
           : event.target instanceof Node
             ? event.target.parentElement
             : null;
-      const inEditor = Boolean(editorNode?.closest(".k-editor"));
+      const editorPane = editorNode?.closest<HTMLElement>("[data-editor-pane]");
 
-      if (inEditor && matchesBinding(event, bindingFor("closePane"))) {
-        const workspace = useWorkspace.getState();
-        if (workspace.activeEditor) {
+      // Typing in an editor, the close chord closes the tab rather than the pane.
+      if (editorPane && matchesBinding(event, bindingFor("closePane"))) {
+        const paneId = editorPane.dataset.editorPane ?? "";
+        const state = useKeel.getState();
+        const project = state.projects.find(
+          (item) => item.id === state.activeProjectId,
+        );
+        const active = project
+          ? deckOfPane(project, paneId)?.panes[paneId]?.editor?.active
+          : null;
+        if (project && active) {
           event.preventDefault();
           event.stopPropagation();
           event.stopImmediatePropagation();
-          workspace.closeEditor(workspace.activeEditor);
+          useWorkspace.getState().closeTab(project.id, paneId, active);
         }
         return;
       }
@@ -298,7 +310,7 @@ export default function App() {
           break;
         case "closePane":
           claim();
-          state.closePane(project.id, focused);
+          useWorkspace.getState().closePaneSafely(project.id, focused);
           break;
         default:
           break;
@@ -351,7 +363,7 @@ export default function App() {
     closePane: () =>
       project &&
       deck?.focused &&
-      useKeel.getState().closePane(project.id, deck.focused),
+      useWorkspace.getState().closePaneSafely(project.id, deck.focused),
     goTo: () => useKeel.getState().setSwitcher(true),
     jumpToWaiting: () => {
       const paneId = useKeel.getState().jumpToNextWaiting();
@@ -387,8 +399,8 @@ export default function App() {
           onNavigate={() => setOverview(false)}
         />
 
-        {/* The terminals and the editor share this row. Opening a file takes
-            a column on the right and the panes reflow into the rest. */}
+        {/* Terminals and editors alike are panes on the canvas. Opening a file
+            adds an editor pane to the deck, and the layout reflows around it. */}
         <main className="relative flex min-h-0 min-w-0 flex-1">
           <div className="relative min-h-0 min-w-0 flex-1">
             <Canvas
@@ -426,8 +438,6 @@ export default function App() {
               />
             ) : null}
           </div>
-
-          <EditorDock />
         </main>
 
         <Inspector

@@ -1,6 +1,10 @@
 /**
  * A CodeMirror surface for one open file. Created once per tab id so typing
  * does not remount the editor.
+ *
+ * The same file can be open in two panes at once, so each surface follows the
+ * shared buffer: what you type in one appears in the other, and neither can
+ * save a stale copy over the other's edits.
  */
 
 import { useEffect, useRef } from "react";
@@ -25,7 +29,16 @@ import { languageFor } from "@/components/editor/language";
 import { keelEditorTheme } from "@/components/editor/theme";
 import { useWorkspace } from "@/state/workspace";
 
-export function CodeEditor({ id, rel }: { id: string; rel: string }) {
+export function CodeEditor({
+  id,
+  rel,
+  focused,
+}: {
+  id: string;
+  rel: string;
+  /** Its pane has focus: the caret goes here. */
+  focused: boolean;
+}) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
 
@@ -37,6 +50,8 @@ export function CodeEditor({ id, rel }: { id: string; rel: string }) {
     const snapshot = state.snapshots[id];
     const readOnly = Boolean(snapshot?.binary);
     const language = languageFor(rel);
+    /** The buffer as this surface last wrote or received it. */
+    let known = state.buffers[id] ?? "";
     const view = new EditorView({
       parent: host,
       state: EditorState.create({
@@ -65,9 +80,8 @@ export function CodeEditor({ id, rel }: { id: string; rel: string }) {
           EditorState.readOnly.of(readOnly),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) {
-              useWorkspace
-                .getState()
-                .setBuffer(id, update.state.doc.toString());
+              known = update.state.doc.toString();
+              useWorkspace.getState().setBuffer(id, known);
             }
           }),
           ...(language ? [language] : []),
@@ -75,12 +89,26 @@ export function CodeEditor({ id, rel }: { id: string; rel: string }) {
       }),
     });
     viewRef.current = view;
-    view.focus();
+
+    // Another pane showing this file typed into it.
+    const unsubscribe = useWorkspace.subscribe((next) => {
+      const text = next.buffers[id];
+      if (text === undefined || text === known) return;
+      known = text;
+      if (text === view.state.doc.toString()) return;
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
+    });
+
     return () => {
+      unsubscribe();
       view.destroy();
       viewRef.current = null;
     };
   }, [id, rel]);
+
+  useEffect(() => {
+    if (focused) viewRef.current?.focus();
+  }, [focused, id, rel]);
 
   return <div ref={hostRef} className="h-full min-h-0" />;
 }

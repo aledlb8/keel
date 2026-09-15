@@ -30,12 +30,14 @@ import {
   isGenericLabel,
   type TitleSource,
 } from "../lib/paneTitle.ts";
+import { editorRefId, editorRefName } from "../lib/editorRefs.ts";
 import { moveTo } from "../lib/order.ts";
 import { killPty } from "../lib/pty.ts";
 import {
   balance,
   besideTree,
   closePane as closeInTree,
+  dockAtEdge,
   dockPane,
   gridOf,
   listPanes,
@@ -54,8 +56,10 @@ import type {
   AgentSpec,
   Deck,
   Direction,
+  EditorRef,
   Pane,
   PaneActivity,
+  PaneEditor,
   PaneStatus,
   PersistedState,
   Project,
@@ -140,6 +144,8 @@ export interface KeelState {
   status: Record<string, PaneStatus>;
   /** Panes whose shell has exited. Not persisted. */
   exited: Record<string, true>;
+  /** Panes playing their exit before they are removed. Not persisted. */
+  closing: Record<string, true>;
   /** Session reopen chrome — not persisted. */
   restoreStatus: RestoreStatus;
   /** Panes still settling after a layout reopen. */
@@ -292,6 +298,29 @@ export interface KeelState {
     direction: Direction,
   ) => void;
   closePane: (projectId: string, paneId: string) => void;
+  /**
+   * Close from the UI: a pane on screen shrinks away first, then `closePane`
+   * removes it. Anything off screen closes at once.
+   */
+  dismissPane: (projectId: string, paneId: string) => void;
+  /**
+   * Show a file or diff on the active deck: in the editor pane already holding
+   * it, else the focused editor pane, else any editor pane — or a new one
+   * standing along the right edge of the layout.
+   */
+  openInEditor: (projectId: string, ref: EditorRef) => void;
+  selectEditorTab: (projectId: string, paneId: string, tabId: string) => void;
+  /** Take a tab out of its pane. The pane closes with its last tab. */
+  closeEditorTab: (projectId: string, paneId: string, tabId: string) => void;
+  /**
+   * Rewrite the tabs of every editor pane in a folder's projects: return the
+   * tab moved, `null` to drop it, or the same object to leave it. Panes left
+   * with nothing to show close.
+   */
+  rewriteEditorTabs: (
+    projectPath: string,
+    change: (ref: EditorRef) => EditorRef | null,
+  ) => void;
   focusPane: (projectId: string, paneId: string) => void;
   cyclePane: (projectId: string, step: 1 | -1) => void;
   movePane: (
@@ -325,6 +354,9 @@ export interface KeelState {
   notePaneExit: (paneId: string) => void;
 }
 
+/** How long a closing pane takes to shrink away. Matches `k-pane-out`. */
+const PANE_EXIT_MS = 170;
+
 function makeId(prefix: string): string {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -332,6 +364,47 @@ function makeId(prefix: string): string {
 function defaultTitle(agents: Agent[], agentId: string | null): string {
   if (!agentId) return "Shell";
   return agents.find((agent) => agent.id === agentId)?.name ?? agentId;
+}
+
+/** An editor pane with nothing in it yet. */
+function blankEditorPane(paneId: string): Pane {
+  return {
+    id: paneId,
+    agentId: null,
+    accountId: null,
+    resumeAgent: false,
+    ...unboundSession(),
+    title: "Editor",
+    cwd: null,
+    editor: { tabs: [], active: null },
+  };
+}
+
+/** An editor pane showing `active` among `tabs`, named after what it shows. */
+function showTab(pane: Pane, tabs: EditorRef[], active: string | null): Pane {
+  const shown = tabs.find((tab) => editorRefId(tab) === active) ?? tabs[0];
+  return {
+    ...pane,
+    editor: { tabs, active: shown ? editorRefId(shown) : null },
+    title: pane.titleLocked || !shown ? pane.title : editorRefName(shown),
+  };
+}
+
+function normalizeEditor(editor: PaneEditor): PaneEditor {
+  const tabs = (Array.isArray(editor.tabs) ? editor.tabs : [])
+    .filter(
+      (tab) =>
+        tab &&
+        typeof tab.rel === "string" &&
+        (tab.kind === "file" || tab.kind === "diff"),
+    )
+    .map((tab) => ({ kind: tab.kind, rel: tab.rel, staged: tab.staged === true }));
+  const ids = tabs.map(editorRefId);
+  return {
+    tabs,
+    active:
+      editor.active && ids.includes(editor.active) ? editor.active : (ids[0] ?? null),
+  };
 }
 
 export function basename(path: string): string {
@@ -374,11 +447,13 @@ function countPanes(projects: Project[]): number {
   return Object.keys(paneIdsOf(projects)).length;
 }
 
+/** Every terminal — the panes a reopen waits on. Editor panes start nothing. */
 function paneIdsOf(projects: Project[]): Record<string, true> {
   const ids: Record<string, true> = {};
   for (const project of projects) {
     for (const deck of project.decks) {
-      for (const paneId of Object.keys(deck.panes)) {
+      for (const [paneId, pane] of Object.entries(deck.panes)) {
+        if (pane.editor) continue;
         ids[paneId] = true;
       }
     }
@@ -401,6 +476,7 @@ function normalizeProjects(projects: Project[]): Project[] {
             resumeAgent: pane.resumeAgent ?? pane.agentId !== null,
             sessionId: pane.sessionId ?? null,
             sessionReady: pane.sessionReady ?? false,
+            ...(pane.editor ? { editor: normalizeEditor(pane.editor) } : {}),
           },
         ]),
       ),
@@ -713,6 +789,7 @@ export const useKeel = create<KeelState>((set, get) => {
     activeProjectId: null,
     status: {},
     exited: {},
+    closing: {},
     generations: {},
     agentSettings: { open: false, agentId: null },
     launcher: false,
@@ -1582,6 +1659,30 @@ export const useKeel = create<KeelState>((set, get) => {
       // Splitting always lands on the deck the original is on.
       const previous = project.activeDeckId;
       if (previous !== deck.id) get().selectDeck(projectId, deck.id);
+
+      // Splitting an editor opens what it is showing a second time beside it.
+      if (source.editor) {
+        const editor = source.editor;
+        const shown =
+          editor.tabs.find((tab) => editorRefId(tab) === editor.active) ??
+          editor.tabs[0];
+        if (!shown) return;
+        const copy = makeId("pane");
+        updateDeck(projectId, deck.id, (current) => ({
+          ...current,
+          tree: current.tree
+            ? splitPane(current.tree, paneId, direction, copy)
+            : paneLeaf(copy),
+          panes: {
+            ...current.panes,
+            [copy]: showTab(blankEditorPane(copy), [shown], editorRefId(shown)),
+          },
+          focused: copy,
+          zoomed: null,
+        }));
+        return;
+      }
+
       get().addPane(
         projectId,
         {
@@ -1619,6 +1720,167 @@ export const useKeel = create<KeelState>((set, get) => {
         delete exited[paneId];
         return { status, exited };
       });
+    },
+
+    dismissPane(projectId, paneId) {
+      if (paneId in get().closing) return;
+      const project = get().projects.find((item) => item.id === projectId);
+      const deck = project ? deckOfPane(project, paneId) : null;
+      const onScreen =
+        project !== undefined &&
+        deck !== null &&
+        get().activeProjectId === projectId &&
+        project.activeDeckId === deck.id &&
+        (deck.zoomed === null || deck.zoomed === paneId);
+      if (!onScreen) {
+        get().closePane(projectId, paneId);
+        return;
+      }
+      set((state) => ({ closing: { ...state.closing, [paneId]: true } }));
+      setTimeout(() => {
+        set((state) => {
+          const closing = { ...state.closing };
+          delete closing[paneId];
+          return { closing };
+        });
+        get().closePane(projectId, paneId);
+      }, PANE_EXIT_MS);
+    },
+
+    openInEditor(projectId, ref) {
+      const project = get().projects.find((item) => item.id === projectId);
+      const deck = activeDeck(project);
+      if (!project || !deck) return;
+      const id = editorRefId(ref);
+      const editors = listPanes(deck.tree).filter(
+        (paneId) => deck.panes[paneId]?.editor,
+      );
+      const holding = editors.find((paneId) =>
+        deck.panes[paneId].editor?.tabs.some((tab) => editorRefId(tab) === id),
+      );
+      const focusedEditor =
+        deck.focused && editors.includes(deck.focused) ? deck.focused : null;
+      const target = holding ?? focusedEditor ?? editors[0] ?? null;
+
+      if (target) {
+        updateDeck(projectId, deck.id, (current) => {
+          const pane = current.panes[target];
+          const tabs = pane.editor?.tabs ?? [];
+          const next = tabs.some((tab) => editorRefId(tab) === id)
+            ? tabs
+            : [...tabs, ref];
+          return {
+            ...current,
+            panes: { ...current.panes, [target]: showTab(pane, next, id) },
+            focused: target,
+            // Another pane filling the deck would hide the file you asked for.
+            zoomed: current.zoomed === target ? target : null,
+          };
+        });
+        return;
+      }
+
+      const paneId = makeId("pane");
+      updateDeck(projectId, deck.id, (current) => ({
+        ...current,
+        tree: dockAtEdge(current.tree, paneId),
+        panes: {
+          ...current.panes,
+          [paneId]: showTab(blankEditorPane(paneId), [ref], id),
+        },
+        focused: paneId,
+        zoomed: null,
+      }));
+    },
+
+    selectEditorTab(projectId, paneId, tabId) {
+      updateDeckOfPane(projectId, paneId, (deck) => {
+        const pane = deck.panes[paneId];
+        if (!pane?.editor) return deck;
+        return {
+          ...deck,
+          panes: {
+            ...deck.panes,
+            [paneId]: showTab(pane, pane.editor.tabs, tabId),
+          },
+          focused: paneId,
+        };
+      });
+    },
+
+    closeEditorTab(projectId, paneId, tabId) {
+      const project = get().projects.find((item) => item.id === projectId);
+      const pane = project ? deckOfPane(project, paneId)?.panes[paneId] : null;
+      const editor = pane?.editor;
+      if (!editor) return;
+      const index = editor.tabs.findIndex((tab) => editorRefId(tab) === tabId);
+      if (index < 0) return;
+      const rest = editor.tabs.filter((_, at) => at !== index);
+      if (rest.length === 0) {
+        get().dismissPane(projectId, paneId);
+        return;
+      }
+      // Closing the tab you are on shows its neighbour, the way browsers do.
+      const active =
+        editor.active === tabId
+          ? editorRefId(rest[Math.min(index, rest.length - 1)])
+          : editor.active;
+      updateDeckOfPane(projectId, paneId, (deck) => ({
+        ...deck,
+        panes: {
+          ...deck.panes,
+          [paneId]: showTab(deck.panes[paneId], rest, active),
+        },
+      }));
+    },
+
+    rewriteEditorTabs(projectPath, change) {
+      const emptied: { projectId: string; paneId: string }[] = [];
+      let touched = false;
+      const projects = get().projects.map((project) => {
+        if (project.path !== projectPath) return project;
+        let projectTouched = false;
+        const decks = project.decks.map((deck) => {
+          let panes: Record<string, Pane> | null = null;
+          for (const [paneId, pane] of Object.entries(deck.panes)) {
+            if (!pane.editor) continue;
+            const renamed = new Map<string, string>();
+            let changed = false;
+            const tabs = pane.editor.tabs.flatMap((tab) => {
+              const next = change(tab);
+              if (next === tab) return [tab];
+              changed = true;
+              if (!next) return [];
+              renamed.set(editorRefId(tab), editorRefId(next));
+              return [next];
+            });
+            if (!changed) continue;
+            // Two tabs that now name the same file are one tab.
+            const unique = tabs.filter(
+              (tab, at) =>
+                tabs.findIndex((other) => editorRefId(other) === editorRefId(tab)) === at,
+            );
+            const active = pane.editor.active
+              ? (renamed.get(pane.editor.active) ?? pane.editor.active)
+              : null;
+            panes ??= { ...deck.panes };
+            panes[paneId] = showTab(pane, unique, active);
+            if (unique.length === 0) emptied.push({ projectId: project.id, paneId });
+          }
+          if (!panes) return deck;
+          projectTouched = true;
+          return { ...deck, panes };
+        });
+        if (!projectTouched) return project;
+        touched = true;
+        return { ...project, decks };
+      });
+      if (!touched) return;
+      set({ projects });
+      persist();
+      for (const { projectId, paneId } of emptied) {
+        get().dismissPane(projectId, paneId);
+      }
     },
 
     focusPane(projectId, paneId) {

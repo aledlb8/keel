@@ -11,10 +11,18 @@
  * somewhere inside it carries a dot, so nothing hides behind a fold.
  */
 
-import { useEffect, useMemo, type CSSProperties, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+  type DragEvent as ReactDragEvent,
+  type ReactNode,
+} from "react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   ChevronRight,
+  ChevronsDownUp,
   Copy,
   Ellipsis,
   Eye,
@@ -23,6 +31,7 @@ import {
   FolderOpen,
   FolderPlus,
   Pencil,
+  RefreshCw,
   Search,
   SearchX,
   Trash2,
@@ -46,7 +55,13 @@ import { dirtyFolders, fileName, gitBadgeMap, parentRel } from "@/lib/git";
 import { bindingFor, matchesBinding } from "@/lib/keymap";
 import { cn } from "@/lib/utils";
 import type { GitFileStatus, WorkspaceEntry } from "@/lib/workspace";
-import { useWorkspace } from "@/state/workspace";
+import { canMoveInto, useWorkspace } from "@/state/workspace";
+
+/** Dragged tree rows carry this type, so nothing else mistakes them for text. */
+const DRAG_TYPE = "application/x-keel-file";
+
+/** How long a dragged row hovers over a closed folder before it opens. */
+const SPRING_OPEN_MS = 600;
 
 /** Indent per level. The chevron slot is the same width, so guides line up. */
 const STEP = 14;
@@ -172,6 +187,74 @@ function folderMenu(rel: string): MenuEntry[] {
   ];
 }
 
+/** Right-click on the tree itself, away from any row: the project folder. */
+function rootMenu(): MenuEntry[] {
+  const {
+    root,
+    expanded,
+    showHidden,
+    startCreate,
+    setShowHidden,
+    collapseAll,
+    refreshTree,
+    refreshGit,
+  } = useWorkspace.getState();
+  return [
+    {
+      kind: "item",
+      label: "New file",
+      icon: FilePlus,
+      onSelect: () => startCreate("", "file"),
+    },
+    {
+      kind: "item",
+      label: "New folder",
+      icon: FolderPlus,
+      onSelect: () => startCreate("", "dir"),
+    },
+    { kind: "separator" },
+    {
+      kind: "check",
+      label: "Show hidden files",
+      checked: showHidden,
+      onChange: (checked) => void setShowHidden(checked),
+    },
+    {
+      kind: "item",
+      label: "Collapse folders",
+      icon: ChevronsDownUp,
+      disabled: !Object.values(expanded).some(Boolean),
+      onSelect: collapseAll,
+    },
+    {
+      kind: "item",
+      label: "Refresh",
+      icon: RefreshCw,
+      onSelect: () => {
+        void refreshTree();
+        void refreshGit();
+      },
+    },
+    { kind: "separator" },
+    {
+      kind: "item",
+      label: "Reveal in Explorer",
+      icon: FolderOpen,
+      onSelect: () => {
+        if (root) void revealItemInDir(root).catch(() => {});
+      },
+    },
+    {
+      kind: "item",
+      label: "Copy path",
+      icon: Copy,
+      onSelect: () => {
+        if (root) copyText(root);
+      },
+    },
+  ];
+}
+
 /** Where "New file" lands: inside the selected folder, else beside the selection. */
 function createTarget(
   tree: Record<string, WorkspaceEntry[]>,
@@ -193,6 +276,14 @@ interface TreeContext {
   renaming: string | null;
   badges: Record<string, GitFileStatus>;
   dirtyDirs: Set<string>;
+  rowMotion: Record<string, "enter" | "leave">;
+  /** The row being dragged, and the folder it would land in (`""` is the root). */
+  drag: string | null;
+  over: string | null;
+  startDrag: (rel: string) => void;
+  endDrag: () => void;
+  dragOver: (event: ReactDragEvent, dir: string) => void;
+  dropOn: (event: ReactDragEvent, dir: string) => void;
 }
 
 export function FileTree() {
@@ -208,9 +299,22 @@ export function FileTree() {
   const git = useWorkspace((state) => state.git);
   const setQuery = useWorkspace((state) => state.setQuery);
   const setShowHidden = useWorkspace((state) => state.setShowHidden);
+  const rowMotion = useWorkspace((state) => state.rowMotion);
+  const [drag, setDrag] = useState<string | null>(null);
+  const [over, setOver] = useState<string | null>(null);
 
   const badges = useMemo(() => gitBadgeMap(git?.files ?? []), [git]);
   const dirtyDirs = useMemo(() => dirtyFolders(git?.files ?? []), [git]);
+
+  // Hovering a closed folder mid-drag springs it open, so you can go deeper.
+  useEffect(() => {
+    if (drag === null || !over) return;
+    if (useWorkspace.getState().expanded[over]) return;
+    const timer = window.setTimeout(() => {
+      useWorkspace.getState().toggleExpanded(over);
+    }, SPRING_OPEN_MS);
+    return () => window.clearTimeout(timer);
+  }, [drag, over]);
 
   useEffect(() => {
     const needle = query.trim();
@@ -231,6 +335,35 @@ export function FileTree() {
     renaming,
     badges,
     dirtyDirs,
+    rowMotion,
+    drag,
+    over,
+    startDrag: (rel) => setDrag(rel),
+    endDrag: () => {
+      setDrag(null);
+      setOver(null);
+    },
+    dragOver: (event, dir) => {
+      if (drag === null || !event.dataTransfer.types.includes(DRAG_TYPE)) return;
+      // Rows answer for themselves; the tree only takes what reaches empty space.
+      event.stopPropagation();
+      if (!canMoveInto(drag, dir)) {
+        if (over !== null) setOver(null);
+        return;
+      }
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      if (over !== dir) setOver(dir);
+    },
+    dropOn: (event, dir) => {
+      const carried = drag;
+      setDrag(null);
+      setOver(null);
+      if (carried === null || !canMoveInto(carried, dir)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      void useWorkspace.getState().moveEntry(carried, dir);
+    },
   };
   const rootEntries = tree[""];
   const emptyRoot =
@@ -290,40 +423,56 @@ export function FileTree() {
         </ToolButton>
       </div>
 
-      <div
-        role="tree"
-        aria-label="Files"
-        className="min-h-0 flex-1 overflow-y-auto pb-2"
-      >
-        {searchHits ? (
-          searchHits.length === 0 ? (
-            <DockNotice
-              icon={SearchX}
-              title="No matches"
-              detail={`Nothing in this project is called “${query.trim()}”.`}
-              className="pt-8"
-            />
-          ) : (
-            searchHits.map((entry) => (
-              <HitRow
-                key={entry.rel}
-                entry={entry}
-                selected={selectedRel === entry.rel}
-                badge={badges[entry.rel]}
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <div
+            role="tree"
+            aria-label="Files"
+            data-drop={over === "" ? "true" : undefined}
+            className="k-drop-zone min-h-0 flex-1 overflow-y-auto pb-2"
+            onDragOver={(event) => context.dragOver(event, "")}
+            onDragLeave={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                setOver(null);
+              }
+            }}
+            onDrop={(event) => context.dropOn(event, "")}
+          >
+            {searchHits ? (
+              searchHits.length === 0 ? (
+                <DockNotice
+                  icon={SearchX}
+                  title="No matches"
+                  detail={`Nothing in this project is called “${query.trim()}”.`}
+                  className="pt-8"
+                />
+              ) : (
+                searchHits.map((entry) => (
+                  <HitRow
+                    key={entry.rel}
+                    entry={entry}
+                    selected={selectedRel === entry.rel}
+                    badge={badges[entry.rel]}
+                  />
+                ))
+              )
+            ) : emptyRoot ? (
+              <DockNotice
+                icon={FolderOpen}
+                title="Empty folder"
+                detail="Create a file to get started."
+                className="pt-8"
               />
-            ))
-          )
-        ) : emptyRoot ? (
-          <DockNotice
-            icon={FolderOpen}
-            title="Empty folder"
-            detail="Create a file to get started."
-            className="pt-8"
-          />
-        ) : (
-          <ChildList parent="" depth={0} context={context} />
-        )}
-      </div>
+            ) : (
+              <ChildList parent="" depth={0} context={context} />
+            )}
+          </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          {/* Rows open their own menu; this one is for the space around them. */}
+          <ContextMenuEntries entries={rootMenu} />
+        </ContextMenuContent>
+      </ContextMenu>
     </div>
   );
 }
@@ -374,10 +523,13 @@ function ChildList({
   parent,
   depth,
   context,
+  leaving = false,
 }: {
   parent: string;
   depth: number;
   context: TreeContext;
+  /** The folder holding these rows is folding away, so they go with it. */
+  leaving?: boolean;
 }) {
   const entries = context.tree[parent];
   const creating = context.creating;
@@ -390,7 +542,13 @@ function ChildList({
         <CreateRow kind={creating.kind} depth={depth} />
       ) : null}
       {entries?.map((entry) => (
-        <TreeRow key={entry.rel} entry={entry} depth={depth} context={context} />
+        <TreeRow
+          key={entry.rel}
+          entry={entry}
+          depth={depth}
+          context={context}
+          leaving={leaving}
+        />
       ))}
       {empty && depth > 0 ? (
         <div
@@ -410,10 +568,12 @@ function TreeRow({
   entry,
   depth,
   context,
+  leaving,
 }: {
   entry: WorkspaceEntry;
   depth: number;
   context: TreeContext;
+  leaving: boolean;
 }) {
   const folder = entry.kind === "dir";
   const open = Boolean(context.expanded[entry.rel]);
@@ -421,6 +581,9 @@ function TreeRow({
   const isRenaming = context.renaming === entry.rel;
   const badge = folder ? undefined : context.badges[entry.rel];
   const changedInside = folder && context.dirtyDirs.has(entry.rel);
+  const motion = leaving ? "leave" : context.rowMotion[entry.rel];
+  /** Dropping on a folder puts it inside; dropping on a file, beside it. */
+  const dropDir = folder ? entry.rel : parentRel(entry.rel);
 
   const activate = () => {
     const state = useWorkspace.getState();
@@ -440,8 +603,23 @@ function TreeRow({
             tabIndex={0}
             title={entry.rel}
             data-selected={selected}
+            data-motion={motion}
+            data-dragging={context.drag === entry.rel ? "true" : undefined}
+            data-drop={
+              folder && context.over === entry.rel ? "inside" : undefined
+            }
+            draggable={!isRenaming}
             style={indentStyle(depth)}
             className="k-row group/entry h-[28px] gap-1.5"
+            onDragStart={(event) => {
+              event.stopPropagation();
+              event.dataTransfer.effectAllowed = "move";
+              event.dataTransfer.setData(DRAG_TYPE, entry.rel);
+              context.startDrag(entry.rel);
+            }}
+            onDragEnd={context.endDrag}
+            onDragOver={(event) => context.dragOver(event, dropDir)}
+            onDrop={(event) => context.dropOn(event, dropDir)}
             onClick={(event) => {
               if (!isControl(event.target)) activate();
             }}
@@ -524,7 +702,12 @@ function TreeRow({
       </ContextMenu>
 
       {folder && open ? (
-        <ChildList parent={entry.rel} depth={depth + 1} context={context} />
+        <ChildList
+          parent={entry.rel}
+          depth={depth + 1}
+          context={context}
+          leaving={motion === "leave"}
+        />
       ) : null}
     </>
   );

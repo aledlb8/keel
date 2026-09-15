@@ -384,6 +384,52 @@
         box-shadow: inset 0 0 0 1px var(--keel-line-strong);
     }
 
+    /*
+     * Rows that come and go — hidden files appearing or leaving — open and
+     * close their own height, so the rows around them slide rather than jump.
+     */
+    .k-row[data-motion="enter"] {
+        overflow: hidden;
+        animation: k-row-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+    }
+
+    .k-row[data-motion="leave"] {
+        overflow: hidden;
+        pointer-events: none;
+        animation: k-row-out 170ms cubic-bezier(0.4, 0, 1, 1) forwards;
+    }
+
+    /*
+     * A region that takes a drop as a whole: a git group, or the empty part of
+     * the file tree. It lights up the way a folder row does.
+     */
+    .k-drop-zone {
+        border-radius: var(--keel-r-control);
+        transition:
+            background-color 120ms ease,
+            box-shadow 120ms ease;
+    }
+
+    .k-drop-zone[data-drop="true"] {
+        background: var(--keel-veil-1);
+        box-shadow: inset 0 0 0 1px var(--keel-line-strong);
+    }
+
+    /* A closing pane shrinks back into the ground before it is removed. */
+    .k-pane-out {
+        pointer-events: none;
+        animation: k-pane-out 170ms cubic-bezier(0.4, 0, 1, 1) forwards;
+    }
+
+    /* The drop preview on the canvas settles in rather than popping. */
+    .k-fade-in {
+        animation: k-fade-in 140ms ease-out both;
+    }
+
+    .k-chip-in {
+        animation: k-chip-in 180ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+    }
+
     /* Quiet heading over a group of rows. Sentence case, never tracked-out caps. */
     .k-label {
         padding-inline: calc(var(--keel-inset) + 8px);
@@ -855,62 +901,7 @@
         color: var(--keel-text);
     }
 
-    /*
-     * The editor, docked beside the terminals. The column is a slot like a
-     * pane's — half a gutter of padding around the slab — so the seam between
-     * the last terminal and the editor is one gutter wide.
-     */
-    .k-editor-dock {
-        position: relative;
-        z-index: 1;
-        flex-shrink: 0;
-        min-width: 360px;
-        max-width: calc(100% - 240px);
-        padding: 6px;
-    }
-
-    .k-editor-dock[data-maximized="true"] {
-        position: absolute;
-        inset: 0;
-        z-index: 45;
-        min-width: 0;
-        max-width: none;
-    }
-
-    .k-editor-seam {
-        position: absolute;
-        top: 6px;
-        bottom: 6px;
-        left: -6px;
-        z-index: 2;
-        display: grid;
-        width: 12px;
-        place-items: center;
-        cursor: col-resize;
-        touch-action: none;
-    }
-
-    /* The same slab as a pane, and the same brighter hairline while focused. */
-    .k-editor {
-        display: flex;
-        flex-direction: column;
-        height: 100%;
-        min-height: 0;
-        overflow: hidden;
-        border: 1px solid var(--keel-term-border);
-        border-radius: var(--keel-r-window);
-        background: var(--keel-term-solid);
-        box-shadow:
-            inset 0 1px 0 0 rgba(255, 255, 255, 0.045),
-            var(--keel-lift);
-        transition: border-color 150ms ease-out;
-        animation: k-dock-in 380ms cubic-bezier(0.32, 0.72, 0, 1) both;
-    }
-
-    .k-editor:focus-within {
-        border-color: var(--keel-term-border-focus);
-    }
-
+    /* A tab in an editor pane's header. */
     .k-tab {
         display: flex;
         flex-shrink: 0;
@@ -1248,11 +1239,40 @@
     }
 }
 
-/* The editor arriving beside the terminals as they make room for it. */
-@keyframes k-dock-in {
+@keyframes k-pane-out {
+    to {
+        opacity: 0;
+        transform: scale(0.95);
+    }
+}
+
+@keyframes k-row-in {
+    from {
+        height: 0;
+        margin-block: 0;
+        opacity: 0;
+        transform: translateX(-4px);
+    }
+}
+
+@keyframes k-row-out {
+    to {
+        height: 0;
+        margin-block: 0;
+        opacity: 0;
+    }
+}
+
+@keyframes k-fade-in {
     from {
         opacity: 0;
-        transform: translateX(16px) scale(0.99);
+    }
+}
+
+@keyframes k-chip-in {
+    from {
+        opacity: 0;
+        scale: 0.9;
     }
 }
 

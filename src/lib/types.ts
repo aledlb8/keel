@@ -55,6 +55,27 @@ export interface Pane {
   titleLocked?: boolean;
   /** Absolute path the shell starts in. `null` falls back to the project root. */
   cwd: string | null;
+  /**
+   * Present on an editor pane: the files and diffs open in it. A pane with this
+   * set runs no process — the agent and session fields above stay empty.
+   */
+  editor?: PaneEditor;
+}
+
+/** A file, or one side of a git change, open in an editor pane. */
+export interface EditorRef {
+  kind: "file" | "diff";
+  /** Relative to the project folder, with forward slashes. */
+  rel: string;
+  /** For a diff: the staged side rather than the working tree. */
+  staged: boolean;
+}
+
+/** What an editor pane shows. Only this is saved; the text is read from disk. */
+export interface PaneEditor {
+  tabs: EditorRef[];
+  /** The id (see `editorRefId`) of the tab on screen. */
+  active: string | null;
 }
 
 /**

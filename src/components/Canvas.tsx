@@ -48,6 +48,7 @@ import type {
   Project,
 } from "@/lib/types";
 import { activeDeck, useKeel } from "@/state/store";
+import { useWorkspace } from "@/state/workspace";
 
 /**
  * Air between panes. Half of it comes off each side of every pane.
@@ -62,6 +63,20 @@ type Rect = Box;
 
 /** How far the pointer travels before a press on a header becomes a drag. */
 const DRAG_THRESHOLD = 5;
+
+/**
+ * How long after the layout changes shape that panes glide to their new places.
+ * Only a change of shape opens this window — a split, a close, a drop, a zoom —
+ * so dragging a seam or resizing the window still moves panes in the same frame.
+ */
+const MOTION_WINDOW_MS = 400;
+
+/** A deck's arrangement without its sizes: which panes, in which splits. */
+function shapeOf(node: LayoutNode | null): string {
+  if (!node) return "";
+  if (node.kind === "pane") return node.id;
+  return `${node.direction}(${node.children.map(shapeOf).join(",")})`;
+}
 
 /** A pane in flight. Coordinates are relative to the canvas. */
 interface PaneDrag {
@@ -101,6 +116,19 @@ export function Canvas({
 
   const project = projects.find((item) => item.id === activeProjectId) ?? null;
   const deck = activeDeck(project);
+
+  // Decided during render, not in an effect: a pane's own layout effect runs
+  // before this component's, and it has to see the window already open.
+  const motionUntil = useRef(0);
+  const shape = `${shapeOf(deck?.tree ?? null)}|${deck?.zoomed ?? ""}`;
+  const lastLayout = useRef({ deckId: deck?.id, shape });
+  if (lastLayout.current.deckId !== deck?.id) {
+    // Switching decks or projects moves nothing; it only changes what is shown.
+    lastLayout.current = { deckId: deck?.id, shape };
+  } else if (lastLayout.current.shape !== shape) {
+    lastLayout.current.shape = shape;
+    motionUntil.current = performance.now() + MOTION_WINDOW_MS;
+  }
 
   /**
    * One sweep measures every deck of every project at once. Pane ids are unique
@@ -205,7 +233,7 @@ export function Canvas({
   );
   const closePane = useCallback(
     (paneId: string) =>
-      project && useKeel.getState().closePane(project.id, paneId),
+      project && useWorkspace.getState().closePaneSafely(project.id, paneId),
     [project],
   );
   // The respawn reports itself (noteActivity "spawn"), which clears "exited".
@@ -401,6 +429,7 @@ export function Canvas({
                 zoomed={isZoomed}
                 cwd={pane.cwd ?? item.path}
                 generation={generations[paneId] ?? 0}
+                motion={motionUntil}
                 rect={
                   onScreen && isZoomed ? zoomRect : (rects[paneId] ?? null)
                 }
@@ -489,14 +518,14 @@ function DropOverlay({
     <div className="absolute inset-0 z-40 cursor-grabbing">
       {source ? (
         <div
-          className="absolute rounded-[var(--keel-r-window)] bg-[color:var(--keel-void)]/65"
+          className="k-fade-in absolute rounded-[var(--keel-r-window)] bg-[color:var(--keel-void)]/65"
           style={source}
         />
       ) : null}
 
       {landing ? (
         <div
-          className="absolute grid place-items-center rounded-[var(--keel-r-window)] border border-foreground/35 bg-foreground/[0.07] transition-[left,top,width,height] duration-150 ease-out"
+          className="k-fade-in absolute grid place-items-center rounded-[var(--keel-r-window)] border border-foreground/35 bg-foreground/[0.07] transition-[left,top,width,height] duration-200 ease-[cubic-bezier(0.32,0.72,0,1)]"
           style={landing}
         >
           {drag.target?.zone === "center" ? (
@@ -508,7 +537,7 @@ function DropOverlay({
       ) : null}
 
       <div
-        className="pointer-events-none absolute left-0 top-0 flex h-7 items-center gap-1.5 rounded-[var(--keel-r-control)] border border-line-strong bg-popover pl-1.5 pr-2.5 text-[12px] shadow-[var(--keel-lift-strong)]"
+        className="k-chip-in pointer-events-none absolute left-0 top-0 flex h-7 items-center gap-1.5 rounded-[var(--keel-r-control)] border border-line-strong bg-popover pl-1.5 pr-2.5 text-[12px] shadow-[var(--keel-lift-strong)]"
         style={{ transform: `translate(${drag.x + 14}px, ${drag.y + 14}px)` }}
       >
         <AgentMark

@@ -8,9 +8,12 @@
 import { create } from "zustand";
 import { toast } from "sonner";
 
+import { diffTabId, editorRefId, fileTabId } from "../lib/editorRefs.ts";
 import { fileName, joinRel, parentRel } from "../lib/git.ts";
+import type { EditorRef } from "../lib/types.ts";
 import * as api from "../lib/workspace.ts";
 import { WorkspaceReads } from "../lib/workspaceReads.ts";
+import { deckOfPane, useKeel } from "./store.ts";
 import type {
   FileContents,
   GitBranches,
@@ -33,13 +36,7 @@ export interface EditorTab {
   name: string;
 }
 
-export function fileTabId(rel: string): string {
-  return `file:${rel}`;
-}
-
-export function diffTabId(rel: string, staged: boolean): string {
-  return `diff:${staged ? "staged" : "work"}:${rel}`;
-}
+export { diffTabId, fileTabId };
 
 interface WorkspaceState {
   root: string | null;
@@ -53,6 +50,8 @@ interface WorkspaceState {
   creating: { parent: string; kind: "file" | "dir" } | null;
   renaming: string | null;
   searchHits: WorkspaceEntry[] | null;
+  /** Tree rows mid-transition, by relative path. Cleared once they settle. */
+  rowMotion: Record<string, "enter" | "leave">;
 
   git: GitStatus | null;
   gitLoading: boolean;
@@ -76,12 +75,13 @@ interface WorkspaceState {
 
   setRoot: (root: string | null) => void;
   setTab: (tab: InspectorTab) => void;
-  setShowHidden: (show: boolean) => void;
+  setShowHidden: (show: boolean) => Promise<void>;
   setQuery: (query: string) => void;
   setCommitMessage: (message: string) => void;
   setSelected: (rel: string | null) => void;
   toggleExpanded: (rel: string) => void;
-  loadDir: (rel: string) => Promise<void>;
+  collapseAll: () => void;
+  loadDir:(rel: string) => Promise<void>;
   refreshTree: () => Promise<void>;
   refreshGit: (afterPending?: boolean) => Promise<void>;
   refreshMeta: () => Promise<void>;
@@ -92,8 +92,14 @@ interface WorkspaceState {
 
   openFile: (rel: string) => Promise<void>;
   openDiff: (rel: string, staged: boolean) => Promise<void>;
+  /** Close a file everywhere it is open, asking first if it has unsaved edits. */
   closeEditor: (id: string) => void;
-  closeAllEditors: () => void;
+  /** Load a tab's contents without moving focus or touching the layout. */
+  ensureDocument: (ref: EditorRef) => Promise<void>;
+  /** Close one tab of an editor pane, asking first if that drops unsaved edits. */
+  closeTab: (projectId: string, paneId: string, id: string) => void;
+  /** Close any pane from the UI. An editor pane asks before dropping unsaved edits. */
+  closePaneSafely: (projectId: string, paneId: string) => void;
   setActiveEditor: (id: string) => void;
   setBuffer: (id: string, value: string) => void;
   saveActive: () => Promise<void>;
@@ -106,6 +112,8 @@ interface WorkspaceState {
   cancelRename: () => void;
   confirmRename: (name: string) => Promise<void>;
   deleteEntry: (rel: string) => Promise<void>;
+  /** Move a file or folder into another folder (`""` is the project root). */
+  moveEntry: (rel: string, targetDir: string) => Promise<void>;
 
   stage: (paths: string[]) => Promise<void>;
   unstage: (paths: string[]) => Promise<void>;
@@ -134,26 +142,145 @@ function isDirty(state: WorkspaceState, id: string): boolean {
 
 const reads = new WorkspaceReads();
 let projectVersion = 0;
+
+type EditorDocs = Pick<
+  WorkspaceState,
+  | "editors"
+  | "activeEditor"
+  | "buffers"
+  | "originals"
+  | "snapshots"
+  | "diffs"
+  | "editorLoading"
+  | "editorErrors"
+>;
+
+/**
+ * Open files of the folders you are not looking at. Their editor panes are
+ * still sitting in those projects' decks, so coming back shows them as you left
+ * them — unsaved edits included — instead of an empty editor.
+ */
+const stashedDocs = new Map<string, EditorDocs>();
+
+function emptyDocs(): EditorDocs {
+  return {
+    editors: [],
+    activeEditor: null,
+    buffers: {},
+    originals: {},
+    snapshots: {},
+    diffs: {},
+    editorLoading: {},
+    editorErrors: {},
+  };
+}
+
+/** What to keep when leaving a folder. Reads still in flight are abandoned, so those load again. */
+function settledDocs(state: WorkspaceState): EditorDocs {
+  const pending = new Set(
+    state.editors.filter((tab) => state.editorLoading[tab.id]).map((tab) => tab.id),
+  );
+  const keep = <T>(record: Record<string, T>): Record<string, T> =>
+    Object.fromEntries(Object.entries(record).filter(([id]) => !pending.has(id)));
+  return {
+    editors: state.editors.filter((tab) => !pending.has(tab.id)),
+    activeEditor:
+      state.activeEditor && !pending.has(state.activeEditor) ? state.activeEditor : null,
+    buffers: keep(state.buffers),
+    originals: keep(state.originals),
+    snapshots: keep(state.snapshots),
+    diffs: keep(state.diffs),
+    editorLoading: keep(state.editorLoading),
+    editorErrors: keep(state.editorErrors),
+  };
+}
+
+/** Put a tab on screen: in an editor pane on the deck you are looking at. */
+function revealInLayout(root: string, tab: EditorTab) {
+  const keel = useKeel.getState();
+  const project = keel.projects.find((item) => item.id === keel.activeProjectId);
+  if (!project || project.path !== root) return;
+  keel.openInEditor(project.id, { kind: tab.kind, rel: tab.rel, staged: tab.staged });
+}
+
+/** Whether an editor pane in this folder's projects, other than `except`, shows a tab. */
+function tabShown(root: string, id: string, except: string | null): boolean {
+  for (const project of useKeel.getState().projects) {
+    if (project.path !== root) continue;
+    for (const deck of project.decks) {
+      for (const [paneId, pane] of Object.entries(deck.panes)) {
+        if (paneId === except) continue;
+        if (pane.editor?.tabs.some((tab) => editorRefId(tab) === id)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+function dropDocument(
+  id: string,
+  set: (partial: Partial<WorkspaceState>) => void,
+  get: () => WorkspaceState,
+) {
+  const state = get();
+  const editors = state.editors.filter((tab) => tab.id !== id);
+  const { [id]: _b, ...buffers } = state.buffers;
+  const { [id]: _o, ...originals } = state.originals;
+  const { [id]: _s, ...snapshots } = state.snapshots;
+  const { [id]: _d, ...diffs } = state.diffs;
+  const { [id]: _l, ...editorLoading } = state.editorLoading;
+  const { [id]: _e, ...editorErrors } = state.editorErrors;
+  const activeEditor =
+    state.activeEditor === id
+      ? (editors[editors.length - 1]?.id ?? null)
+      : state.activeEditor;
+  set({ editors, buffers, originals, snapshots, diffs, editorLoading, editorErrors, activeEditor });
+}
+
+/** Forget files no pane shows any more, once a closing pane has finished leaving. */
+function releaseLater(
+  root: string,
+  ids: string[],
+  set: (partial: Partial<WorkspaceState>) => void,
+  get: () => WorkspaceState,
+) {
+  if (ids.length === 0) return;
+  setTimeout(() => {
+    if (get().root !== root) return;
+    for (const id of ids) {
+      if (!tabShown(root, id, null)) dropDocument(id, set, get);
+    }
+  }, 250);
+}
 let editorReadId = 0;
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * Load a tab's contents. `reveal` is a click on a file or a change: it also puts
+ * the tab on screen in the layout and makes it the one you are looking at.
+ * Without it, this only fills the cache for a pane that is already showing it.
+ */
 function openEditor(
   tab: EditorTab,
   set: (partial: Partial<WorkspaceState>) => void,
   get: () => WorkspaceState,
+  reveal = true,
 ) {
   const root = get().root;
   if (!root) return Promise.resolve();
   const { id, rel } = tab;
+  if (reveal) revealInLayout(root, tab);
   const existing = get().editors.find((item) => item.id === id);
-  const focus = {
-    activeEditor: id,
-    selectedRel: rel,
-    ...(tab.kind === "diff" ? { tab: "git" as const } : {}),
-  };
+  const focus = reveal
+    ? {
+        activeEditor: id,
+        selectedRel: rel,
+        ...(tab.kind === "diff" ? { tab: "git" as const } : {}),
+      }
+    : {};
   if (existing && (
     get().editorLoading[id] ||
     (tab.kind === "file" && !get().editorErrors[id])
@@ -194,6 +321,117 @@ function openEditor(
       if (isOpen()) set({ editorLoading: { ...get().editorLoading, [id]: false } });
     }
   });
+}
+
+/** How long rows keep their enter or leave marker. Matches `k-row-in` / `k-row-out`. */
+const ROW_ENTER_MS = 240;
+const ROW_LEAVE_MS = 180;
+
+let rowMotionTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** Mark rows as arriving, and forget the marks once the animation is over. */
+function flashRows(
+  rels: string[],
+  set: (partial: Partial<WorkspaceState>) => void,
+  get: () => WorkspaceState,
+) {
+  if (rels.length === 0) return;
+  const rowMotion = Object.fromEntries(rels.map((rel) => [rel, "enter" as const]));
+  set({ rowMotion });
+  clearTimeout(rowMotionTimer);
+  rowMotionTimer = setTimeout(() => {
+    if (get().rowMotion === rowMotion) set({ rowMotion: {} });
+  }, ROW_ENTER_MS);
+}
+
+/** Every path in a loaded tree. */
+function treeRels(tree: Record<string, WorkspaceEntry[]>): Set<string> {
+  return new Set(Object.values(tree).flatMap((entries) => entries.map((entry) => entry.rel)));
+}
+
+/**
+ * Everything keyed by a path follows an entry that moved from `fromRel` to
+ * `toRel`: open file tabs and their buffers, the selection, open folders.
+ */
+function retarget(
+  state: WorkspaceState,
+  fromRel: string,
+  toRel: string,
+): Partial<WorkspaceState> {
+  const prefix = `${fromRel}/`;
+  const moved = (rel: string) =>
+    rel === fromRel
+      ? toRel
+      : rel.startsWith(prefix)
+        ? toRel + rel.slice(fromRel.length)
+        : null;
+
+  const ids: Record<string, string> = {};
+  const editors = state.editors.map((tab) => {
+    const rel = tab.kind === "file" ? moved(tab.rel) : null;
+    if (rel === null) return tab;
+    const id = fileTabId(rel);
+    ids[tab.id] = id;
+    return { ...tab, rel, id, name: fileName(rel) };
+  });
+  const rekey = <T>(record: Record<string, T>): Record<string, T> =>
+    Object.fromEntries(Object.entries(record).map(([id, value]) => [ids[id] ?? id, value]));
+
+  const expanded: Record<string, boolean> = {};
+  for (const [rel, open] of Object.entries(state.expanded)) {
+    expanded[moved(rel) ?? rel] = open;
+  }
+  // Listings under the old path name entries that are no longer there.
+  const tree = Object.fromEntries(
+    Object.entries(state.tree).filter(([rel]) => moved(rel) === null),
+  );
+
+  return {
+    editors,
+    buffers: rekey(state.buffers),
+    originals: rekey(state.originals),
+    snapshots: rekey(state.snapshots),
+    editorLoading: rekey(state.editorLoading),
+    editorErrors: rekey(state.editorErrors),
+    activeEditor: state.activeEditor
+      ? (ids[state.activeEditor] ?? state.activeEditor)
+      : null,
+    selectedRel: state.selectedRel
+      ? (moved(state.selectedRel) ?? state.selectedRel)
+      : null,
+    expanded,
+    tree,
+  };
+}
+
+/** After a rename or a move: follow it, then re-read both folders. */
+async function settleMove(
+  fromRel: string,
+  toRel: string,
+  set: (partial: Partial<WorkspaceState>) => void,
+  get: () => WorkspaceState,
+) {
+  set(retarget(get(), fromRel, toRel));
+  const root = get().root;
+  if (root) {
+    // Editor panes in the layout follow the file too, on every deck.
+    useKeel.getState().rewriteEditorTabs(root, (ref) => {
+      if (ref.kind !== "file") return ref;
+      if (ref.rel === fromRel) return { ...ref, rel: toRel };
+      if (ref.rel.startsWith(`${fromRel}/`)) {
+        return { ...ref, rel: toRel + ref.rel.slice(fromRel.length) };
+      }
+      return ref;
+    });
+  }
+  const prefix = `${toRel}/`;
+  const reopen = Object.entries(get().expanded)
+    .filter(([rel, open]) => open && (rel === toRel || rel.startsWith(prefix)))
+    .map(([rel]) => rel);
+  const dirs = new Set([parentRel(fromRel), parentRel(toRel), ...reopen]);
+  await Promise.all([...dirs].map((rel) => get().loadDir(rel)));
+  flashRows([toRel], set, get);
+  void get().refreshGit();
 }
 
 function refreshMetadata<T>(
@@ -258,6 +496,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   creating: null,
   renaming: null,
   searchHits: null,
+  rowMotion: {},
 
   git: null,
   gitLoading: false,
@@ -284,6 +523,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     if (previous === root) return;
     projectVersion += 1;
     reads.reset();
+    if (previous) stashedDocs.set(previous, settledDocs(get()));
+    // No project at all: nothing will come back for what was open.
+    if (!root) stashedDocs.clear();
+    const docs = (root ? stashedDocs.get(root) : undefined) ?? emptyDocs();
+    if (root) stashedDocs.delete(root);
     set({
       root,
       tree: {},
@@ -292,8 +536,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       creating: null,
       renaming: null,
       searchHits: null,
+      rowMotion: {},
       query: "",
       git: null,
+      ...docs,
       gitLoading: false,
       gitError: null,
       branches: null,
@@ -301,14 +547,6 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       commits: null,
       metaLoading: {},
       metaErrors: {},
-      editors: [],
-      activeEditor: null,
-      buffers: {},
-      originals: {},
-      snapshots: {},
-      diffs: {},
-      editorLoading: {},
-      editorErrors: {},
       busy: false,
     });
     if (root) {
@@ -320,9 +558,54 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   setTab: (tab) => {
     set({ tab });
   },
-  setShowHidden: (showHidden) => {
-    set({ showHidden, tree: {} });
-    void get().loadDir("");
+  setShowHidden: async (showHidden) => {
+    // The tree stays up while the new listings load — clearing it first blanked
+    // the whole panel for a frame and left open folders empty.
+    set({ showHidden });
+    const root = get().root;
+    if (!root) return;
+    const version = projectVersion;
+    const dirs = Object.keys(get().tree);
+    const listed = await Promise.all(
+      (dirs.length ? dirs : [""]).map(async (rel) => {
+        try {
+          return [rel, await api.workspaceList(root, rel, showHidden)] as const;
+        } catch {
+          return [rel, null] as const;
+        }
+      }),
+    );
+    const current = () =>
+      version === projectVersion && get().showHidden === showHidden;
+    if (!current()) return;
+
+    const next = { ...get().tree };
+    for (const [rel, entries] of listed) {
+      if (entries) next[rel] = entries;
+      else delete next[rel];
+    }
+    const before = treeRels(get().tree);
+    const after = treeRels(next);
+
+    if (showHidden) {
+      set({ tree: next });
+      flashRows([...after].filter((rel) => !before.has(rel)), set, get);
+      return;
+    }
+
+    // Hiding: the rows fold away first, then the tree loses them.
+    const rowMotion = Object.fromEntries(
+      [...before].filter((rel) => !after.has(rel)).map((rel) => [rel, "leave" as const]),
+    );
+    if (Object.keys(rowMotion).length === 0) {
+      set({ tree: next });
+      return;
+    }
+    clearTimeout(rowMotionTimer);
+    set({ rowMotion });
+    rowMotionTimer = setTimeout(() => {
+      if (current()) set({ tree: next, rowMotion: {} });
+    }, ROW_LEAVE_MS);
   },
   setQuery: (query) => {
     set({ query });
@@ -336,6 +619,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     set({ expanded: { ...get().expanded, [rel]: open } });
     if (open) void get().loadDir(rel);
   },
+
+  collapseAll: () => set({ expanded: {} }),
 
   loadDir: async (rel) => {
     const root = get().root;
@@ -425,40 +710,72 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       );
       if (!ok) return;
     }
-    const editors = state.editors.filter((tab) => tab.id !== id);
-    const { [id]: _b, ...buffers } = state.buffers;
-    const { [id]: _o, ...originals } = state.originals;
-    const { [id]: _s, ...snapshots } = state.snapshots;
-    const { [id]: _d, ...diffs } = state.diffs;
-    const { [id]: _l, ...editorLoading } = state.editorLoading;
-    const { [id]: _e, ...editorErrors } = state.editorErrors;
-    const activeEditor =
-      state.activeEditor === id
-        ? (editors[editors.length - 1]?.id ?? null)
-        : state.activeEditor;
-    set({ editors, buffers, originals, snapshots, diffs, editorLoading, editorErrors, activeEditor });
+    dropDocument(id, set, get);
+    if (state.root) {
+      useKeel
+        .getState()
+        .rewriteEditorTabs(state.root, (ref) => (editorRefId(ref) === id ? null : ref));
+    }
   },
 
-  closeAllEditors: () => {
-    const dirty = get().editors.filter((tab) => isDirty(get(), tab.id));
-    if (dirty.length) {
+  ensureDocument: (ref) =>
+    openEditor(
+      {
+        id: editorRefId(ref),
+        kind: ref.kind,
+        rel: ref.rel,
+        staged: ref.staged,
+        name: fileName(ref.rel),
+      },
+      set,
+      get,
+      false,
+    ),
+
+  closeTab: (projectId, paneId, id) => {
+    const keel = useKeel.getState();
+    const project = keel.projects.find((item) => item.id === projectId);
+    if (!project) return;
+    const root = get().root;
+    // Only the last pane showing a file takes its unsaved edits with it.
+    const last = root !== null && project.path === root && !tabShown(root, id, paneId);
+    if (last && isDirty(get(), id)) {
+      const tab = get().editors.find((item) => item.id === id);
       const ok = window.confirm(
-        dirty.length === 1
-          ? `Discard unsaved changes to ${dirty[0].name}?`
-          : `Discard unsaved changes in ${dirty.length} files?`,
+        `Discard unsaved changes to ${tab?.name ?? "this file"}?`,
       );
       if (!ok) return;
     }
-    set({
-      editors: [],
-      activeEditor: null,
-      buffers: {},
-      originals: {},
-      snapshots: {},
-      diffs: {},
-      editorLoading: {},
-      editorErrors: {},
-    });
+    keel.closeEditorTab(projectId, paneId, id);
+    if (last && root) releaseLater(root, [id], set, get);
+  },
+
+  closePaneSafely: (projectId, paneId) => {
+    const keel = useKeel.getState();
+    const project = keel.projects.find((item) => item.id === projectId);
+    const pane = project ? deckOfPane(project, paneId)?.panes[paneId] : undefined;
+    if (!project || !pane) return;
+    const root = get().root;
+    if (pane.editor && root !== null && project.path === root) {
+      const last = pane.editor.tabs
+        .map(editorRefId)
+        .filter((id) => !tabShown(root, id, paneId));
+      const dirty = get().editors.filter(
+        (tab) => last.includes(tab.id) && isDirty(get(), tab.id),
+      );
+      if (dirty.length) {
+        const ok = window.confirm(
+          dirty.length === 1
+            ? `Discard unsaved changes to ${dirty[0].name}?`
+            : `Discard unsaved changes in ${dirty.length} files?`,
+        );
+        if (!ok) return;
+      }
+      keel.dismissPane(projectId, paneId);
+      releaseLater(root, last, set, get);
+      return;
+    }
+    keel.dismissPane(projectId, paneId);
   },
 
   setActiveEditor: (id) => set({ activeEditor: id }),
@@ -533,33 +850,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     try {
       await api.workspaceRename(root, rel, toRel);
       set({ renaming: null });
-      await get().loadDir(parentRel(rel));
-      const fromId = fileTabId(rel);
-      const editors = get().editors.map((tab) =>
-        tab.rel === rel ? { ...tab, rel: toRel, name: trimmed, id: fileTabId(toRel) } : tab,
-      );
-      // Buffers keyed by tab id follow the rename.
-      const state = get();
-      const nextBuffers = { ...state.buffers };
-      const nextOriginals = { ...state.originals };
-      const nextSnapshots = { ...state.snapshots };
-      if (nextBuffers[fromId] !== undefined) {
-        const toId = fileTabId(toRel);
-        nextBuffers[toId] = nextBuffers[fromId];
-        nextOriginals[toId] = nextOriginals[fromId];
-        if (nextSnapshots[fromId]) nextSnapshots[toId] = nextSnapshots[fromId];
-        delete nextBuffers[fromId];
-        delete nextOriginals[fromId];
-        delete nextSnapshots[fromId];
-      }
-      set({
-        editors,
-        buffers: nextBuffers,
-        originals: nextOriginals,
-        snapshots: nextSnapshots,
-        activeEditor:
-          state.activeEditor === fromId ? fileTabId(toRel) : state.activeEditor,
-      });
+      await settleMove(rel, toRel, set, get);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
     }
@@ -571,6 +862,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     try {
       await api.workspaceDelete(root, rel);
       const prefix = rel + "/";
+      useKeel
+        .getState()
+        .rewriteEditorTabs(root, (ref) =>
+          ref.rel === rel || ref.rel.startsWith(prefix) ? null : ref,
+        );
       set({
         editors: get().editors.filter(
           (tab) => tab.rel !== rel && !tab.rel.startsWith(prefix),
@@ -582,6 +878,23 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
     }
+  },
+
+  moveEntry: async (rel, targetDir) => {
+    const root = get().root;
+    if (!root || !canMoveInto(rel, targetDir)) return;
+    const toRel = joinRel(targetDir, fileName(rel));
+    try {
+      await api.workspaceRename(root, rel, toRel);
+    } catch (error) {
+      toast.error(errorMessage(error));
+      return;
+    }
+    // Open the folder it went into, so you can see where it landed.
+    if (targetDir && !get().expanded[targetDir]) {
+      set({ expanded: { ...get().expanded, [targetDir]: true } });
+    }
+    await settleMove(rel, toRel, set, get);
   },
 
   stage: (paths) =>
@@ -658,6 +971,18 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       return `Checked out #${number}`;
     }),
 }));
+
+/**
+ * Whether `rel` can be dropped into `targetDir`: not where it already is, and
+ * never into itself or anything inside it.
+ */
+export function canMoveInto(rel: string, targetDir: string): boolean {
+  return (
+    parentRel(rel) !== targetDir &&
+    targetDir !== rel &&
+    !targetDir.startsWith(`${rel}/`)
+  );
+}
 
 export function editorDirty(state: WorkspaceState, id: string | null): boolean {
   if (!id) return false;

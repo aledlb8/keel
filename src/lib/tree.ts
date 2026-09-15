@@ -406,6 +406,33 @@ export function dockPane(
 }
 
 /**
+ * Stand a pane along the right edge of the whole layout, taking `share` of its
+ * width. How an editor opens: beside every terminal, not inside one of them.
+ */
+export function dockAtEdge(
+  tree: LayoutNode | null,
+  paneId: string,
+  share = 0.5,
+): LayoutNode {
+  const leaf = paneLeaf(paneId);
+  if (!tree) return leaf;
+  if (tree.kind === "split" && tree.direction === "row") {
+    return {
+      ...tree,
+      children: [...tree.children, leaf],
+      sizes: [...tree.sizes.map((size) => size * (1 - share)), share],
+    };
+  }
+  return {
+    kind: "split",
+    id: nodeId("s"),
+    direction: "row",
+    children: [tree, leaf],
+    sizes: [1 - share, share],
+  };
+}
+
+/**
  * Two layouts side by side, each given width in proportion to how many panes
  * it holds. A batch of new terminals joins a deck this way, so the panes you
  * already arranged keep their arrangement.

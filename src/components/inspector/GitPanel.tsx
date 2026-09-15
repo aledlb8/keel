@@ -16,7 +16,18 @@
  * file itself; right-click for the rest.
  */
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type HTMLAttributes,
+  type ReactNode,
+  type SetStateAction,
+} from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   ArrowDown,
@@ -114,6 +125,36 @@ function isControl(target: EventTarget): boolean {
   return target instanceof Element && target.closest("button, input") !== null;
 }
 
+/**
+ * Dragging a change between groups: drop an unstaged file on Staged to stage
+ * it, a staged one on Changes to unstage it.
+ */
+const DRAG_TYPE = "application/x-keel-change";
+
+interface ChangeDrag {
+  path: string;
+  staged: boolean;
+}
+
+const ChangeDragContext = createContext<{
+  drag: ChangeDrag | null;
+  setDrag: (drag: ChangeDrag | null) => void;
+  over: SectionId | null;
+  setOver: Dispatch<SetStateAction<SectionId | null>>;
+} | null>(null);
+
+function dropActionFor(
+  id: SectionId,
+  drag: ChangeDrag | null,
+): "stage" | "unstage" | null {
+  if (!drag) return null;
+  if (id === "staged") return drag.staged ? null : "stage";
+  if (id === "changes" || id === "untracked") return drag.staged ? "unstage" : null;
+  return null;
+}
+
+type ZoneProps = HTMLAttributes<HTMLElement> & { "data-drop"?: "true" };
+
 export function GitPanel() {
   const root = useWorkspace((state) => state.root);
   const git = useWorkspace((state) => state.git);
@@ -125,6 +166,8 @@ export function GitPanel() {
   const busy = useWorkspace((state) => state.busy);
   const [sections, setSections] = useState(INITIALLY_OPEN);
   const [focusBranchInput, setFocusBranchInput] = useState(0);
+  const [drag, setDrag] = useState<ChangeDrag | null>(null);
+  const [over, setOver] = useState<SectionId | null>(null);
   const branchesRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -220,7 +263,7 @@ export function GitPanel() {
         ) : changeCount === 0 ? (
           <CleanTree git={git} />
         ) : (
-          <>
+          <ChangeDragContext.Provider value={{ drag, setDrag, over, setOver }}>
             <ChangeGroup
               id="conflict"
               title="Merge conflicts"
@@ -292,7 +335,7 @@ export function GitPanel() {
                 </RowIcon>
               }
             />
-          </>
+          </ChangeDragContext.Provider>
         )}
 
         <div ref={branchesRef} className="scroll-mt-1">
@@ -600,6 +643,7 @@ function Section({
   open,
   onToggle,
   actions,
+  zone,
   children,
 }: {
   id: SectionId;
@@ -608,10 +652,12 @@ function Section({
   open: boolean;
   onToggle: (id: SectionId) => void;
   actions?: ReactNode;
+  /** Present while this section would take the change being dragged. */
+  zone?: ZoneProps;
   children: ReactNode;
 }) {
   return (
-    <section className="pb-1">
+    <section {...zone} className={cn("pb-1", zone && "k-drop-zone")}>
       <div className="group/section flex h-7 items-center gap-1 px-[var(--keel-inset)]">
         <button
           type="button"
@@ -659,7 +705,53 @@ function ChangeGroup({
   onToggle: (id: SectionId) => void;
   actions?: ReactNode;
 }) {
-  if (files.length === 0) return null;
+  const dnd = useContext(ChangeDragContext);
+
+  // Rows that just arrived — staged, unstaged, newly changed — ease in, so a
+  // file visibly moves between groups instead of blinking from one to the other.
+  const seen = useRef<Set<string> | null>(null);
+  const arrived = useMemo(() => {
+    const before = seen.current;
+    if (!before) return new Set<string>();
+    return new Set(files.map((file) => file.path).filter((path) => !before.has(path)));
+  }, [files]);
+  useEffect(() => {
+    seen.current = new Set(files.map((file) => file.path));
+  }, [files]);
+
+  const action = dropActionFor(id, dnd?.drag ?? null);
+  // An empty Staged or Changes still shows up mid-drag, so there is somewhere to drop.
+  const placeholder = files.length === 0 && action !== null && id !== "untracked";
+  if (files.length === 0 && !placeholder) return null;
+
+  const zone: ZoneProps | undefined =
+    action && dnd
+      ? {
+          "data-drop": dnd.over === id ? "true" : undefined,
+          onDragOver: (event) => {
+            if (!event.dataTransfer.types.includes(DRAG_TYPE)) return;
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "move";
+            if (dnd.over !== id) dnd.setOver(id);
+          },
+          onDragLeave: (event) => {
+            if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+            dnd.setOver((previous) => (previous === id ? null : previous));
+          },
+          onDrop: (event) => {
+            event.preventDefault();
+            const carried = dnd.drag;
+            dnd.setDrag(null);
+            dnd.setOver(null);
+            if (!carried) return;
+            const workspace = useWorkspace.getState();
+            void (action === "stage"
+              ? workspace.stage([carried.path])
+              : workspace.unstage([carried.path]));
+          },
+        }
+      : undefined;
+
   return (
     <Section
       id={id}
@@ -668,10 +760,22 @@ function ChangeGroup({
       open={open}
       onToggle={onToggle}
       actions={actions}
+      zone={zone}
     >
-      {files.map((file) => (
-        <ChangeRow key={`${id}:${file.path}`} file={file} staged={staged} />
-      ))}
+      {placeholder ? (
+        <div className="k-row h-[28px] justify-center text-[12px] text-faint">
+          {action === "stage" ? "Drop to stage" : "Drop to unstage"}
+        </div>
+      ) : (
+        files.map((file) => (
+          <ChangeRow
+            key={`${id}:${file.path}`}
+            file={file}
+            staged={staged}
+            arrived={arrived.has(file.path)}
+          />
+        ))
+      )}
     </Section>
   );
 }
@@ -729,12 +833,23 @@ function changeMenu(file: GitFile, staged: boolean): MenuEntry[] {
   return entries;
 }
 
-function ChangeRow({ file, staged }: { file: GitFile; staged: boolean }) {
+function ChangeRow({
+  file,
+  staged,
+  arrived,
+}: {
+  file: GitFile;
+  staged: boolean;
+  arrived: boolean;
+}) {
   const name = fileName(file.path);
   const parent = parentRel(file.path);
   const deleted = file.status === "deleted";
   const selected = useWorkspace((state) => state.selectedRel === file.path);
   const workspace = useWorkspace.getState;
+  const dnd = useContext(ChangeDragContext);
+  const dragging =
+    dnd?.drag?.path === file.path && dnd.drag.staged === staged;
 
   const openDiff = () => {
     workspace().setSelected(file.path);
@@ -752,6 +867,19 @@ function ChangeRow({ file, staged }: { file: GitFile; staged: boolean }) {
           tabIndex={0}
           title={file.origPath ? `${file.origPath} → ${file.path}` : file.path}
           data-selected={selected}
+          data-motion={arrived ? "enter" : undefined}
+          data-dragging={dragging ? "true" : undefined}
+          // A conflict has to be resolved, not moved between groups.
+          draggable={!file.conflict}
+          onDragStart={(event) => {
+            event.dataTransfer.effectAllowed = "move";
+            event.dataTransfer.setData(DRAG_TYPE, file.path);
+            dnd?.setDrag({ path: file.path, staged });
+          }}
+          onDragEnd={() => {
+            dnd?.setDrag(null);
+            dnd?.setOver(null);
+          }}
           className="k-row group/change h-[28px] gap-2"
           onClick={(event) => {
             if (!isControl(event.target)) openDiff();
