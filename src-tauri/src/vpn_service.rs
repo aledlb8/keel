@@ -1354,7 +1354,9 @@ ERROR: command failed: returned error code 1
     fn startup_options_ask_openvpn_to_watch_the_exit_event() {
         let options = super::engine_startup_options(
             std::path::Path::new(r"C:\Users\developer\OpenVPN\config\keel-app.ovpn"),
-            std::path::Path::new(r"C:\Users\developer\AppData\Roaming\com.alede.keel\vpn\openvpn.log"),
+            std::path::Path::new(
+                r"C:\Users\developer\AppData\Roaming\com.alede.keel\vpn\openvpn.log",
+            ),
         );
         assert!(options.contains("--config"));
         assert!(options.contains("keel-app.ovpn"));

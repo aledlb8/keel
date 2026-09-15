@@ -1,6 +1,6 @@
 //! PTY ownership. Every terminal pane in the UI is one entry in [`PtyManager`].
 //!
-//! The rule from PLAN.md: Rust owns the process, the frontend owns the pixels.
+//! Rust owns the process lifecycle; the frontend owns terminal rendering.
 //! We spawn the user's *shell* — never the agent directly — then type the agent
 //! command into it, so the pane outlives the agent exiting.
 //!

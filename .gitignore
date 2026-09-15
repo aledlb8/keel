@@ -7,6 +7,13 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+*.tsbuildinfo
+
+# Local environment and secret-bearing overrides
+.env
+.env.*
+!.env.example
+.envrc
 
 # Collected build artifacts (pnpm build:app)
 release
