@@ -1,140 +1,80 @@
 # Private OpenVPN on Windows
 
-Keel needs a VPN path for its own HTTP traffic without replacing Windows' default route. The implementation therefore separates tunnel establishment from traffic selection:
+Keel can route its own supported HTTP traffic through an OpenVPN tunnel without replacing Windows' preferred default route. This document describes the architecture, trust boundaries, and contributor constraints for that feature.
 
-1. It derives a temporary client configuration from an imported profile.
-2. It suppresses server-pushed routes and system DNS changes.
-3. It starts the OpenVPN 2.x engine through the privileged Windows Interactive Service.
-4. It exposes a loopback HTTP CONNECT proxy whose outbound sockets select the tunnel interface.
-5. It supplies that proxy to Keel's HTTP client and child terminals through proxy environment variables.
+## Design goals
 
-This design keeps the machine's normal route preferred. It provides a private path for Keel and software that honors the supplied proxy variables. It is not a process-wide Windows firewall or kill switch: a child program that ignores proxy settings can still use the machine's normal route.
+The VPN integration is designed to:
 
-## Interactive Service contract
+1. Reuse a local `.ovpn` profile without modifying the original file.
+2. Prevent server-pushed routes and DNS settings from taking over the host.
+3. Start OpenVPN through the privileged Windows Interactive Service when adapter changes require elevation.
+4. Expose a loopback HTTP CONNECT proxy whose upstream sockets are pinned to the tunnel interface.
+5. Pass proxy settings to Keel's HTTP client and newly started terminal processes.
+6. Tear down Keel-owned OpenVPN processes on disconnect and normal application shutdown.
 
-OpenVPN's Windows Interactive Service listens on `\\.\pipe\openvpn\service`. The client opens the duplex named pipe, switches the handle to message-read mode, and writes three NUL-terminated UTF-16 fields: working directory, OpenVPN options, and standard input. OpenVPN GUI follows this contract and keeps the same pipe handle for request and response. The service validates the requested options and config location, starts `openvpn.exe` in the caller's security context, creates a separate privileged message channel for the engine, and returns a three-line UTF-16 response containing an error code and process ID.[^1][^2]
+The feature is an application-routing convenience, not a host firewall or process-level kill switch. Programs that ignore the supplied proxy variables can still use the machine's normal route.
 
-Launching `openvpn.exe` directly is insufficient for non-elevated Keel processes. The engine can establish TLS but privileged adapter operations then fail; the Interactive Service supplies the `--msg-channel` handle used for address, route, DNS, MTU, and related Windows changes.[^1]
+## Profile isolation
 
-The service starts `openvpn.exe` as a sibling of Keel, not a child. Closing the window or calling disconnect used to fire `TerminateProcess` at a stored PID without waiting, and only from `WindowEvent::Destroyed`. That missed app-exit, panics (`panic = "abort"` in release), Task Manager kills, and any engine whose PID Keel had already forgotten. Leftover processes kept the licensed server slot and a background tunnel.
+Keel writes a temporary working copy of the selected profile. The generated configuration suppresses server-pushed routing and DNS changes, removes inherited explicit routes, and adds a low-priority default route through the VPN gateway. The normal Windows default route therefore remains preferred for unpinned traffic while tunnel-pinned sockets retain a usable route.
 
-Killing the local engine is not the same as releasing the Access Server slot. This profile is UDP (`ping 12`, `ping-restart 50`). `TerminateProcess` and job-object kill skip OpenVPN's SIGTERM path, so the client never sends `explicit-exit-notify`. The server keeps the session until ping-restart (~50s) plus `TEMP[backoff 60]` on the next `AUTH_FAILED,LICENSE`. Rapid open/close on a 2-connection license then fails with "Couldn't connect" even when no `openvpn.exe` is running.
+The original profile is never rewritten by this process.
 
-Keel now:
+## OpenVPN Interactive Service
 
-- starts the engine with `--service Local\keel-openvpn-exit 0` (Interactive Service whitelist includes `service`) and `explicit-exit-notify 2` in the isolated profile. Signaling that named event is SIGTERM. OpenVPN 2.7 with DCO already has `protocol-flags cc-exit`, so the notify goes over the control channel instead of the offloaded data path;
-- waits for the process to exit after that signal, then `TerminateProcess` only if it is still running (engines started before `--service`);
-- writes the engine PID under `%APPDATA%\com.alede.keel\vpn\openvpn.pid` and records a stop timestamp so reconnect waits out Access Server's delayed slot release (~5–8s) instead of stacking a third session;
-- assigns each engine PID to a Win32 job with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, so the OS kills the tunnel when Keel's last handle to the job is closed, including crash and abort. A crash still cannot send the exit notify;
-- on connect, disconnect, and shutdown, enumerates `openvpn.exe` and stops only those whose command line contains `keel-app.ovpn` or Keel's log path, plus the recorded PID if it is still `openvpn.exe`, leaving OpenVPN GUI / Connect alone;
-- drops `OpenVpnProc` by stopping, so a failed connect cannot leak the engine;
-- shuts the tunnel down on window close, `RunEvent::ExitRequested`, and `RunEvent::Exit`.
+On Windows, non-elevated OpenVPN processes can establish the control connection but may not be able to perform privileged adapter operations. Keel therefore uses the OpenVPN Interactive Service over `\\.\pipe\openvpn\service` when available.
 
-The Interactive Service still performs privileged adapter cleanup when the engine process dies.
+The service protocol sends the working directory, OpenVPN options, and standard input as NUL-terminated UTF-16 fields. Keel keeps a single pipe handle for the full request, treats `ERROR_PIPE_BUSY` as transient, bounds all waits, rejects malformed responses, and surfaces service-start failures without elevating the Keel application itself.
 
-## Error 231 root cause
+If the service is stopped and Windows requires administrator rights to start it, only the system service-start command is elevated. Keel and child terminals remain unelevated.
 
-Windows returns `ERROR_PIPE_BUSY` (231) when a named pipe exists but every listening instance is currently connected. Microsoft specifies that a client must call `WaitNamedPipe`, then retry `CreateFile`. Even after a successful wait, another client can acquire the available instance first, so the open must remain in a retry loop.[^3][^4]
+## Process ownership and shutdown
 
-The previous Keel client opened the service pipe as an availability probe, immediately closed that handle without sending startup data, and then opened the pipe again for the real request. The first connection forced the service to dispatch a worker and recreate a listening instance. The second `CreateFile` could run during that handoff and fail with error 231. Keel then described the running service as unreachable, which led to the misleading instruction shown in the UI.
+Keel identifies only OpenVPN processes associated with its generated `keel-app.ovpn` configuration or Keel VPN log path. It does not intentionally stop unrelated OpenVPN GUI or OpenVPN Connect sessions.
 
-The corrected client:
+On Windows, the OpenVPN engine receives a named exit event so a normal disconnect can follow OpenVPN's graceful termination path. A Win32 job object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` provides crash cleanup when graceful shutdown is impossible.
 
-- opens the pipe once and retains that exact handle through mode setup, write, and read;
-- treats error 231 as transient, waiting and retrying for up to five seconds;
-- checks the service only when the pipe does not exist, starts it if needed, then polls for creation for up to fifteen seconds;
-- uses an owning Rust wrapper so every return path closes the Windows handle;
-- rejects partial writes, odd-length UTF-16 responses, and zero process IDs;
-- distinguishes a busy service from an unavailable service in user-facing errors.
+The app records the engine PID under its own application-data directory and uses bounded cleanup during connect, disconnect, and shutdown.
 
-The bounded waits avoid both a startup race and an indefinitely blocked connection command. The implementation deliberately does not restart a service that is already running merely because its pipe is busy.
+## Traffic selection
 
-## Service startup permissions
+The local CONNECT proxy binds upstream IPv4 sockets to the tunnel address and sets the Windows `IP_UNICAST_IF` option to the tunnel's IPv4 interface index. DNS A queries use the same interface selection before any system-resolver fallback.
 
-The next reported failure was separate from error 231: Keel invoked `sc start OpenVPNServiceInteractive` without elevation and discarded its output. On this machine that command returns Windows error 5 (access denied). The service ACL allows an interactive user to query its status but reserves starting it for administrators and SYSTEM. The Windows event log also records the Interactive Service terminating unexpectedly before the reported connection failure.
+Connection finalization compares the public IPv4 observed through the proxy with the public IPv4 on the normal route. A matching result is treated as a failed isolated connection rather than a successful VPN connection.
 
-Keel now queries the service through the Service Control Manager with query-only rights first. A running or starting service only needs time to publish its pipe. For a stopped service, Keel requests start rights and calls `StartServiceW`; an access-denied result invokes Windows' administrator approval dialog for the system-directory `sc.exe` with the fixed arguments `start OpenVPNServiceInteractive`. Keel and its terminals stay unelevated. No service permissions or startup settings are changed. Another client winning the startup race is treated as success.[^7]
+While connected, Keel monitors the preferred normal route and the OpenVPN process. Losing either causes Keel to close its proxy and transition the VPN state out of connected mode.
 
-Canceled approval, disabled or missing services, and other startup errors retain the underlying Windows error and receive distinct instructions. Successful service startup is followed by a bounded wait for the actual pipe; a missing pipe is no longer presented as proof that the service is stopped. The elevated helper process is hidden and its completion wait is bounded to thirty seconds.
+## Terminal lifecycle
 
-## Route and traffic isolation
+Proxy environment variables are captured when a child process starts. Connecting or reconnecting the VPN cannot rewrite the environment of an already-running shell or agent. New and restarted terminals receive the current proxy environment; existing terminals can be restarted from the UI when their proxy state is stale.
 
-`route-nopull` prevents server-pushed routes, DNS settings, and `block-outside-dns` from changing the host. `pull-filter ignore` rules provide explicit filtering for default-route, DNS, and IPv6 directives. OpenVPN still configures the tunnel interface address, which is required before Keel can select it for outbound sockets.[^5]
+Keel sets the conventional HTTP proxy variables and compatibility variables required by supported agent runtimes. These variables direct cooperative clients to the local proxy; they do not enforce routing for arbitrary sockets.
 
-The local CONNECT proxy applies Windows' `IP_UNICAST_IF` socket option before connecting upstream. Microsoft defines this option as selecting the outgoing interface for IPv4 traffic on multihomed systems.[^6] The value is the adapter's **IPv4** `IfIndex`, in network byte order. OpenVPN DCO adapters on this machine have no IPv6 stack, so `GetAdaptersAddresses.Ipv6IfIndex` is 0. `IP_UNICAST_IF` with index 0 is a silent no-op: CONNECT still returns 200, but packets use the default route. The previous client used `ipconfig::Adapter::ipv6_if_index()` because that crate does not expose the IPv4 index; Grok still worked because xAI accepts the normal-route address, while Anthropic and OpenAI return geo-block 403s from it.
+## Security boundaries
 
-The corrected client:
-
-- resolves the IPv4 interface index with `GetBestInterface` on the tunnel address;
-- binds each upstream socket to that IPv4 address as well as setting `IP_UNICAST_IF`;
-- refuses interface index 0 and link-local bind addresses;
-- after starting the proxy, fetches a public IPv4 through it and through the normal route, and fails the connection if they match.
-
-DNS A queries are sent from a UDP socket with the same interface selection and bind before the proxy falls back to the system resolver.
-
-The real HTTPS smoke test exposed a second failure after tunnel establishment: Windows returned `WSAENETUNREACH` (10051) because the selected interface had no route to public destinations. Selecting an interface does not supply a route. The generated profile now removes inherited explicit routes and adds `route 0.0.0.0 0.0.0.0 vpn_gateway 9999`. This low-priority route serves sockets pinned to the tunnel while the ordinary route wins for unpinned sockets. Keel rejects the tunnel if it cannot verify a preferred normal route, and checks every 250 ms while connected, closing its own tunnel if that condition stops holding. It no longer attempts to delete global `/1` routes belonging to other connections.
-
-The route monitor is best effort, not packet-level enforcement: a normal-connection failure can briefly make the lower-priority route eligible before the monitor closes the tunnel. Strict isolation during network transitions requires a separate routing compartment or filtering policy, beyond proxy settings and route metrics.
-
-Two boundaries remain intentional:
-
-- The isolation applies to Keel's HTTP client and terminal programs that honor `HTTP_PROXY`, `HTTPS_PROXY`, or `ALL_PROXY`.
-- The tunnel currently carries IPv4 upstream connections. The proxy resolves A records and uses the IPv4 interface-selection semantics required by `IP_UNICAST_IF`.
-
-A future requirement for mandatory coverage of arbitrary child-process sockets would need a Windows Filtering Platform policy, a per-process virtual network namespace equivalent, or another enforcement layer. Environment variables alone cannot enforce that property.
-
-## Terminal proxy lifecycle
-
-Proxy environment variables are captured when a shell starts. Connecting or
-reconnecting the VPN cannot change the environment of an existing shell or its
-agents. Keel now holds new and restarted shells during manual connection attempts
-as well as automatic startup. Running shells retain their output channels. Once
-connected, a terminal with an older proxy setting shows a restart action; Keel
-does not automatically interrupt its process. Failed startup retains the existing
-normal-connection fallback, with a visible notice inside the terminal.
-
-The native monitor checks both the ordinary route and the OpenVPN process. A
-stopped process closes the proxy and changes the VPN state to an error. While
-connected, the UI refreshes the state every three seconds, scheduling each poll
-after the previous response to avoid overlapping requests.
-
-Codex CLI 0.154.0 and Claude Code 2.1.272 send HTTP CONNECT through the
-existing proxy variables; Codex's WebSocket transport does so too. Keel also
-sets `WS_PROXY`/`WSS_PROXY`, `CLAUDE_CODE_PROXY_RESOLVES_HOSTS=1` (so Claude
-CONNECT uses hostnames rather than IPv6 literals on the IPv4 tunnel), and
-`NODE_USE_ENV_PROXY=1` for Node children. Those env vars are not a substitute
-for pinning: a local CONNECT logger can show the CLIs using the proxy while
-the upstream sockets still leave via the default route.
+- Tunnel routing currently targets IPv4 upstream connections.
+- The proxy only protects traffic that actually uses it.
+- A network transition can briefly change route eligibility before the monitor reacts.
+- Strict process-wide isolation would require a stronger Windows mechanism such as Windows Filtering Platform policy or an equivalent network compartment.
+- VPN profiles and local agent credentials are user data and must never be committed to the repository.
 
 ## Verification
 
-The protocol parser and encoder are covered by Rust unit tests, including rejection of a zero process ID. The complete repository check runs TypeScript checking, frontend tests, Rust formatting, and Clippy with warnings denied.
+The Rust test suite covers profile rewriting, service-protocol encoding and parsing, process matching, startup error handling, route helpers, and proxy behavior that can be exercised without a live VPN.
 
-Connection finalization itself compares the public IPv4 seen through the proxy
-with the public IPv4 seen on the normal route. Matching addresses fail the
-connect instead of reporting success. Set `KEEL_VPN_SMOKE_PROVIDERS=1`
-alongside `KEEL_VPN_SMOKE_PROFILE` to include unauthenticated OpenAI, Codex,
-and Anthropic reachability checks in the live tunnel test. These assert the
-expected API responses (401 for OpenAI/Codex; 405 for a GET to Anthropic's
-messages endpoint), rather than a Cloudflare geo-block 403. They do not
-validate an account's login or run a model prompt. The live test also stops
-its own OpenVPN process and verifies that the monitor clears the proxy and
-reports the connection loss.
+An ignored live tunnel test is also available for maintainers with a local autologin profile. It is intentionally opt-in because it depends on machine networking, OpenVPN installation, and private profile material. The normal repository check does not require VPN credentials:
 
-Startup regression tests cover access-denied recovery, avoiding elevation for other failures, canceled approval, and another client starting the service. An ignored `live_private_tunnel` test accepts a local autologin profile through `KEEL_VPN_SMOKE_PROFILE`, establishes a tunnel through the real service, checks HTTPS through Keel's proxy and the normal route, and cleans up its process and temporary files. Run it explicitly with `cargo test --manifest-path src-tauri/Cargo.toml live_private_tunnel --lib -- --ignored --nocapture`.
+```sh
+pnpm check
+```
 
-The server also intermittently returned `AUTH_FAILED,TEMP[backoff 60]:LICENSE` with a two-connection limit during reconnect testing. This is now reported as a connection-limit error instead of suggesting that saved credentials are wrong.
+## References
 
-After adding the tunnel route, the HTTPS check exposed `WSAEWOULDBLOCK` (10035) in the proxy's upload loop. On Windows, sockets accepted from the nonblocking listener inherit its mode. The handler now explicitly restores blocking mode before reading the CONNECT header or copying traffic, so pauses between TLS packets do not abort the connection. A local socket regression test reproduces delayed header packets on a nonblocking accepted socket without requiring a VPN.
-
-On the development machine, the final live test passed: the real service established the tunnel, Keel's connection finalization started its proxy and route monitor, an HTTPS request to `https://example.com` succeeded through that proxy, and the normal route remained selected before and after the request. Cleanup closed the test tunnel and proxy. Administrator approval recovery and cancellation were exercised through regression tests; the final live run used the already-running service.
-
-## Sources
-
-[^1]: OpenVPN. “[Windows Interactive Service implementation](https://github.com/OpenVPN/openvpn/blob/master/src/openvpnserv/interactive.c).” Source code, accessed 2026-09-14.
-[^2]: OpenVPN GUI. “[Interactive Service client implementation](https://github.com/OpenVPN/openvpn-gui/blob/master/openvpn.c).” Source code, accessed 2026-09-14.
-[^3]: Microsoft. “[Named Pipe Client](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-client).” Win32 documentation.
-[^4]: Microsoft. “[WaitNamedPipeW function](https://learn.microsoft.com/en-us/windows/win32/api/namedpipeapi/nf-namedpipeapi-waitnamedpipew).” Win32 API documentation.
-[^5]: OpenVPN. “[OpenVPN 2.6 Manual](https://openvpn.net/community-docs/community-articles/openvpn-2-6-manual.html).” Community documentation.
-[^6]: Microsoft. “[IPPROTO_IP socket options](https://learn.microsoft.com/en-us/windows/win32/winsock/ipproto-ip-socket-options).” Winsock documentation.
-[^7]: Microsoft. “[StartServiceW](https://learn.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-startservicew)” and “[ShellExecuteExW](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-shellexecuteexw).” Win32 API documentation.
+- [OpenVPN Windows Interactive Service implementation](https://github.com/OpenVPN/openvpn/blob/master/src/openvpnserv/interactive.c)
+- [OpenVPN GUI Interactive Service client](https://github.com/OpenVPN/openvpn-gui/blob/master/openvpn.c)
+- [Microsoft: Named Pipe Client](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-client)
+- [Microsoft: WaitNamedPipeW](https://learn.microsoft.com/en-us/windows/win32/api/namedpipeapi/nf-namedpipeapi-waitnamedpipew)
+- [OpenVPN 2.6 manual](https://openvpn.net/community-docs/community-articles/openvpn-2-6-manual.html)
+- [Microsoft: IPPROTO_IP socket options](https://learn.microsoft.com/en-us/windows/win32/winsock/ipproto-ip-socket-options)
+- [Microsoft: StartServiceW](https://learn.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-startservicew)

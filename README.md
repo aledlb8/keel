@@ -1,192 +1,126 @@
-# Keel
+<h1 align="center">Keel</h1>
 
-A desktop workspace for running many AI coding agents at once. See [PLAN.md](PLAN.md)
-for what it is and where it's going.
+<p align="center">
+  A native desktop workspace for running and organizing multiple AI coding agents at once.
+</p>
 
-Built with Tauri 2, React 19 and Vite.
+<p align="center">
+  <a href="https://github.com/aledlb8/keel/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/aledlb8/keel/actions/workflows/ci.yml/badge.svg" /></a>
+  <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue.svg" /></a>
+</p>
 
-## Package manager
+Keel combines persistent terminal panes, project and deck navigation, an integrated editor, Git tools, agent status, usage information, and workspace restoration in a Tauri application. It uses the agent CLIs already installed on your machine rather than wrapping a hosted agent service.
 
-This project uses **pnpm** exclusively. The version is pinned via the `packageManager`
-field in `package.json`, so `corepack enable` will select it automatically.
+Built with Tauri 2, React 19, TypeScript, Rust, Vite, CodeMirror, and xterm.js.
 
-Do not use `npm` or `yarn` here — their lockfiles are gitignored and a flat
-`node_modules` will conflict with pnpm's linked layout.
+## What it does
 
-## Getting set up
+- Launch multiple supported coding agents and plain shells side by side.
+- Keep processes running while you switch projects or deck layouts.
+- Restore saved projects, layouts, terminals, and resumable agent sessions.
+- Browse and edit project files with an integrated CodeMirror editor.
+- Inspect Git status and diffs, then stage, commit, fetch, pull, push, and manage branches.
+- Surface agent activity and supported subscription-usage windows in the workspace UI.
+- Configure agent commands, profiles, colors, and discovery paths from the app.
+- On Windows, optionally route Keel traffic through an isolated OpenVPN tunnel without replacing the machine's preferred default route.
+
+## Requirements
+
+- Node.js 20 or newer
+- pnpm 11 or newer
+- A Rust toolchain with `rustfmt` and `clippy`
+- The native prerequisites required by Tauri for your operating system
+
+On Windows, Tauri requires the Microsoft C++ build tools and WebView2 runtime. The optional private-VPN feature additionally requires the OpenVPN community client and its Interactive Service. See the [Tauri prerequisites](https://tauri.app/start/prerequisites/) for platform setup.
+
+## Development
 
 ```sh
-corepack enable    # picks up the pinned pnpm version
+corepack enable
 pnpm install
-pnpm doctor        # verifies Rust, WebView2 and the rest of the toolchain
+pnpm doctor
+pnpm dev
 ```
 
-`pnpm doctor` checks everything a full build needs and prints an install hint for
-whatever is missing. It exits non-zero if the machine can't build, so it also works
-as a CI preflight.
+`pnpm dev` starts the native Tauri app with frontend hot reload. For frontend-only work that does not call Tauri commands, use `pnpm dev:web`.
 
-Beyond Node and pnpm you need the [Tauri prerequisites](https://tauri.app/start/prerequisites/):
-a Rust toolchain from [rustup](https://rustup.rs), plus the platform's native webview
-and C toolchain — Visual Studio Build Tools (C++ workload) and the WebView2 runtime on
-Windows, Xcode command line tools on macOS, `libwebkit2gtk-4.1-dev` on Linux.
-
-## Developing
+## Build
 
 ```sh
-pnpm dev:app       # the desktop app, with hot reload
-pnpm dev           # the frontend alone, in a browser at :1420
+pnpm build:app       # native app plus platform installers/bundles
+pnpm build           # native release binary without installer bundles
+pnpm build:app:debug # debug-shaped bundle for troubleshooting
 ```
 
-Use `pnpm dev:app` for normal work. `pnpm dev` is only useful for UI that doesn't call
-into Rust — `invoke` fails outside the Tauri shell.
+Build outputs collected for distribution are copied to `release/`. Release binaries are currently unsigned, so operating-system reputation or signing warnings can appear until a release signing process is configured.
 
-## Building
+## Quality checks
 
 ```sh
-pnpm build:app     # release build: the exe plus .msi and .exe installers
-pnpm build:exe     # release build, skipping installers — much faster
-pnpm build         # frontend bundle only, into dist/
+pnpm check
 ```
 
-Every build writes its shippable output to **`release/`**:
+The check runs TypeScript type checking, frontend tests, Rust formatting verification, and Clippy with warnings denied. CI runs the same command on Windows.
 
+Useful individual commands:
+
+```sh
+pnpm typecheck
+pnpm test
+pnpm rust:fmt
+pnpm rust:lint
 ```
-release/
-  Keel.exe                    the standalone binary
-  Keel_0.1.0_x64_en-US.msi    Windows installer (MSI)
-  Keel_0.1.0_x64-setup.exe    Windows installer (NSIS, per-user, no admin)
-```
 
-`Keel.exe` is self-contained apart from the system WebView2 runtime, so it can be run
-or copied directly. The installers are what you hand to someone else.
+## Using Keel
 
-A cold release build takes several minutes — `[profile.release]` in `src-tauri/Cargo.toml`
-turns on LTO and `codegen-units = 1` to keep the binary small. Later builds are much
-faster. Reach for `pnpm build:app:debug` when you need a release-shaped bundle with
-symbols and the console window attached.
+Add a folder to create a project, then open terminals or agent sessions inside it. Projects can contain multiple decks: independent pane layouts whose processes continue running while another deck is visible. The overview (`Ctrl+O`) shows every deck and lets you move running terminals between them.
 
-## Using it
+Common shortcuts:
 
-Add a folder, and it becomes a project. Terminals open inside it and are listed under
-it in the sidebar — fold a project open to see everything running in it, with each
-agent's state as a dot: blue while it is working, green once it has finished and you
-have not been back to it, grey otherwise. Plain shells are always grey. Click one to focus it on the canvas; if it belongs
-to another project, that project comes forward with it. Terminals in projects you are
-not looking at keep running.
-
-Selecting a project is one-way: clicking the selected one does not deselect it.
-
-Every row in the sidebar follows one grammar: click goes there, double-click or `F2`
-renames it in place, and right-click (or the ⋯ that appears on hover) opens everything
-else — add terminals, new deck, reorder, copy the path, show it in Explorer, remove.
-Right-click a pane for copy, paste, select all and clear, plus split, fullscreen, move to
-another deck, switch profile, restart and close. `F2` in a terminal renames it. The
-browser's own context menu is switched off everywhere.
-
-### Decks
-
-A project can hold several arrangements of terminals, all running at once. They are
-called decks, and **you will not see any sign of them until you make a second one** —
-one deck looks exactly like an app that has never heard of decks.
-
-Once there are two, a numbered rail appears down the edge of the canvas. In the sidebar, a
-deck you are not looking at shows a dot when an agent on it is working or has finished. `Ctrl+1…9` jumps straight to one.
-
-`Ctrl+O` opens the **overview**: every deck at once, drawn to scale from its
-real layout in the agents' colours. Click one to enter it, double-click its name to
-rename it, or **drag a terminal from one deck onto another** — the process keeps
-running, only the rectangle it is drawn in changes.
-
-The window has no OS decorations — the titlebar is drawn by the app and carries the
-menu bar. Each pane has a slim header with its agent,
-its profile, and split, fullscreen and close. A pane's edge is a hairline
-that brightens when the pane is focused.
-
-Everything the app has to explain lives behind **Project / View / Help** rather than as
-text parked next to the terminals.
-
-Keyboard, like a browser. `Ctrl+T` adds terminals, `Ctrl+W` closes one, `Ctrl+1…9`
-jumps to a deck. Shift is only added when a bare Ctrl chord would steal a key the
-terminal actually uses (`Ctrl+D` is EOF, `Ctrl+S` is XOFF).
-
-| Keys | Does |
-|---|---|
-| `Ctrl+P` | Go to a terminal, deck or action |
-| `F8` | Next waiting agent |
-| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Focus the next / previous pane |
-| `Ctrl+1…9` | Jump to a deck |
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl+P` | Go to a terminal, deck, or action |
 | `Ctrl+T` | Add terminals |
 | `Ctrl+W` | Close the focused pane |
+| `Ctrl+1…9` | Jump to a deck |
+| `Ctrl+O` | Open deck overview |
+| `Ctrl+N` | Create a deck |
 | `Ctrl+Shift+D` / `Ctrl+Shift+S` | Split right / split down |
-| `F11` | Fullscreen the focused pane, and back |
-| `Ctrl+Shift+E` | Even out every split |
-| `Ctrl+Shift+←/→/↑/↓` | Move the focused pane to another side |
-| `Ctrl+N` | New deck |
-| `Ctrl+O` | Overview of every deck |
-| `Ctrl+B` | Collapse or expand the sidebar |
-| `Ctrl+Shift+B` | Collapse or expand files and git |
-| `F2` | Rename |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Focus next / previous pane |
+| `F8` | Focus the next waiting agent |
+| `F11` | Toggle focused-pane fullscreen |
+| `F2` | Rename the focused item |
 
-These are handled in the **capture phase**, ahead of xterm. xterm calls
-`stopPropagation()` on any chord it turns into an escape sequence, so a normal
-listener would never see the arrow keys at all. They are also ignored when a real
-text field (rename, a dialog) has focus, so `Ctrl+W` in an input still deletes a
-word.
+## Local data
 
-**Add terminals** asks how many of each agent you want, previews the exact grid you are
-about to get, and can start them in a subdirectory of the project rather than its root.
+Keel stores workspace state and agent overrides in the operating system's application-config directory for the `com.alede.keel` identifier. Typical locations are `%APPDATA%\com.alede.keel` on Windows, `~/.config/com.alede.keel` on Linux, and `~/Library/Application Support/com.alede.keel` on macOS.
 
-## Where things are kept
+The main files are:
 
-Both files live in the app config directory
-(`%APPDATA%\com.alede.keel` on Windows, `~/.config/com.alede.keel` on Linux,
-`~/Library/Application Support/com.alede.keel` on macOS):
+- `keel.json` for projects, decks, layouts, and saved terminal state.
+- `agents.json` for changes to the built-in agent catalogue.
 
-- `keel.json` — projects, their decks and the layouts on them
-- `agents.json` — the agent catalogue
+Keel can read credentials already managed by supported local agent CLIs when fetching usage information. Those credentials are not repository configuration and should never be committed to this project.
 
-Edit both from **Help › Agents & profiles** (also reachable from the launcher and from
-a pane's profile menu). Rename an agent, change its command, badge or colour, hide the
-ones you do not use, add your own CLIs, and add, rename or remove sign-in profiles.
-Agent changes save as you type.
+## Repository layout
 
-The catalogue file only stores what differs from the built-in list, so a default that
-changes in a later release still reaches every agent you never touched.
-
-Reopening a project starts its shells again. Agent panes that were still in a
-conversation resume that same chat (via each CLI's resume flag); panes you had
-already dropped back to a shell stay a shell.
-
-## Checks
-
-```sh
-pnpm check         # everything below, in one pass
-pnpm typecheck     # tsc --noEmit
-pnpm test          # the layout tree, under Node's built-in runner
-pnpm rust:lint     # clippy, warnings denied
-pnpm rust:fmt      # rustfmt, writes in place
+```text
+src/                    React frontend
+src-tauri/              Rust backend and desktop packaging
+src-tauri/agents.default.json
+                        built-in agent catalogue
+scripts/                build, artifact, doctor, and cleanup tooling
+docs/                   contributor-facing design notes
 ```
 
-`pnpm test` covers `src/lib/tree.ts` and nothing else, on purpose. The tree is the
-only pure logic in the app and the only part that fails *quietly* — a bad move
-leaves a layout that looks plausible and simply is not what you asked for.
+The Windows private-VPN design and its isolation boundaries are documented in [docs/vpn-windows-design.md](docs/vpn-windows-design.md).
 
-## Housekeeping
+## Contributing
 
-```sh
-pnpm clean         # drop dist/, release/ and the bundle output
-pnpm clean:all     # also drop node_modules/ and src-tauri/target/ — forces a cold rebuild
-```
+See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Changes should keep `pnpm check` green and avoid committing generated output, local credentials, private configuration, or machine-specific paths.
 
-## Releasing a new version
+Security-sensitive reports should follow [SECURITY.md](SECURITY.md) rather than a public issue.
 
-The version lives in three places and they must agree: `package.json`,
-`src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`. Bump all three, then
-`pnpm build:app`.
+## License
 
-Builds are unsigned. Windows SmartScreen will warn on first run of the installer until
-the binaries are signed with a code-signing certificate.
-
-## Recommended IDE Setup
-
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+Keel is available under the [MIT License](LICENSE).
