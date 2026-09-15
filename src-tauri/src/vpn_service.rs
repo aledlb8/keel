@@ -6,6 +6,23 @@
 //! `\\.\pipe\openvpn\service` to start openvpn.exe and keep a privileged
 //! channel to it. That is what assigns the tunnel IP.
 
+/// Named event OpenVPN waits on when started with `--service`. Signaling it
+/// is a SIGTERM, which sends `explicit-exit-notify` so Access Server drops
+/// the licensed slot instead of waiting for ping-restart.
+pub const KEEL_EXIT_EVENT: &str = r"Local\keel-openvpn-exit";
+
+pub fn engine_startup_options(config: &std::path::Path, log: &std::path::Path) -> String {
+    let mut options = format!(
+        "--config \"{}\" --log \"{}\" --verb 3",
+        config.display(),
+        log.display()
+    );
+    if cfg!(windows) {
+        options.push_str(&format!(" --service \"{KEEL_EXIT_EVENT}\" 0"));
+    }
+    options
+}
+
 /// UTF-16 startup payload: workingdir \0 options \0 stdin \0
 pub fn encode_startup(workdir: &str, options: &str, stdin: &str) -> Vec<u16> {
     let mut msg = Vec::with_capacity(workdir.len() + options.len() + stdin.len() + 3);
@@ -60,7 +77,7 @@ pub fn diagnose_log(text: &str) -> Option<String> {
     }
     if lower.contains("auth_failed") || lower.contains("auth-failure") {
         if lower.contains("license") && lower.contains("connection") {
-            return Some("The VPN server has reached its licensed connection limit. Disconnect an unused VPN session or wait for the previous session to expire, then try again.".into());
+            return Some("The VPN server has reached its licensed connection limit. A previous session can keep its slot for about a minute after a hard close. Wait, then try again.".into());
         }
         return Some(
             "The VPN server rejected the login. Save the username and password in the profile, or use an autologin profile."
@@ -466,11 +483,8 @@ fn send_startup(
         .parent()
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_else(|| ".".into());
-    let options = format!(
-        "--config \"{}\" --log \"{}\" --verb 3",
-        config.display(),
-        log.display()
-    );
+    reset_exit_event();
+    let options = engine_startup_options(config, log);
     let msg = encode_startup(&workdir, &options, "");
     let bytes = unsafe {
         std::slice::from_raw_parts(
@@ -608,13 +622,184 @@ pub fn pid_running(_pid: u32) -> bool {
 
 pub const KEEL_CONFIG_FILE: &str = "keel-app.ovpn";
 const KILL_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+/// Client-side wait for SIGTERM + control-channel exit notify ACK (OpenVPN 2.7
+/// `cc-exit` is ~2.5s). After this, TerminateProcess is the fallback.
+const GRACEFUL_WAIT: std::time::Duration = std::time::Duration::from_secs(8);
+/// Access Server can keep the licensed slot for a few seconds after it ACKs
+/// the exit notify (`delayed-exit`). Reconnect waits out the remainder.
+const SERVER_SLOT_WAIT: std::time::Duration = std::time::Duration::from_secs(8);
 
 /// True when an `openvpn.exe` command line is Keel's private tunnel, not the
 /// user's OpenVPN GUI or another app.
 pub fn is_keel_tunnel_command(command_line: &str) -> bool {
-    command_line
-        .to_ascii_lowercase()
-        .contains(&KEEL_CONFIG_FILE.to_ascii_lowercase())
+    let lower = command_line.to_ascii_lowercase();
+    lower.contains(&KEEL_CONFIG_FILE.to_ascii_lowercase())
+        || (lower.contains("com.alede.keel") && lower.contains("openvpn.log"))
+}
+
+#[cfg(windows)]
+fn keel_vpn_dir() -> Option<std::path::PathBuf> {
+    let appdata = std::env::var_os("APPDATA")?;
+    Some(
+        std::path::PathBuf::from(appdata)
+            .join("com.alede.keel")
+            .join("vpn"),
+    )
+}
+
+#[cfg(windows)]
+fn keel_pid_file() -> Option<std::path::PathBuf> {
+    Some(keel_vpn_dir()?.join("openvpn.pid"))
+}
+
+#[cfg(windows)]
+fn keel_stop_file() -> Option<std::path::PathBuf> {
+    Some(keel_vpn_dir()?.join("openvpn.stopped"))
+}
+
+#[cfg(windows)]
+pub fn record_keel_pid(pid: u32) {
+    if pid == 0 {
+        return;
+    }
+    let Some(path) = keel_pid_file() else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(path, pid.to_string());
+}
+
+#[cfg(not(windows))]
+pub fn record_keel_pid(_pid: u32) {}
+
+#[cfg(windows)]
+fn read_keel_pid() -> Option<u32> {
+    let text = std::fs::read_to_string(keel_pid_file()?).ok()?;
+    text.trim().parse().ok().filter(|pid| *pid != 0)
+}
+
+#[cfg(windows)]
+fn clear_keel_pid() {
+    if let Some(path) = keel_pid_file() {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+#[cfg(windows)]
+fn mark_tunnel_stopped() {
+    let Some(path) = keel_stop_file() else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let _ = std::fs::write(path, millis.to_string());
+}
+
+/// Wait out Access Server's delayed release of a licensed slot after a clean
+/// stop. No-op when Keel has not stopped a tunnel recently.
+#[cfg(windows)]
+pub fn wait_for_server_slot() {
+    let Some(path) = keel_stop_file() else {
+        return;
+    };
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return;
+    };
+    let Ok(millis) = text.trim().parse::<u64>() else {
+        return;
+    };
+    let stopped = std::time::UNIX_EPOCH + std::time::Duration::from_millis(millis);
+    let Ok(elapsed) = std::time::SystemTime::now().duration_since(stopped) else {
+        return;
+    };
+    if elapsed < SERVER_SLOT_WAIT {
+        std::thread::sleep(SERVER_SLOT_WAIT - elapsed);
+    }
+}
+
+#[cfg(not(windows))]
+pub fn wait_for_server_slot() {}
+
+#[cfg(windows)]
+fn wide_z(name: &str) -> Vec<u16> {
+    name.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// Make sure the named exit event exists and is not signaled. OpenVPN treats a
+/// signaled event at startup as fatal.
+#[cfg(windows)]
+fn reset_named_event(name: &str) {
+    use std::ptr::null_mut;
+
+    use winapi::um::handleapi::CloseHandle;
+    use winapi::um::synchapi::{CreateEventW, ResetEvent};
+
+    let name = wide_z(name);
+    unsafe {
+        let handle = CreateEventW(null_mut(), 1, 0, name.as_ptr());
+        if handle.is_null() {
+            return;
+        }
+        let _ = ResetEvent(handle);
+        CloseHandle(handle);
+    }
+}
+
+#[cfg(windows)]
+fn reset_exit_event() {
+    reset_named_event(KEEL_EXIT_EVENT);
+}
+
+/// SIGTERM equivalent: OpenVPN sends explicit-exit-notify, then exits.
+#[cfg(windows)]
+fn signal_named_event(name: &str) -> bool {
+    use std::ptr::null_mut;
+
+    use winapi::um::handleapi::CloseHandle;
+    use winapi::um::synchapi::{CreateEventW, SetEvent};
+
+    let name = wide_z(name);
+    unsafe {
+        let handle = CreateEventW(null_mut(), 1, 0, name.as_ptr());
+        if handle.is_null() {
+            return false;
+        }
+        let ok = SetEvent(handle) != 0;
+        CloseHandle(handle);
+        ok
+    }
+}
+
+#[cfg(windows)]
+fn signal_exit_event() -> bool {
+    signal_named_event(KEEL_EXIT_EVENT)
+}
+
+#[cfg(windows)]
+fn wait_pid(pid: u32, timeout: std::time::Duration) {
+    if pid == 0 {
+        return;
+    }
+    use winapi::um::handleapi::CloseHandle;
+    use winapi::um::processthreadsapi::OpenProcess;
+    use winapi::um::synchapi::WaitForSingleObject;
+    use winapi::um::winnt::SYNCHRONIZE;
+
+    unsafe {
+        let handle = OpenProcess(SYNCHRONIZE, 0, pid);
+        if handle.is_null() {
+            return;
+        }
+        let _ = WaitForSingleObject(handle, timeout.as_millis() as u32);
+        CloseHandle(handle);
+    }
 }
 
 #[cfg(windows)]
@@ -641,20 +826,99 @@ pub fn kill_pid(pid: u32) {
 #[cfg(not(windows))]
 pub fn kill_pid(_pid: u32) {}
 
+/// Ask OpenVPN to exit so the server drops the licensed slot, then force-kill
+/// if it ignores the event (engines started before `--service`).
+#[cfg(windows)]
+pub fn stop_pid(pid: u32) {
+    if pid == 0 {
+        return;
+    }
+    signal_exit_event();
+    wait_pid(pid, GRACEFUL_WAIT);
+    if pid_running(pid) {
+        kill_pid(pid);
+    }
+    reset_exit_event();
+    mark_tunnel_stopped();
+    if read_keel_pid() == Some(pid) {
+        clear_keel_pid();
+    }
+}
+
+#[cfg(not(windows))]
+pub fn stop_pid(pid: u32) {
+    kill_pid(pid);
+}
+
 /// End every `openvpn.exe` that is still running Keel's private config.
 ///
 /// The Interactive Service starts the engine as a sibling, not a child, so a
 /// missed PID or a previous crashed Keel leaves a tunnel in the background.
 /// Matching the config file name avoids killing the user's OpenVPN GUI.
+///
+/// Prefer the `--service` exit event (SIGTERM + explicit-exit-notify) so the
+/// Access Server releases its licensed slot. TerminateProcess is the fallback
+/// and leaves that slot occupied until ping-restart.
 #[cfg(windows)]
 pub fn kill_keel_tunnels() {
-    for pid in keel_tunnel_pids() {
-        kill_pid(pid);
+    let mut pids = keel_tunnel_pids();
+    if let Some(pid) = read_keel_pid() {
+        if !pids.contains(&pid) && pid_is_openvpn(pid) {
+            pids.push(pid);
+        }
     }
+    if !pids.is_empty() {
+        signal_exit_event();
+        let deadline = std::time::Instant::now() + GRACEFUL_WAIT;
+        for pid in &pids {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            wait_pid(*pid, remaining);
+        }
+        for pid in pids {
+            if pid_running(pid) {
+                kill_pid(pid);
+            }
+        }
+        mark_tunnel_stopped();
+    }
+    reset_exit_event();
+    clear_keel_pid();
 }
 
 #[cfg(not(windows))]
 pub fn kill_keel_tunnels() {}
+
+#[cfg(windows)]
+fn pid_is_openvpn(pid: u32) -> bool {
+    process_image_name(pid).is_some_and(|path| {
+        path.rsplit(['\\', '/'])
+            .next()
+            .is_some_and(|name| name.eq_ignore_ascii_case("openvpn.exe"))
+    })
+}
+
+#[cfg(windows)]
+fn process_image_name(pid: u32) -> Option<String> {
+    use winapi::um::handleapi::CloseHandle;
+    use winapi::um::processthreadsapi::OpenProcess;
+    use winapi::um::winbase::QueryFullProcessImageNameW;
+    use winapi::um::winnt::PROCESS_QUERY_LIMITED_INFORMATION;
+
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return None;
+        }
+        let mut buf = [0u16; 32768];
+        let mut len = buf.len() as u32;
+        let ok = QueryFullProcessImageNameW(handle, 0, buf.as_mut_ptr(), &mut len);
+        CloseHandle(handle);
+        if ok == 0 {
+            return None;
+        }
+        Some(String::from_utf16_lossy(&buf[..len as usize]))
+    }
+}
 
 /// A job whose members die when this handle is closed (Keel exiting or crashing).
 #[cfg(windows)]
@@ -796,6 +1060,16 @@ fn process_command_line(pid: u32) -> Option<String> {
             &mut needed,
         );
         if needed == 0 {
+            let mut probe = [0u8; 16];
+            let _ = NtQueryInformationProcess(
+                handle,
+                PROCESS_COMMAND_LINE_INFORMATION,
+                probe.as_mut_ptr().cast(),
+                probe.len() as u32,
+                &mut needed,
+            );
+        }
+        if needed == 0 {
             CloseHandle(handle);
             return None;
         }
@@ -811,18 +1085,28 @@ fn process_command_line(pid: u32) -> Option<String> {
         if status != 0 || (needed as usize) < std::mem::size_of::<UNICODE_STRING>() {
             return None;
         }
+        let header = std::mem::size_of::<UNICODE_STRING>();
         let unicode = buf.as_ptr().cast::<UNICODE_STRING>().read_unaligned();
-        if unicode.Buffer.is_null() || unicode.Length == 0 {
+        if unicode.Length == 0 {
             return None;
         }
         let bytes = unicode.Length as usize;
-        let start = unicode.Buffer as usize;
-        let base = buf.as_ptr() as usize;
-        if start < base || start + bytes > base + buf.len() {
+        if !bytes.is_multiple_of(2) {
             return None;
         }
-        let offset = start - base;
-        if offset + bytes > buf.len() || !bytes.is_multiple_of(2) {
+        let start = unicode.Buffer as usize;
+        let base = buf.as_ptr() as usize;
+        let offset =
+            if !unicode.Buffer.is_null() && start >= base && start + bytes <= base + buf.len() {
+                start - base
+            } else if buf.len() >= header + bytes {
+                // Some builds put the string immediately after the header
+                // instead of a pointer into this buffer.
+                header
+            } else {
+                return None;
+            };
+        if offset + bytes > buf.len() {
             return None;
         }
         let raw = std::slice::from_raw_parts(buf[offset..].as_ptr().cast::<u16>(), bytes / 2);
@@ -1057,10 +1341,69 @@ ERROR: command failed: returned error code 1
         assert!(is_keel_tunnel_command(
             r#"C:\Program Files\OpenVPN\bin\openvpn.exe --config keel-app.ovpn"#
         ));
+        assert!(is_keel_tunnel_command(
+            r#"openvpn --log "C:\Users\developer\AppData\Roaming\com.alede.keel\vpn\openvpn.log" --verb 3"#
+        ));
         assert!(!is_keel_tunnel_command(
             r#"openvpn.exe --config "C:\Users\developer\OpenVPN\config\office.ovpn""#
         ));
         assert!(!is_keel_tunnel_command("openvpn.exe"));
+    }
+
+    #[test]
+    fn startup_options_ask_openvpn_to_watch_the_exit_event() {
+        let options = super::engine_startup_options(
+            std::path::Path::new(r"C:\Users\developer\OpenVPN\config\keel-app.ovpn"),
+            std::path::Path::new(r"C:\Users\developer\AppData\Roaming\com.alede.keel\vpn\openvpn.log"),
+        );
+        assert!(options.contains("--config"));
+        assert!(options.contains("keel-app.ovpn"));
+        assert!(options.contains("--verb 3"));
+        if cfg!(windows) {
+            assert!(options.contains("--service"));
+            assert!(options.contains(super::KEEL_EXIT_EVENT));
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn process_command_line_reads_this_process() {
+        let pid = std::process::id();
+        let cmd = super::process_command_line(pid).expect("query own command line");
+        assert!(!cmd.is_empty(), "own command line should not be empty");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn named_exit_event_can_be_signaled_and_reset() {
+        use std::ptr::null_mut;
+        use winapi::um::handleapi::CloseHandle;
+        use winapi::um::synchapi::{CreateEventW, WaitForSingleObject};
+        use winapi::um::winbase::WAIT_OBJECT_0;
+
+        let name = format!(
+            r"Local\keel-openvpn-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let wide = super::wide_z(&name);
+        let held = unsafe { CreateEventW(null_mut(), 1, 0, wide.as_ptr()) };
+        assert!(!held.is_null(), "CreateEventW must create the test event");
+        unsafe {
+            assert_ne!(WaitForSingleObject(held, 0), WAIT_OBJECT_0);
+        }
+        assert!(super::signal_named_event(&name));
+        unsafe {
+            assert_eq!(WaitForSingleObject(held, 0), WAIT_OBJECT_0);
+        }
+        super::reset_named_event(&name);
+        unsafe {
+            assert_ne!(WaitForSingleObject(held, 0), WAIT_OBJECT_0);
+            CloseHandle(held);
+        }
     }
 
     #[cfg(windows)]

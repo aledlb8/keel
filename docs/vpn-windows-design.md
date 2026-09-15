@@ -18,12 +18,16 @@ Launching `openvpn.exe` directly is insufficient for non-elevated Keel processes
 
 The service starts `openvpn.exe` as a sibling of Keel, not a child. Closing the window or calling disconnect used to fire `TerminateProcess` at a stored PID without waiting, and only from `WindowEvent::Destroyed`. That missed app-exit, panics (`panic = "abort"` in release), Task Manager kills, and any engine whose PID Keel had already forgotten. Leftover processes kept the licensed server slot and a background tunnel.
 
+Killing the local engine is not the same as releasing the Access Server slot. This profile is UDP (`ping 12`, `ping-restart 50`). `TerminateProcess` and job-object kill skip OpenVPN's SIGTERM path, so the client never sends `explicit-exit-notify`. The server keeps the session until ping-restart (~50s) plus `TEMP[backoff 60]` on the next `AUTH_FAILED,LICENSE`. Rapid open/close on a 2-connection license then fails with "Couldn't connect" even when no `openvpn.exe` is running.
+
 Keel now:
 
-- assigns each engine PID to a Win32 job with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, so the OS kills the tunnel when Keel's last handle to the job is closed, including crash and abort;
-- waits after `TerminateProcess` so disconnect is not a lie;
-- on connect, disconnect, and shutdown, enumerates `openvpn.exe` and stops only those whose command line contains `keel-app.ovpn`, leaving OpenVPN GUI connections alone;
-- drops `OpenVpnProc` by terminating, so a failed connect cannot leak the engine;
+- starts the engine with `--service Local\keel-openvpn-exit 0` (Interactive Service whitelist includes `service`) and `explicit-exit-notify 2` in the isolated profile. Signaling that named event is SIGTERM. OpenVPN 2.7 with DCO already has `protocol-flags cc-exit`, so the notify goes over the control channel instead of the offloaded data path;
+- waits for the process to exit after that signal, then `TerminateProcess` only if it is still running (engines started before `--service`);
+- writes the engine PID under `%APPDATA%\com.alede.keel\vpn\openvpn.pid` and records a stop timestamp so reconnect waits out Access Server's delayed slot release (~5–8s) instead of stacking a third session;
+- assigns each engine PID to a Win32 job with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, so the OS kills the tunnel when Keel's last handle to the job is closed, including crash and abort. A crash still cannot send the exit notify;
+- on connect, disconnect, and shutdown, enumerates `openvpn.exe` and stops only those whose command line contains `keel-app.ovpn` or Keel's log path, plus the recorded PID if it is still `openvpn.exe`, leaving OpenVPN GUI / Connect alone;
+- drops `OpenVpnProc` by stopping, so a failed connect cannot leak the engine;
 - shuts the tunnel down on window close, `RunEvent::ExitRequested`, and `RunEvent::Exit`.
 
 The Interactive Service still performs privileged adapter cleanup when the engine process dies.

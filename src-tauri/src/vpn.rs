@@ -102,7 +102,7 @@ impl OpenVpnProc {
                 let _ = child.kill();
                 let _ = child.wait();
             }
-            Self::Service { pid } => vpn_service::kill_pid(*pid),
+            Self::Service { pid } => vpn_service::stop_pid(*pid),
         }
     }
 }
@@ -413,6 +413,7 @@ fn connect_inner(app: &AppHandle, wanted: Option<&str>) -> Result<VpnSnapshot, S
         snap.openvpn_path = Some(openvpn.to_string_lossy().into_owned());
     })?;
     vpn_service::kill_keel_tunnels();
+    vpn_service::wait_for_server_slot();
 
     let log_path = work_dir(app)?.join("openvpn.log");
     let config_path = openvpn_config_path()?;
@@ -445,6 +446,7 @@ fn connect_inner(app: &AppHandle, wanted: Option<&str>) -> Result<VpnSnapshot, S
         #[cfg(windows)]
         {
             let OpenVpnProc::Service { pid } = &process;
+            vpn_service::record_keel_pid(*pid);
             if let Some(job) = &manager.job {
                 job.adopt(*pid);
             }

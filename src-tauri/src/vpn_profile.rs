@@ -32,6 +32,7 @@ fn is_system_wide_line(trimmed: &str) -> bool {
             | "route"
             | "route-ipv6"
             | "redirect-private"
+            | "explicit-exit-notify"
     ) || lower.contains("block-outside-dns")
         || lower.starts_with("dhcp-option dns")
         || lower.starts_with("dhcp-option domain")
@@ -81,6 +82,12 @@ pub fn isolate_profile_with(source: &str, windows_driver: Option<&str>) -> Strin
     // with a metric well above the normal connection. Keel verifies the
     // normal route still wins before exposing the proxy.
     body.push_str("route 0.0.0.0 0.0.0.0 vpn_gateway 9999\n");
+    // SIGTERM / --service exit tells the Access Server to drop this
+    // session immediately. TerminateProcess cannot send that notify, so
+    // the licensed slot stays occupied until ping-restart (~50s here).
+    // OpenVPN 2.7 + DCO uses the control channel (`cc-exit`) for this.
+    // TCP ignores the option; UDP needs it.
+    body.push_str("explicit-exit-notify 2\n");
     if let Some(driver) = windows_driver {
         body.push_str("windows-driver ");
         body.push_str(driver);
@@ -228,6 +235,7 @@ MIIB
         assert!(isolated.contains("pull-filter ignore \"block-outside-dns\""));
         assert!(isolated.contains("pull-filter ignore \"dhcp-option DNS\""));
         assert!(isolated.contains("ip-win32 ipapi"));
+        assert!(isolated.contains("explicit-exit-notify 2"));
     }
 
     #[test]
@@ -239,6 +247,7 @@ MIIB
             twice.matches("route-nopull").count()
         );
         assert_eq!(twice.matches("route-nopull").count(), 1);
+        assert_eq!(twice.matches("explicit-exit-notify").count(), 1);
     }
 
     #[test]
