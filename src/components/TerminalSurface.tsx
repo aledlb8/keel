@@ -285,7 +285,6 @@ export const TerminalSurface = memo(function TerminalSurface({
   const needsVpnRestart =
     !starting && vpnPhase === "connected" &&
     proxyPort !== null && spawnedProxyPort !== proxyPort;
-  const vpnUnavailable = !starting && vpnPhase === "error";
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   /** Wired up by the setup effect; the later effects only ever call these. */
@@ -615,25 +614,15 @@ export const TerminalSurface = memo(function TerminalSurface({
       className="relative isolate flex h-full w-full flex-col overflow-hidden"
       onMouseDown={() => onFocus(paneId)}
     >
-      {needsVpnRestart || vpnUnavailable ? (
+      {needsVpnRestart ? (
         <div role="status" className="flex shrink-0 items-center justify-between gap-3 border-b border-line bg-[color:var(--keel-term-solid)] px-3 py-2 text-[12px] text-dim">
-          <span>
-            {needsVpnRestart
-              ? "Restart this terminal to use the connected VPN."
-              : spawnedProxyPort === null
-                ? "VPN unavailable. This terminal is using your normal connection."
-                : "The VPN connection was lost. Open VPN settings to reconnect."}
-          </span>
+          <span>Restart this terminal to use the connected VPN.</span>
           <button
             type="button"
             className="k-tag shrink-0"
-            onClick={() =>
-              needsVpnRestart
-                ? useKeel.getState().restartPane(paneId)
-                : useKeel.getState().openVpnSettings()
-            }
+            onClick={() => useKeel.getState().restartPane(paneId)}
           >
-            {needsVpnRestart ? "Restart terminal" : "VPN settings"}
+            Restart terminal
           </button>
         </div>
       ) : null}
