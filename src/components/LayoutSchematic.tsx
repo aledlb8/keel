@@ -20,10 +20,10 @@ export interface LayoutSchematicProps {
   deck: Deck;
   agents: Agent[];
   /** Pane being dragged out of this deck, dimmed while it is in flight. */
-  draggingPaneId?: string | null;
+  draggingPaneId?: string | null | undefined;
   /** Enables dragging a terminal out of the schematic and onto another deck. */
-  onPaneDragStart?: (paneId: string) => void;
-  onPaneDragEnd?: () => void;
+  onPaneDragStart?: ((paneId: string) => void) | undefined;
+  onPaneDragEnd?: (() => void) | undefined;
 }
 
 export function LayoutSchematic(props: LayoutSchematicProps) {

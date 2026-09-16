@@ -43,8 +43,8 @@ describe("workspace store", () => {
     const id = state().addWorkspace();
     const next = state();
     assert.equal(next.workspaces.length, 1);
-    assert.equal(next.workspaces[0].id, id);
-    assert.equal(next.workspaces[0].name, "Workspace");
+    assert.equal(next.workspaces[0]?.id, id);
+    assert.equal(next.workspaces[0]?.name, "Workspace");
     assert.deepEqual(next.sidebar, [
       { kind: "project", id: "web" },
       { kind: "workspace", id },
@@ -89,13 +89,13 @@ describe("workspace store", () => {
     state().stopRename();
     state().placeProjectIn("web", { kind: "member", workspaceId: id, index: 0 });
     state().placeProjectIn("api", { kind: "member", workspaceId: id, index: 1 });
-    assert.deepEqual(state().workspaces[0].projectIds, ["web", "api"]);
+    assert.deepEqual(state().workspaces[0]?.projectIds, ["web", "api"]);
     assert.equal(state().sidebar.some((item) => item.kind === "project" && item.id === "web"), false);
 
     state().placeProjectIn("api", { kind: "root", index: 0 });
-    assert.deepEqual(state().workspaces[0].projectIds, ["web"]);
-    assert.equal(state().sidebar[0].kind, "project");
-    assert.equal(state().sidebar[0].id, "api");
+    assert.deepEqual(state().workspaces[0]?.projectIds, ["web"]);
+    assert.equal(state().sidebar[0]?.kind, "project");
+    assert.equal(state().sidebar[0]?.id, "api");
 
     state().dissolveWorkspace(id);
     assert.deepEqual(state().workspaces, []);
@@ -123,7 +123,7 @@ describe("workspace store", () => {
     });
     state().removeProject("web");
     assert.equal(state().activeProjectId, "api");
-    assert.deepEqual(state().workspaces[0].projectIds, ["api"]);
+    assert.deepEqual(state().workspaces[0]?.projectIds, ["api"]);
     assert.ok(!state().projects.some((item) => item.id === "web"));
   });
 
@@ -142,8 +142,8 @@ describe("workspace store", () => {
     });
     const project = state().addProject("/code/web", "web", "plat");
     assert.equal(state().activeProjectId, project.id);
-    assert.deepEqual(state().workspaces[0].projectIds, [project.id]);
-    assert.equal(state().workspaces[0].collapsed, false);
+    assert.deepEqual(state().workspaces[0]?.projectIds, [project.id]);
+    assert.equal(state().workspaces[0]?.collapsed, false);
     assert.equal(state().sidebar.length, 1);
   });
 
@@ -163,7 +163,7 @@ describe("workspace store", () => {
       activeProjectId: "web",
     });
     state().selectProject("api");
-    assert.equal(state().workspaces[0].activeProjectId, "api");
+    assert.equal(state().workspaces[0]?.activeProjectId, "api");
     state().selectWorkspace("plat");
     assert.equal(state().activeProjectId, "api");
   });

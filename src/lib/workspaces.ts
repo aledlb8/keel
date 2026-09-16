@@ -14,7 +14,7 @@
  * thing — the files of the folder you are looking at. That name was here first.
  */
 
-import { moveTo } from "./order.ts";
+import { moveTo, swapAt } from "./order.ts";
 import type { Project, SidebarRoot, Workspace } from "./types.ts";
 
 export type ProjectDestination =
@@ -35,7 +35,7 @@ function shift<T>(items: T[], match: (item: T) => boolean, delta: -1 | 1): T[] {
   const to = from + delta;
   if (from < 0 || to < 0 || to >= items.length) return items;
   const next = [...items];
-  [next[from], next[to]] = [next[to], next[from]];
+  swapAt(next, from, to);
   return next;
 }
 

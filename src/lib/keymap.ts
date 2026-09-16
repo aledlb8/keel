@@ -406,11 +406,11 @@ const KEY_LABELS: Record<string, string> = {
 
 export function keyLabel(code: string): string {
   const letter = /^Key([A-Z])$/.exec(code);
-  if (letter) return letter[1];
+  if (letter?.[1]) return letter[1];
   const digit = /^Digit(\d)$/.exec(code);
-  if (digit) return digit[1];
+  if (digit?.[1]) return digit[1];
   const numpad = /^Numpad(\d)$/.exec(code);
-  if (numpad) return `Num ${numpad[1]}`;
+  if (numpad?.[1]) return `Num ${numpad[1]}`;
   if (/^F\d{1,2}$/.test(code)) return code;
   return KEY_LABELS[code] ?? code;
 }
@@ -525,7 +525,9 @@ export function matchShortcut(
       return { action: "jumpDeck", index: deckIndexOf(event.code) ?? 0 };
     }
     if (shortcut.id === "movePane") {
-      return { action: "movePane", direction: MOVES[event.code] };
+      const direction = MOVES[event.code];
+      if (!direction) continue;
+      return { action: "movePane", direction };
     }
     return { action: shortcut.id } as ShortcutMatch;
   }

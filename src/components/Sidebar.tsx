@@ -383,8 +383,8 @@ function commitDrop(item: DragItem, spot: DropSpot, edge: Edge) {
 }
 
 type SortableProps = HTMLAttributes<HTMLElement> & {
-  "data-drop"?: Edge;
-  "data-dragging"?: "true";
+  "data-drop"?: Edge | undefined;
+  "data-dragging"?: "true" | undefined;
 };
 
 /**
@@ -397,11 +397,13 @@ function useSortable(spot: DropSpot, item: DragItem | null): SortableProps {
   const { state, setState } = context;
   const key = spotKey(spot);
 
+  const dragging =
+    item && state.item && sameThing(state.item, spot) ? ("true" as const) : undefined;
+  const drop = state.over?.key === key ? state.over.edge : undefined;
   return {
-    draggable: item ? true : undefined,
-    "data-dragging":
-      item && state.item && sameThing(state.item, spot) ? "true" : undefined,
-    "data-drop": state.over?.key === key ? state.over.edge : undefined,
+    ...(item ? { draggable: true as const } : {}),
+    ...(dragging ? { "data-dragging": dragging } : {}),
+    ...(drop ? { "data-drop": drop } : {}),
     onDragStart: (event) => {
       if (!item) return;
       event.stopPropagation();

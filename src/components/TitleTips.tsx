@@ -190,17 +190,19 @@ function TipBubble({ tip }: { tip: Tip }) {
     el.dataset.ready = "";
   }, [tip]);
 
-  const [head, ...rest] = tip.text.split(/\n\s*\n/);
+  const [head = "", ...rest] = tip.text.split(/\n\s*\n/);
   const chord = CHORD.exec(head);
+  const chordLabel = chord?.[1];
+  const chordKeys = chord?.[2];
 
   return (
     <div ref={ref} role="tooltip" className="k-tip">
       <div className="k-tip-body">
-        {chord ? (
+        {chordLabel !== undefined && chordKeys !== undefined ? (
           <>
-            <span className="k-tip-head">{chord[1]}</span>
+            <span className="k-tip-head">{chordLabel}</span>
             <span className="k-tip-keys">
-              {chord[2].match(/[^+]+|\+$/g)?.map((key, index) => (
+              {chordKeys.match(/[^+]+|\+$/g)?.map((key, index) => (
                 <kbd key={index}>{key}</kbd>
               ))}
             </span>

@@ -49,15 +49,15 @@ import {
 export interface MenuItemEntry {
   kind: "item";
   label: string;
-  icon?: LucideIcon;
-  shortcut?: string;
-  disabled?: boolean;
-  destructive?: boolean;
+  icon?: LucideIcon | undefined;
+  shortcut?: string | undefined;
+  disabled?: boolean | undefined;
+  destructive?: boolean | undefined;
   /**
    * Ask again before running: the first click swaps the label to this text and
    * keeps the menu open, the second click does it.
    */
-  confirm?: string;
+  confirm?: string | undefined;
   onSelect: () => void;
 }
 
@@ -69,21 +69,21 @@ export type MenuEntry =
       kind: "check";
       label: string;
       checked: boolean;
-      shortcut?: string;
-      disabled?: boolean;
+      shortcut?: string | undefined;
+      disabled?: boolean | undefined;
       onChange: (checked: boolean) => void;
     }
   | {
       kind: "sub";
       label: string;
-      icon?: LucideIcon;
-      disabled?: boolean;
+      icon?: LucideIcon | undefined;
+      disabled?: boolean | undefined;
       entries: MenuEntry[];
     }
   | {
       kind: "radio";
       value: string;
-      options: { value: string; label: string; shortcut?: string }[];
+      options: { value: string; label: string; shortcut?: string | undefined }[];
       onChange: (value: string) => void;
     };
 
@@ -149,13 +149,13 @@ function tidy(entries: MenuEntry[]): MenuEntry[] {
   for (const entry of entries) {
     if (
       entry.kind === "separator" &&
-      (out.length === 0 || out[out.length - 1].kind === "separator")
+      (out.length === 0 || out[out.length - 1]?.kind === "separator")
     ) {
       continue;
     }
     out.push(entry);
   }
-  while (out.length > 0 && out[out.length - 1].kind === "separator") out.pop();
+  while (out.length > 0 && out[out.length - 1]?.kind === "separator") out.pop();
   return out;
 }
 
@@ -211,7 +211,7 @@ function Entry({ entry }: { entry: MenuEntry }) {
       return (
         <kit.CheckboxItem
           checked={entry.checked}
-          disabled={entry.disabled}
+          disabled={entry.disabled === true}
           onCheckedChange={entry.onChange}
         >
           <span className="truncate">{entry.label}</span>
@@ -235,7 +235,7 @@ function Entry({ entry }: { entry: MenuEntry }) {
       const Icon = entry.icon;
       return (
         <kit.Sub>
-          <kit.SubTrigger disabled={entry.disabled}>
+          <kit.SubTrigger disabled={entry.disabled === true}>
             {Icon ? <Icon /> : null}
             {entry.label}
           </kit.SubTrigger>
@@ -259,7 +259,7 @@ function PlainItem({ entry }: { entry: MenuItemEntry }) {
   const Icon = entry.icon;
   return (
     <kit.Item
-      disabled={entry.disabled}
+      disabled={entry.disabled === true}
       variant={entry.destructive ? "destructive" : "default"}
       onSelect={entry.onSelect}
     >
@@ -276,9 +276,11 @@ function ConfirmItem({ entry }: { entry: MenuItemEntry }) {
   const Icon = entry.icon;
   return (
     <kit.Item
-      disabled={entry.disabled}
+      disabled={entry.disabled === true}
       variant="destructive"
-      className={armed ? "bg-[color-mix(in_srgb,var(--keel-dead)_16%,transparent)]" : undefined}
+      {...(armed
+        ? { className: "bg-[color-mix(in_srgb,var(--keel-dead)_16%,transparent)]" }
+        : {})}
       onSelect={(event) => {
         if (!armed) {
           event.preventDefault();

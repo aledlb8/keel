@@ -97,7 +97,8 @@ describe("dockPane", () => {
   it("joins the end of a group that runs the same way", () => {
     const four = gridOf(["a", "b", "c", "d"])!;
     assert.ok(four.kind === "split");
-    const topRow = four.children[0].id;
+    const topRow = four.children[0]?.id;
+    assert.ok(topRow);
     assert.deepEqual(shape(dockPane(four, "d", topRow, "right")), {
       column: [{ row: ["a", "b", "d"] }, "c"],
     });

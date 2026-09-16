@@ -87,8 +87,8 @@ export function RailTip({
   children,
 }: {
   label: string;
-  detail?: string;
-  side?: "left" | "right";
+  detail?: string | undefined;
+  side?: "left" | "right" | undefined;
   children: ReactNode;
 }) {
   return (

@@ -81,6 +81,7 @@ describe("normalizeWorkspaces", () => {
       [{ id: "w", name: "W", collapsed: true, activeProjectId: "gone" }],
       new Set(["web"]),
     );
+    assert.ok(workspace);
     assert.equal(workspace.collapsed, true);
     assert.deepEqual(workspace.projectIds, []);
     assert.equal(workspace.activeProjectId, null);
@@ -146,8 +147,8 @@ describe("placeProject", () => {
       index: 0,
     });
     assert.deepEqual(next.sidebar, [{ kind: "workspace", id: "plat" }]);
-    assert.deepEqual(next.workspaces[0].projectIds, ["api", "web"]);
-    assert.equal(next.workspaces[0].collapsed, false);
+    assert.deepEqual(next.workspaces[0]?.projectIds, ["api", "web"]);
+    assert.equal(next.workspaces[0]?.collapsed, false);
   });
 
   it("leaves a workspace and lands at a top-level index", () => {
@@ -165,8 +166,8 @@ describe("placeProject", () => {
       { kind: "workspace", id: "plat" },
       { kind: "project", id: "scratch" },
     ]);
-    assert.deepEqual(next.workspaces[0].projectIds, ["web"]);
-    assert.equal(next.workspaces[0].activeProjectId, "web");
+    assert.deepEqual(next.workspaces[0]?.projectIds, ["web"]);
+    assert.equal(next.workspaces[0]?.activeProjectId, "web");
   });
 
   it("reorders members inside the same workspace", () => {
@@ -176,7 +177,7 @@ describe("placeProject", () => {
       workspaceId: "plat",
       index: 0,
     });
-    assert.deepEqual(next.workspaces[0].projectIds, ["docs", "web", "api"]);
+    assert.deepEqual(next.workspaces[0]?.projectIds, ["docs", "web", "api"]);
   });
 
   it("moves a project from one workspace to another", () => {
@@ -205,7 +206,7 @@ describe("forgetProject / dissolveWorkspace", () => {
       { kind: "project", id: "scratch" },
     ];
     const nested = forgetProject(workspaces, sidebar, "web");
-    assert.deepEqual(nested.workspaces[0].projectIds, ["api"]);
+    assert.deepEqual(nested.workspaces[0]?.projectIds, ["api"]);
     const root = forgetProject(workspaces, sidebar, "scratch");
     assert.deepEqual(root.sidebar, [{ kind: "workspace", id: "plat" }]);
   });
@@ -234,7 +235,7 @@ describe("insert / shift / remember", () => {
       { kind: "workspace", id: "wks" },
       { kind: "project", id: "web" },
     ]);
-    assert.equal(next.workspaces[0].name, "Workspace");
+    assert.equal(next.workspaces[0]?.name, "Workspace");
   });
 
   it("shifts roots and members by one place", () => {
@@ -249,7 +250,7 @@ describe("insert / shift / remember", () => {
       { kind: "project", id: "web" },
     ]);
     assert.deepEqual(
-      shiftMember([group("a", ["web", "api", "docs"])], "a", "web", 1)[0].projectIds,
+      shiftMember([group("a", ["web", "api", "docs"])], "a", "web", 1)[0]?.projectIds,
       ["api", "web", "docs"],
     );
   });
@@ -269,7 +270,7 @@ describe("insert / shift / remember", () => {
 
   it("remembers the last member you were in", () => {
     const next = rememberWorkspaceProject([group("plat", ["web", "api"])], "plat", "api");
-    assert.equal(next[0].activeProjectId, "api");
+    assert.equal(next[0]?.activeProjectId, "api");
   });
 });
 

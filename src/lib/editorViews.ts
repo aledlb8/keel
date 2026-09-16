@@ -63,12 +63,12 @@ export function revealInEditor(id: string, line: number, column?: number): boole
   // Keep a pending jump so a pane that is still mounting (openFile then reveal)
   // lands on the same line once its view registers. Drop it shortly after so a
   // later remount of the same tab does not replay the jump.
-  pending.set(id, { line, column });
+  pending.set(id, column === undefined ? { line } : { line, column });
   const list = views.get(id);
   if (list?.length) {
     for (const view of list) applyReveal(view, line, column);
     const focused = list.find((view) => view.hasFocus) ?? list[list.length - 1];
-    focused.focus();
+    focused?.focus();
   }
   const expire = pending.get(id);
   setTimeout(() => {

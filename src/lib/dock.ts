@@ -115,6 +115,7 @@ export function dropTargetAt(
   const paneId = paneAt(boxes, x, y, GAP_SLOP);
   if (!paneId) return null;
   const pane = boxes[paneId];
+  if (!pane) return null;
 
   // A group strip, if the pointer is in one. Closest edge wins.
   let best: (DropTarget & { distance: number }) | null = null;
@@ -135,6 +136,7 @@ export function dropTargetAt(
 
     // Outermost group in the strip nearest the edge.
     const group = groups[groups.length - 1 - Math.floor(distance / GROUP_STRIP)];
+    if (!group) continue;
     const others = group.ids.filter((id) => id !== dragged).length;
     best = {
       nodeId: group.split.id,
@@ -156,7 +158,9 @@ export function dropTargetAt(
 
 /** The outline around a set of panes. */
 function boundsOf(ids: string[], boxes: Record<string, Box>): Box | null {
-  const present = ids.map((id) => boxes[id]).filter(Boolean);
+  const present = ids
+    .map((id) => boxes[id])
+    .filter((box): box is Box => box !== undefined);
   if (present.length === 0) return null;
   const left = Math.min(...present.map((box) => box.left));
   const top = Math.min(...present.map((box) => box.top));

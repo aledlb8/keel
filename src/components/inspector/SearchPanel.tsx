@@ -24,7 +24,7 @@ function groupHits(hits: GrepHit[]): { rel: string; hits: GrepHit[] }[] {
       index.set(hit.rel, groups.length);
       groups.push({ rel: hit.rel, hits: [hit] });
     } else {
-      groups[existing].hits.push(hit);
+      groups[existing]?.hits.push(hit);
     }
   }
   return groups;

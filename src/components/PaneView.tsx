@@ -61,7 +61,7 @@ export interface PaneViewProps {
   onRestart: (paneId: string) => void;
   onAccountChange: (paneId: string, accountId: string | null) => void;
   onCreateAccount: (paneId: string, agentId: string, name: string) => void;
-  onSpawnResult?: (paneId: string, ok: boolean, reason?: string) => void;
+  onSpawnResult?: ((paneId: string, ok: boolean, reason?: string) => void) | undefined;
   onTitle: (paneId: string, title: string, source: TitleSource) => void;
   /** A press on the header that may become a drag. Must be stable: this is memoised. */
   onDragStart: (paneId: string, event: React.PointerEvent) => void;

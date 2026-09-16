@@ -111,7 +111,7 @@ it("clears done before restart, ignores old generations, and ignores restore rep
   render(busy, "agent", 0);
   render(ready, "agent", 1);
   tick(60_000);
-  assert.equal(state().projects[0].decks[0].panes.agent.resumeAgent, true);
+  assert.equal(state().projects[0]?.decks[0]?.panes.agent?.resumeAgent, true);
   assert.equal(state().exited.agent, undefined);
   assert.equal(state().status.agent, "idle");
   assert.deepEqual(state().doneAt, {});
@@ -202,13 +202,14 @@ it("a session capture completed after restart cannot bind the old conversation",
   assert.equal(reads, 1);
   resolve([{ id: "old-chat", mtimeMs: Date.now() }]);
   await capture;
-  assert.equal(state().projects[0].decks[0].panes.agent.sessionReady, false);
-  assert.equal(state().projects[0].decks[0].panes.agent.sessionId, null);
+  assert.equal(state().projects[0]?.decks[0]?.panes.agent?.sessionReady, false);
+  assert.equal(state().projects[0]?.decks[0]?.panes.agent?.sessionId, null);
 });
 
 function alertFor(paneId: string, kind: "done" | "exited") {
   const project = state().projects[0];
-  const pane = project.decks[0].panes[paneId];
+  const pane = project?.decks[0]?.panes[paneId];
+  assert.ok(project && pane);
   return {
     kind,
     paneId: pane.id,
@@ -235,8 +236,8 @@ it("an agent process death is eligible for an OS toast, and mute strips from the
   assert.equal(state().exited.agent, true);
   assert.deepEqual(shouldAlert(alertFor("agent", "exited")), { notify: true, chime: true });
   state().setPaneMuted("agent", true);
-  assert.equal(state().projects[0].decks[0].panes.agent.muted, true);
+  assert.equal(state().projects[0]?.decks[0]?.panes.agent?.muted, true);
   assert.deepEqual(shouldAlert(alertFor("agent", "exited")), { notify: false, chime: false });
   state().setPaneMuted("agent", false);
-  assert.equal("muted" in state().projects[0].decks[0].panes.agent, false);
+  assert.equal("muted" in (state().projects[0]?.decks[0]?.panes.agent ?? {}), false);
 });

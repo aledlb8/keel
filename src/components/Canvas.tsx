@@ -170,7 +170,8 @@ export function Canvas({
           const before = previous[id];
           const after = next[id];
           return (
-            before &&
+            before !== undefined &&
+            after !== undefined &&
             before.left === after.left &&
             before.top === after.top &&
             before.width === after.width &&
@@ -637,7 +638,7 @@ function SplitSlots({
 
       {boundaries.map((offset, index) => (
         <div
-          key={`seam-${node.children[index].id}`}
+          key={`seam-${node.children[index]?.id ?? index}`}
           onPointerDown={startDrag(index)}
           // The seam draws nothing until you reach for it, and then only a
           // hairline down the middle of the gap — filling the whole gutter put a

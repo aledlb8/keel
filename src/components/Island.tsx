@@ -970,7 +970,7 @@ function Switcher({
           </p>
         ) : (
           visible.map((entry, index) => {
-            const first = index === 0 || visible[index - 1].group !== entry.group;
+            const first = index === 0 || visible[index - 1]?.group !== entry.group;
             return (
               <div key={entry.id}>
                 {first ? (

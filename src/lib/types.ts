@@ -52,19 +52,19 @@ export interface Pane {
    * Set once you name the pane yourself. Auto-titles from a prompt or OSC
    * leave these alone.
    */
-  titleLocked?: boolean;
+  titleLocked?: boolean | undefined;
   /** Absolute path the shell starts in. `null` falls back to the project root. */
   cwd: string | null;
   /**
    * Present on an editor pane: the files and diffs open in it. A pane with this
    * set runs no process — the agent and session fields above stay empty.
    */
-  editor?: PaneEditor;
+  editor?: PaneEditor | undefined;
   /**
    * When true, this pane does not chime or raise an OS toast. Omitted when
    * false so the saved layout stays clean.
    */
-  muted?: boolean;
+  muted?: boolean | undefined;
 }
 
 /** A file, or one side of a git change, open in an editor pane. */
@@ -163,11 +163,11 @@ export type SidebarRoot =
  * `store` names the on-disk layout used to discover that id.
  */
 export interface SessionSpec {
-  start?: string;
+  start?: string | undefined;
   resume: string;
   /** `subcommand` inserts after the binary (`codex resume {id}`). */
-  kind?: "args" | "subcommand";
-  store?: "grok" | "claude";
+  kind?: "args" | "subcommand" | undefined;
+  store?: "grok" | "claude" | undefined;
 }
 
 /** One entry of the agent catalogue, exactly as it is saved. */
@@ -181,19 +181,19 @@ export interface AgentSpec {
    * How this CLI reopens a captured conversation. Absent means every spawn
    * is a new session. `{id}` is replaced with the pane's captured `sessionId`.
    */
-  session?: SessionSpec | null;
+  session?: SessionSpec | null | undefined;
   /** Up to three characters, shown wherever the agent is drawn small. */
   short: string;
   /** Hex colour, or empty for the neutral fallback. */
   accent: string;
   /** Environment variable that points this CLI at an alternate config home. */
-  accountEnv?: string | null;
+  accountEnv?: string | null | undefined;
   /** Executable names looked for on PATH. Empty uses the command's first word. */
   bins: string[];
   /** Extra folders searched; `{home}` expands to the home directory. */
   paths: string[];
   /** Kept out of the launcher. */
-  hidden?: boolean;
+  hidden?: boolean | undefined;
 }
 
 /** A catalogue entry plus what detection found. */
@@ -212,7 +212,7 @@ export interface AgentAccount {
   agentId: string;
   name: string;
   /** New terminals of this agent start on it. At most one per agent. */
-  isDefault?: boolean;
+  isDefault?: boolean | undefined;
 }
 
 /** Private OpenVPN tunnel settings. The rest of the PC stays off the VPN. */
@@ -223,7 +223,7 @@ export interface VpnSettings {
    * Disk-only opt-in. Older documents saved `autoConnect: true` as the default;
    * launch only connects when this flag is present and true.
    */
-  connectOnLaunch?: boolean;
+  connectOnLaunch?: boolean | undefined;
   /** OpenVPN Connect profile id (file stem). `null` uses the only/first one. */
   profileId: string | null;
 }
@@ -262,7 +262,7 @@ export interface PersistedState {
   sidebar: SidebarRoot[];
   activeProjectId: string | null;
   accounts: AgentAccount[];
-  vpn?: VpnSettings;
+  vpn?: VpnSettings | undefined;
   /** Only the shortcuts you changed; everything else follows the defaults. */
-  keybindings?: KeybindingOverrides;
+  keybindings?: KeybindingOverrides | undefined;
 }

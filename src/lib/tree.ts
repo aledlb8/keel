@@ -36,7 +36,9 @@ function pathTo(
 ): { split: Extract<LayoutNode, { kind: "split" }>; index: number }[] | null {
   if (node.kind === "pane") return node.id === paneId ? trail : null;
   for (let index = 0; index < node.children.length; index += 1) {
-    const found = pathTo(node.children[index], paneId, [
+    const child = node.children[index];
+    if (!child) continue;
+    const found = pathTo(child, paneId, [
       ...trail,
       { split: node, index },
     ]);
@@ -59,14 +61,14 @@ function replace(
     const replaced = replace(child, targetId, next);
     if (replaced) {
       children.push(replaced);
-      sizes.push(node.sizes[index]);
+      sizes.push(node.sizes[index] ?? 1);
     }
   });
 
   if (children.length === 0) return null;
   // A split with one child is just that child — collapse it away so the tree
   // never accumulates invisible wrappers.
-  if (children.length === 1) return children[0];
+  if (children.length === 1) return children[0] ?? null;
   return { ...node, children, sizes: normalise(sizes) };
 }
 
@@ -99,7 +101,8 @@ export function splitPane(
 
     // Halve the split pane's share and give the other half to the newcomer.
     const sizes = [...split.sizes];
-    const share = sizes[index] / 2;
+    const current = sizes[index] ?? 1;
+    const share = current / 2;
     sizes[index] = share;
     sizes.splice(index + 1, 0, share);
 
@@ -142,6 +145,7 @@ export function resizeSplit(
     const min = 0.06;
     const before = sizes[seam];
     const after = sizes[seam + 1];
+    if (before === undefined || after === undefined) return node;
     const moved = Math.max(
       Math.min(delta, after - min),
       -(before - min),
@@ -225,21 +229,33 @@ export function movePane(
   const step = direction === "left" || direction === "up" ? -1 : 1;
 
   for (let depth = trail.length - 1; depth >= 0; depth -= 1) {
-    const { split, index } = trail[depth];
+    const stepAt = trail[depth];
+    if (!stepAt) continue;
+    const { split, index } = stepAt;
     if (split.direction !== axis) continue;
 
     const target = index + step;
     if (target < 0 || target >= split.children.length) continue;
 
     const neighbour = split.children[target];
+    if (!neighbour) continue;
     const isDirectChild = depth === trail.length - 1;
 
     // Two panes side by side: trade places.
     if (neighbour.kind === "pane" && isDirectChild) {
       const children = [...split.children];
       const sizes = [...split.sizes];
-      [children[index], children[target]] = [children[target], children[index]];
-      [sizes[index], sizes[target]] = [sizes[target], sizes[index]];
+      const childA = children[index];
+      const childB = children[target];
+      const sizeA = sizes[index];
+      const sizeB = sizes[target];
+      if (childA === undefined || childB === undefined) continue;
+      children[index] = childB;
+      children[target] = childA;
+      if (sizeA !== undefined && sizeB !== undefined) {
+        sizes[index] = sizeB;
+        sizes[target] = sizeA;
+      }
       const rebuilt: LayoutNode = { ...split, children, sizes };
       return replace(tree, split.id, rebuilt) ?? tree;
     }
@@ -386,8 +402,10 @@ export function dockPane(
     const { split, index } = parent;
     const children = [...split.children];
     const sizes = [...split.sizes];
-    const taken = sizes[index] * share;
-    sizes[index] -= taken;
+    const current = sizes[index];
+    if (current === undefined) return tree;
+    const taken = current * share;
+    sizes[index] = current - taken;
     const at = before ? index : index + 1;
     children.splice(at, 0, leaf);
     sizes.splice(at, 0, taken);
@@ -482,23 +500,24 @@ export function gridRows<T>(items: readonly T[]): T[][] {
  */
 export function gridOf(paneIds: string[]): LayoutNode | null {
   if (paneIds.length === 0) return null;
-  if (paneIds.length === 1) return paneLeaf(paneIds[0]);
+  const only = paneIds[0];
+  if (paneIds.length === 1) return only === undefined ? null : paneLeaf(only);
 
   const rows = gridRows(paneIds);
 
-  const rowNodes: LayoutNode[] = rows.map((row) =>
-    row.length === 1
-      ? paneLeaf(row[0])
-      : {
-          kind: "split",
-          id: nodeId("s"),
-          direction: "row",
-          children: row.map(paneLeaf),
-          sizes: row.map(() => 1 / row.length),
-        },
-  );
+  const rowNodes: LayoutNode[] = rows.map((row) => {
+    const first = row[0];
+    if (row.length === 1 && first !== undefined) return paneLeaf(first);
+    return {
+      kind: "split",
+      id: nodeId("s"),
+      direction: "row",
+      children: row.map(paneLeaf),
+      sizes: row.map(() => 1 / row.length),
+    };
+  });
 
-  if (rowNodes.length === 1) return rowNodes[0];
+  if (rowNodes.length === 1) return rowNodes[0] ?? null;
   return {
     kind: "split",
     id: nodeId("s"),
@@ -517,8 +536,8 @@ export function neighbourPane(
   const panes = listPanes(tree);
   if (panes.length === 0) return null;
   const index = panes.indexOf(paneId);
-  if (index === -1) return panes[0];
-  return panes[(index + step + panes.length) % panes.length];
+  if (index === -1) return panes[0] ?? null;
+  return panes[(index + step + panes.length) % panes.length] ?? null;
 }
 
 /**
@@ -535,9 +554,10 @@ export function relabelPanes(tree: LayoutNode, order: string[]): LayoutNode {
     return tree;
   }
   let cursor = 0;
-  const walk = (node: LayoutNode): LayoutNode =>
-    node.kind === "pane"
-      ? { ...node, id: order[cursor++] }
-      : { ...node, children: node.children.map(walk) };
+  const walk = (node: LayoutNode): LayoutNode => {
+    if (node.kind !== "pane") return { ...node, children: node.children.map(walk) };
+    const id = order[cursor++] ?? node.id;
+    return { ...node, id };
+  };
   return walk(tree);
 }

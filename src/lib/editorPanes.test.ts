@@ -28,8 +28,12 @@ beforeEach(() => {
 });
 
 const deck = () => activeDeck(keel().projects[0])!;
-const editorIds = () => listPanes(deck().tree).filter((id) => deck().panes[id].editor);
-const editorOf = (paneId: string) => deck().panes[paneId].editor!;
+const editorIds = () => listPanes(deck().tree).filter((id) => deck().panes[id]?.editor);
+const editorOf = (paneId: string) => {
+  const editor = deck().panes[paneId]?.editor;
+  assert.ok(editor);
+  return editor;
+};
 
 it("opens files as tabs of one editor pane standing beside the terminals", () => {
   keel().openInEditor("p", file("a.ts"));
@@ -37,10 +41,11 @@ it("opens files as tabs of one editor pane standing beside the terminals", () =>
   keel().openInEditor("p", file("a.ts"));
 
   const [paneId] = editorIds();
+  assert.ok(paneId);
   assert.equal(editorIds().length, 1);
   assert.deepEqual(editorOf(paneId).tabs.map((tab) => tab.rel), ["a.ts", "src/b.ts"]);
   assert.equal(editorOf(paneId).active, editorRefId(file("a.ts")));
-  assert.equal(deck().panes[paneId].title, "a.ts");
+  assert.equal(deck().panes[paneId]?.title, "a.ts");
   assert.equal(deck().focused, paneId);
   const tree = deck().tree as Extract<LayoutNode, { kind: "split" }>;
   assert.equal(tree.direction, "row");
@@ -51,6 +56,7 @@ it("splitting an editor opens what it shows in a second pane", () => {
   keel().openInEditor("p", file("a.ts"));
   keel().openInEditor("p", file("b.ts"));
   const [first] = editorIds();
+  assert.ok(first);
   keel().duplicatePane("p", first, "column");
 
   assert.equal(editorIds().length, 2);
@@ -66,6 +72,7 @@ it("closing the tab on screen shows its neighbour, and the last tab closes the p
   keel().openInEditor("p", file("a.ts"));
   keel().openInEditor("p", file("b.ts"));
   const [paneId] = editorIds();
+  assert.ok(paneId);
 
   keel().closeEditorTab("p", paneId, editorRefId(file("b.ts")));
   assert.equal(editorOf(paneId).active, editorRefId(file("a.ts")));
@@ -79,6 +86,7 @@ it("closing the tab on screen shows its neighbour, and the last tab closes the p
 it("moved files follow into editor panes, and deleted ones take their tabs away", async () => {
   keel().openInEditor("p", file("a.ts"));
   const [paneId] = editorIds();
+  assert.ok(paneId);
 
   keel().rewriteEditorTabs("C:/p", (ref) =>
     ref.rel === "a.ts" ? { ...ref, rel: "src/a.ts" } : ref,

@@ -131,7 +131,7 @@ export function matchScore(text: string, query: string): number | null {
 
   const at = haystack.indexOf(needle);
   if (at >= 0) {
-    const boundary = at === 0 || !WORD.test(haystack[at - 1]);
+    const boundary = at === 0 || !WORD.test(haystack.charAt(at - 1));
     return 1000 - at + (boundary ? 200 : 0) + (at === 0 ? 100 : 0);
   }
 
@@ -142,7 +142,7 @@ export function matchScore(text: string, query: string): number | null {
     if (char === " ") continue;
     const index = haystack.indexOf(char, from);
     if (index < 0) return null;
-    const boundary = index === 0 || !WORD.test(haystack[index - 1]);
+    const boundary = index === 0 || !WORD.test(haystack.charAt(index - 1));
     score += 1 + (boundary ? 4 : 0) + (index === last + 1 ? 3 : 0);
     last = index;
     from = index + 1;

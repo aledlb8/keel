@@ -186,7 +186,8 @@ export function LaunchDialog({
   /** Take back the most recent pick of this key. */
   function withdraw(keyId: string) {
     const index = picks.map((pick) => pick.keyId).lastIndexOf(keyId);
-    if (index >= 0) remove(picks[index].uid);
+    const pick = index >= 0 ? picks[index] : undefined;
+    if (pick) remove(pick.uid);
   }
 
   function openTerminals() {
@@ -376,7 +377,7 @@ function Stage({
   onRemove: (uid: number) => void;
   placeholder: string;
 }) {
-  const newest = picks.length > 0 ? picks[picks.length - 1].uid : null;
+  const newest = picks.length > 0 ? picks[picks.length - 1]?.uid ?? null : null;
 
   return (
     <div
@@ -396,7 +397,7 @@ function Stage({
             className={cn(
               "flex min-h-0 flex-1 gap-1.5",
               // A row that only just came into being grows in with its pane.
-              row.length === 1 && row[0].uid === growingUid && "k-pane-in",
+              row.length === 1 && row[0]?.uid === growingUid && "k-pane-in",
             )}
           >
             {row.map((pick) => (

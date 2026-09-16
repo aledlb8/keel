@@ -40,7 +40,7 @@ describe("parsed agent screen", () => {
     const screen = readAgentScreen({
       baseY: 0, cursorY: 2,
       getLine(index) {
-        return { isWrapped: index === 1, translateToString: () => cells[index] };
+        return { isWrapped: index === 1, translateToString: () => cells[index] ?? "" };
       },
     }, 4);
     assert.equal(screen.cursorLine, 1);

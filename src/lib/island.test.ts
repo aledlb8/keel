@@ -19,7 +19,7 @@ function pane(id: string, agentId: string | null = "claude") {
 function project(
   id: string,
   decks: { id: string; panes: string[]; focused?: string }[],
-  activeDeckId = decks[0].id,
+  activeDeckId = decks[0]?.id ?? "",
 ): Project {
   return {
     id,
@@ -67,7 +67,7 @@ describe("waitingPanes", () => {
       waiting.map((entry) => entry.paneId),
       ["a", "d", "b"],
     );
-    assert.equal(waiting[1].projectName, "Project p2");
+    assert.equal(waiting[1]?.projectName, "Project p2");
   });
 
   it("leaves out the pane you are looking at", () => {

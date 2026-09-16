@@ -514,8 +514,8 @@ function Caps({
   small,
 }: {
   parts: string[];
-  muted?: boolean;
-  small?: boolean;
+  muted?: boolean | undefined;
+  small?: boolean | undefined;
 }) {
   return (
     <span className="flex items-center gap-1">
@@ -534,8 +534,8 @@ function Cap({
   small,
 }: {
   children: ReactNode;
-  muted?: boolean;
-  small?: boolean;
+  muted?: boolean | undefined;
+  small?: boolean | undefined;
 }) {
   return (
     <kbd

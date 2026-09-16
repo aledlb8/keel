@@ -321,7 +321,7 @@ function Login({
   now: number;
   open: boolean;
   /** Present when this login folds; absent when every login stays open. */
-  onToggle?: () => void;
+  onToggle?: (() => void) | undefined;
 }) {
   const { usage } = row;
 

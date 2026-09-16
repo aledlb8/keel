@@ -9,7 +9,7 @@ const status: GitStatus = {
   git: true, repo: true, branch: "main", detached: false,
   upstream: null, ahead: 0, behind: 0, files: [],
 };
-const contents = { text: "hello", size: 5, binary: false, truncated: false };
+const contents = { text: "hello", size: 5, binary: false, truncated: false, mtimeMs: 1 };
 
 const file = (rel: string): WorkspaceEntry => ({
   name: rel.slice(rel.lastIndexOf("/") + 1), rel, kind: "file", size: 1,
@@ -56,8 +56,8 @@ it("moves a folder and carries open tabs, the selection and open folders with it
   await state().moveEntry("src/lib", "pkg");
 
   assert.equal(renames.length, 1);
-  assert.equal(renames[0].fromRel, "src/lib");
-  assert.equal(renames[0].toRel, "pkg/lib");
+  assert.equal(renames[0]?.fromRel, "src/lib");
+  assert.equal(renames[0]?.toRel, "pkg/lib");
   assert.equal(state().activeEditor, fileTabId("pkg/lib/a.ts"));
   assert.equal(state().buffers[fileTabId("pkg/lib/a.ts")], "hello");
   assert.equal(state().buffers[fileTabId("src/lib/a.ts")], undefined);
@@ -92,15 +92,15 @@ it("swaps hidden files in place instead of clearing the tree", async () => {
   assert.ok(state().tree.src, "open folders keep their rows while reloading");
   await showing;
   assert.equal(state().rowMotion[".env"], "enter");
-  assert.deepEqual(state().tree.src.map((entry) => entry.rel), ["src/a.ts"]);
+  assert.deepEqual(state().tree.src?.map((entry) => entry.rel), ["src/a.ts"]);
 
   await state().setShowHidden(false);
   assert.equal(state().rowMotion[".env"], "leave");
   assert.ok(
-    state().tree[""].some((entry) => entry.rel === ".env"),
+    state().tree[""]?.some((entry) => entry.rel === ".env"),
     "leaving rows stay until they have folded away",
   );
   await wait(250);
-  assert.ok(!state().tree[""].some((entry) => entry.rel === ".env"));
+  assert.ok(!state().tree[""]?.some((entry) => entry.rel === ".env"));
   assert.deepEqual(state().rowMotion, {});
 });
