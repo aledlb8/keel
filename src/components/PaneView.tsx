@@ -261,6 +261,7 @@ export const PaneView = memo(function PaneView({
               }
               onStopRename={() => useKeel.getState().stopRename()}
               onDragStart={(event) => onDragStart(pane.id, event)}
+              onMute={(muted) => useKeel.getState().setPaneMuted(pane.id, muted)}
             />
           )}
 

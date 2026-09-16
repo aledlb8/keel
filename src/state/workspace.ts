@@ -9,21 +9,25 @@ import { create } from "zustand";
 import { toast } from "sonner";
 
 import { diffTabId, editorRefId, fileTabId } from "../lib/editorRefs.ts";
+import { revealInEditor } from "../lib/editorViews.ts";
 import { fileName, joinRel, parentRel } from "../lib/git.ts";
+import { noteRecent, pruneRecent } from "../lib/recentFiles.ts";
 import type { EditorRef } from "../lib/types.ts";
 import * as api from "../lib/workspace.ts";
 import { WorkspaceReads } from "../lib/workspaceReads.ts";
+import { sameWatchRoot } from "../lib/workspaceWatch.ts";
 import { deckOfPane, useKeel } from "./store.ts";
 import type {
   FileContents,
   GitBranches,
   GitDiff,
   GitStatus,
+  GrepHit,
   PrList,
   WorkspaceEntry,
 } from "@/lib/workspace";
 
-export type InspectorTab = "files" | "git";
+export type InspectorTab = "files" | "git" | "search";
 export type GitMetaSection = "branches" | "prs" | "history";
 
 export type EditorKind = "file" | "diff";
@@ -53,6 +57,13 @@ interface WorkspaceState {
   /** Tree rows mid-transition, by relative path. Cleared once they settle. */
   rowMotion: Record<string, "enter" | "leave">;
 
+  grepQuery: string;
+  grepRegex: boolean;
+  grepHits: GrepHit[] | null;
+  grepTruncated: boolean;
+  grepLoading: boolean;
+  grepError: string | null;
+
   git: GitStatus | null;
   gitLoading: boolean;
   gitError: string | null;
@@ -73,6 +84,14 @@ interface WorkspaceState {
   editorErrors: Record<string, string | null>;
   busy: boolean;
 
+  /**
+   * The current project folder is covered by the native watcher. When false,
+   * the inspector falls back to polling.
+   */
+  fsWatch: boolean;
+  /** Bumped when recent-file stamps change so the tree can redraw dots. */
+  recentEpoch: number;
+
   setRoot: (root: string | null) => void;
   setTab: (tab: InspectorTab) => void;
   setShowHidden: (show: boolean) => Promise<void>;
@@ -89,6 +108,10 @@ interface WorkspaceState {
   refreshPrs: (afterPending?: boolean) => Promise<void>;
   refreshHistory: (afterPending?: boolean) => Promise<void>;
   search: (query: string) => Promise<void>;
+  setGrepQuery: (query: string) => void;
+  setGrepRegex: (on: boolean) => void;
+  grep: (query: string) => Promise<void>;
+  openFileAt: (rel: string, line: number, column?: number) => Promise<void>;
 
   openFile: (rel: string) => Promise<void>;
   openDiff: (rel: string, staged: boolean) => Promise<void>;
@@ -104,6 +127,11 @@ interface WorkspaceState {
   setBuffer: (id: string, value: string) => void;
   saveActive: () => Promise<void>;
   saveTab: (id: string) => Promise<void>;
+
+  setFsWatch: (on: boolean) => void;
+  bumpRecent: () => void;
+  /** Watcher event: stamp recent files, refresh this folder if it is on screen. */
+  applyFsChange: (root: string, rels: string[], git: boolean) => void;
 
   startCreate: (parent: string, kind: "file" | "dir") => void;
   cancelCreate: () => void;
@@ -142,6 +170,7 @@ function isDirty(state: WorkspaceState, id: string): boolean {
 
 const reads = new WorkspaceReads();
 let projectVersion = 0;
+let grepGeneration = 0;
 
 type EditorDocs = Pick<
   WorkspaceState,
@@ -498,6 +527,13 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   searchHits: null,
   rowMotion: {},
 
+  grepQuery: "",
+  grepRegex: false,
+  grepHits: null,
+  grepTruncated: false,
+  grepLoading: false,
+  grepError: null,
+
   git: null,
   gitLoading: false,
   gitError: null,
@@ -517,11 +553,14 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   editorLoading: {},
   editorErrors: {},
   busy: false,
+  fsWatch: false,
+  recentEpoch: 0,
 
   setRoot: (root) => {
     const previous = get().root;
     if (previous === root) return;
     projectVersion += 1;
+    grepGeneration += 1;
     reads.reset();
     if (previous) stashedDocs.set(previous, settledDocs(get()));
     // No project at all: nothing will come back for what was open.
@@ -538,6 +577,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       searchHits: null,
       rowMotion: {},
       query: "",
+      grepQuery: "",
+      grepHits: null,
+      grepTruncated: false,
+      grepLoading: false,
+      grepError: null,
       git: null,
       ...docs,
       gitLoading: false,
@@ -548,6 +592,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       metaLoading: {},
       metaErrors: {},
       busy: false,
+      fsWatch: false,
     });
     if (root) {
       void get().loadDir("");
@@ -557,6 +602,17 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
 
   setTab: (tab) => {
     set({ tab });
+  },
+  setFsWatch: (fsWatch) => set({ fsWatch }),
+  bumpRecent: () => set({ recentEpoch: get().recentEpoch + 1 }),
+  applyFsChange: (root, rels, git) => {
+    pruneRecent();
+    noteRecent(root, rels);
+    set({ recentEpoch: get().recentEpoch + 1 });
+    if (!sameWatchRoot(get().root, root)) return;
+    const full = rels.some((rel) => rel === "");
+    if (full || rels.length > 0) void get().refreshTree();
+    if (git || full) void get().refreshGit();
   },
   setShowHidden: async (showHidden) => {
     // The tree stays up while the new listings load — clearing it first blanked
@@ -691,6 +747,59 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
     }
+  },
+
+  setGrepQuery: (query) => {
+    set({ grepQuery: query });
+    if (query.trim().length < 2) {
+      grepGeneration += 1;
+      set({
+        grepHits: null,
+        grepTruncated: false,
+        grepLoading: false,
+        grepError: null,
+      });
+    }
+  },
+  setGrepRegex: (grepRegex) => set({ grepRegex }),
+  grep: async (query) => {
+    const root = get().root;
+    const needle = query.trim();
+    set({ grepQuery: query });
+    if (!root || needle.length < 2) {
+      grepGeneration += 1;
+      set({
+        grepHits: null,
+        grepTruncated: false,
+        grepLoading: false,
+        grepError: null,
+      });
+      return;
+    }
+    const generation = ++grepGeneration;
+    const version = projectVersion;
+    const isRegex = get().grepRegex;
+    set({ grepLoading: true, grepError: null });
+    try {
+      const results = await api.workspaceGrep(root, needle, { regex: isRegex });
+      if (generation !== grepGeneration || version !== projectVersion) return;
+      set({
+        grepHits: results.hits,
+        grepTruncated: results.truncated,
+        grepLoading: false,
+        grepError: null,
+      });
+    } catch (error) {
+      if (generation !== grepGeneration || version !== projectVersion) return;
+      const grepError = errorMessage(error);
+      toast.error(grepError);
+      set({ grepError, grepLoading: false });
+    }
+  },
+
+  openFileAt: async (rel, line, column) => {
+    await get().openFile(rel);
+    revealInEditor(fileTabId(rel), line, column);
   },
 
   openFile: (rel) => openEditor({

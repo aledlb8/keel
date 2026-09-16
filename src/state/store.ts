@@ -11,6 +11,11 @@
 
 import { create } from "zustand";
 import { AgentActivity, agentSignal, type AgentScreen } from "../lib/agentActivity.ts";
+import {
+  notifyAgent,
+  type AgentAlert,
+  type AgentAlertKind,
+} from "../lib/agentNotify.ts";
 
 import * as backend from "../lib/backend.ts";
 import type { DropZone } from "../lib/dock.ts";
@@ -179,6 +184,8 @@ export interface KeelState {
   /** Bumped to respawn a pane's process in the same terminal. Not persisted. */
   generations: Record<string, number>;
   restartPane: (paneId: string) => void;
+  /** This pane will not chime or raise an OS toast. */
+  setPaneMuted: (paneId: string, muted: boolean) => void;
   /** Agent process left the shell; the next spawn should not type the command. */
   releaseAgent: (paneId: string, generation?: number) => void;
   /** First successful spawn: later launches should resume this conversation. */
@@ -491,6 +498,7 @@ function normalizeProjects(projects: Project[]): Project[] {
             resumeAgent: pane.resumeAgent ?? pane.agentId !== null,
             sessionId: pane.sessionId ?? null,
             sessionReady: pane.sessionReady ?? false,
+            muted: pane.muted === true ? true : undefined,
             ...(pane.editor ? { editor: normalizeEditor(pane.editor) } : {}),
           },
         ]),
@@ -1130,6 +1138,15 @@ export const useKeel = create<KeelState>((set, get) => {
           [paneId]: (state.generations[paneId] ?? 0) + 1,
         },
       }));
+    },
+
+    setPaneMuted(paneId, muted) {
+      patchPane(paneId, (pane) => {
+        if (muted) return pane.muted === true ? pane : { ...pane, muted: true };
+        if (pane.muted !== true) return pane;
+        const { muted: _drop, ...rest } = pane;
+        return rest;
+      });
     },
 
     releaseAgent(paneId, generation) {
@@ -2231,22 +2248,54 @@ export const useKeel = create<KeelState>((set, get) => {
     },
 
     notePaneExit(paneId, generation) {
-      if (!findPane(paneId) || (generation !== undefined &&
+      const pane = findPane(paneId);
+      if (!pane || (generation !== undefined &&
         (get().generations[paneId] ?? 0) !== generation)) return;
+      const project = get().projects.find((item) => deckOfPane(item, paneId));
       activity.delete(paneId);
       acknowledge(paneId);
       set((state) => ({
         exited: { ...state.exited, [paneId]: true },
         status: { ...state.status, [paneId]: "idle" },
       }));
+      // Process death is not `done`. Tell you only if this was an agent's shell.
+      if (pane.agentId && !pane.editor) {
+        notifyAgent(
+          paneAlert(
+            pane,
+            project?.name ?? "",
+            "exited",
+            get().restoreStatus === "restoring",
+          ),
+        );
+      }
     },
   };
 });
 
+function paneAlert(
+  pane: Pane,
+  projectName: string,
+  kind: AgentAlertKind,
+  restoring: boolean,
+): AgentAlert {
+  return {
+    kind,
+    paneId: pane.id,
+    title: pane.title,
+    projectName,
+    muted: pane.muted === true,
+    windowFocused: typeof document !== "undefined" && document.hasFocus(),
+    restoring,
+    silentPane: Boolean(pane.editor) || !pane.agentId,
+  };
+}
+
 /**
  * Agent status tracking. One timer for the whole app derives every pane's status
  * from live turn evidence, and only writes when something changed. Neither
- * silence nor restored output is a completion event.
+ * silence nor restored output is a completion event. A rising edge to `done`
+ * while you are elsewhere also raises an OS toast (see `agentNotify`).
  */
 export function startAttentionTracking(): () => void {
   const timer = setInterval(() => {
@@ -2286,6 +2335,16 @@ export function startAttentionTracking(): () => void {
           if (current === "done") {
             nextDoneAt[paneId] =
               previous === "done" ? (state.doneAt[paneId] ?? now) : now;
+          }
+          if (previous !== "done" && current === "done") {
+            notifyAgent(
+              paneAlert(
+                pane,
+                project.name,
+                "done",
+                state.restoreStatus === "restoring",
+              ),
+            );
           }
           if (current !== state.status[paneId]) changed = true;
         }

@@ -15,6 +15,7 @@
  */
 
 import {
+  BellOff,
   ChevronDown,
   Maximize2,
   Minimize2,
@@ -72,6 +73,8 @@ export interface PaneHeaderProps {
   onStopRename: () => void;
   /** A press on the strip itself, which may turn into dragging the pane. */
   onDragStart: (event: React.PointerEvent<HTMLDivElement>) => void;
+  /** Unmute from the header indicator. Muting itself is a menu action. */
+  onMute: (muted: boolean) => void;
 }
 
 function HeaderButton({
@@ -121,6 +124,7 @@ export function PaneHeader({
   onRename,
   onStopRename,
   onDragStart,
+  onMute,
 }: PaneHeaderProps) {
   const agentAccounts = agent
     ? accounts.filter((account) => account.agentId === agent.id)
@@ -247,6 +251,12 @@ export function PaneHeader({
             <RotateCw className="size-3.5" />
           </HeaderButton>
         </>
+      ) : null}
+
+      {pane.muted && !pane.editor ? (
+        <HeaderButton label="Unmute notifications" onClick={() => onMute(false)}>
+          <BellOff className="size-3.5" />
+        </HeaderButton>
       ) : null}
 
       <span className="min-w-0 flex-1" />

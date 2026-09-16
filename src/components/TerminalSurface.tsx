@@ -12,16 +12,22 @@
  *     that disagrees with the PTY by a single column is what garbles agent TUIs.
  */
 
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { LoaderCircle } from "lucide-react";
+import { SearchAddon } from "@xterm/addon-search";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal, type ITheme, type IWindowsPty } from "@xterm/xterm";
 
+import { TerminalSearch } from "@/components/TerminalSearch";
 import { readAgentScreen } from "@/lib/agentActivity";
 import { createPromptDraft, type TitleSource } from "@/lib/paneTitle";
 import { resizePty, spawnPty, writePty } from "@/lib/pty";
+import {
+  isTerminalFindChord,
+  TERMINAL_SEARCH_DECORATIONS,
+} from "@/lib/terminalFind";
 import type { PaneActivity } from "@/lib/types";
 import { useKeel } from "@/state/store";
 
@@ -120,37 +126,68 @@ interface GpuSlot {
 
 let webglUnsupported = false;
 
-/** Live terminals by pane id, for the things a menu can ask one to do. */
-const terminals = new Map<string, Terminal>();
+interface TerminalFindApi {
+  open: () => void;
+  close: () => void;
+  findNext: (term?: string) => boolean;
+  findPrevious: (term?: string) => boolean;
+}
 
-/** Clipboard and buffer commands for one pane's terminal. */
-export function terminalCommands(paneId: string) {
-  const find = () => terminals.get(paneId);
+interface TerminalSlot {
+  term: Terminal;
+  search: SearchAddon;
+  find: { current: TerminalFindApi };
+}
+
+/** Live terminals by pane id, for the things a menu can ask one to do. */
+const terminals = new Map<string, TerminalSlot>();
+
+function searchOptions(incremental: boolean, caseSensitive: boolean) {
   return {
-    hasSelection: () => find()?.hasSelection() ?? false,
+    incremental,
+    caseSensitive,
+    decorations: TERMINAL_SEARCH_DECORATIONS,
+  };
+}
+
+/** Clipboard, buffer and scrollback-find commands for one pane's terminal. */
+export function terminalCommands(paneId: string) {
+  const slot = () => terminals.get(paneId);
+  const term = () => slot()?.term;
+  const api = () => slot()?.find.current;
+  return {
+    hasSelection: () => term()?.hasSelection() ?? false,
     copy: () => {
-      const term = find();
-      if (term?.hasSelection()) {
-        void navigator.clipboard.writeText(term.getSelection()).catch(() => {});
+      const current = term();
+      if (current?.hasSelection()) {
+        void navigator.clipboard.writeText(current.getSelection()).catch(() => {});
       }
-      term?.focus();
+      current?.focus();
     },
     paste: () => {
       void navigator.clipboard
         .readText()
         // `paste` goes through the same path as typing, bracketed when the
         // program asked for that.
-        .then((text) => text && find()?.paste(text))
+        .then((text) => text && term()?.paste(text))
         .catch(() => {});
-      find()?.focus();
+      term()?.focus();
     },
     selectAll: () => {
-      find()?.selectAll();
-      find()?.focus();
+      term()?.selectAll();
+      term()?.focus();
     },
     clear: () => {
-      find()?.clear();
-      find()?.focus();
+      term()?.clear();
+      term()?.focus();
+    },
+    find: () => {
+      api()?.open();
+    },
+    findNext: (query?: string) => api()?.findNext(query) ?? false,
+    findPrevious: (query?: string) => api()?.findPrevious(query) ?? false,
+    closeFind: () => {
+      api()?.close();
     },
   };
 }
@@ -288,6 +325,28 @@ export const TerminalSurface = memo(function TerminalSurface({
     proxyPort !== null && spawnedProxyPort !== proxyPort;
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
+  const searchAddonRef = useRef<SearchAddon | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [searchCaseSensitive, setSearchCaseSensitive] = useState(false);
+  const [searchResults, setSearchResults] = useState({
+    resultIndex: -1,
+    resultCount: 0,
+  });
+  const searchOpenRef = useRef(false);
+  const searchTermRef = useRef("");
+  const searchCaseRef = useRef(false);
+  const pendingFindFocus = useRef(false);
+  searchOpenRef.current = searchOpen;
+  searchTermRef.current = searchTerm;
+  searchCaseRef.current = searchCaseSensitive;
+  const findApi = useRef<TerminalFindApi>({
+    open: () => {},
+    close: () => {},
+    findNext: () => false,
+    findPrevious: () => false,
+  });
   /** Wired up by the setup effect; the later effects only ever call these. */
   const actions = useRef({ refit: () => {}, syncPty: () => {} });
   /** The size the PTY was last told about, and whether there is a PTY to tell. */
@@ -302,6 +361,82 @@ export const TerminalSurface = memo(function TerminalSurface({
     onTitle,
   });
   handlers.current = { onOutput, onActivity, onFocus, onSpawnResult, onTitle };
+
+  const runFind = (
+    direction: "next" | "previous",
+    query: string | undefined,
+    incremental: boolean,
+  ): boolean => {
+    const addon = searchAddonRef.current;
+    if (!addon) return false;
+    const needle = query ?? searchTermRef.current;
+    if (query !== undefined) {
+      searchTermRef.current = query;
+      setSearchTerm(query);
+    }
+    if (!needle) {
+      findApi.current.open();
+      return false;
+    }
+    const options = searchOptions(incremental, searchCaseRef.current);
+    return direction === "next"
+      ? addon.findNext(needle, options)
+      : addon.findPrevious(needle, options);
+  };
+
+  findApi.current = {
+    open: () => {
+      pendingFindFocus.current = true;
+      searchOpenRef.current = true;
+      setSearchOpen(true);
+      if (searchInputRef.current) {
+        pendingFindFocus.current = false;
+        searchInputRef.current.focus();
+        searchInputRef.current.select();
+      }
+      const needle = searchTermRef.current;
+      if (needle) {
+        searchAddonRef.current?.findNext(
+          needle,
+          searchOptions(true, searchCaseRef.current),
+        );
+      }
+    },
+    close: () => {
+      pendingFindFocus.current = false;
+      searchOpenRef.current = false;
+      setSearchOpen(false);
+      searchAddonRef.current?.clearDecorations();
+      setSearchResults({ resultIndex: -1, resultCount: 0 });
+      termRef.current?.focus();
+    },
+    findNext: (query?: string) => {
+      const needle = query ?? searchTermRef.current;
+      if (needle && !searchOpenRef.current) {
+        searchOpenRef.current = true;
+        setSearchOpen(true);
+      }
+      return runFind("next", query, false);
+    },
+    findPrevious: (query?: string) => {
+      const needle = query ?? searchTermRef.current;
+      if (needle && !searchOpenRef.current) {
+        searchOpenRef.current = true;
+        setSearchOpen(true);
+      }
+      return runFind("previous", query, false);
+    },
+  };
+
+  useLayoutEffect(() => {
+    if (!searchOpen || !pendingFindFocus.current) return;
+    pendingFindFocus.current = false;
+    const frame = requestAnimationFrame(() => {
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [searchOpen]);
 
   // 1. Create the terminal and everything that lives exactly as long as it does.
   useEffect(() => {
@@ -337,12 +472,21 @@ export const TerminalSurface = memo(function TerminalSurface({
     });
 
     term.loadAddon(new WebLinksAddon());
+    const search = new SearchAddon();
+    term.loadAddon(search);
     term.loadAddon(new Unicode11Addon());
     term.unicode.activeVersion = "11";
 
     term.open(host);
     termRef.current = term;
-    terminals.set(paneId, term);
+    searchAddonRef.current = search;
+    terminals.set(paneId, { term, search, find: findApi });
+    const results = search.onDidChangeResults((event) => {
+      setSearchResults({
+        resultIndex: event.resultIndex,
+        resultCount: event.resultCount,
+      });
+    });
 
     void windowsPtyInfo.then((info) => {
       if (!disposed && info) term.options.windowsPty = info;
@@ -480,6 +624,10 @@ export const TerminalSurface = memo(function TerminalSurface({
     // clipboard themselves (PSReadLine) and never in an agent. Handing the chord
     // back to the browser fires a real paste event, which xterm sends on as
     // text — bracketed, when the program asked for that.
+    //
+    // Find is the same idea: Ctrl+F / Ctrl+G / F3 must not become ^F / ^G or an
+    // escape sequence. They only run while this textarea is focused, so they
+    // cannot steal Ctrl+F from CodeMirror.
     term.attachCustomKeyEventHandler((event) => {
       if (event.type !== "keydown") return true;
       const key = event.key.toLowerCase();
@@ -487,7 +635,14 @@ export const TerminalSurface = memo(function TerminalSurface({
         key === "v" && event.ctrlKey && !event.altKey && !event.metaKey;
       const shiftInsert =
         key === "insert" && event.shiftKey && !event.ctrlKey && !event.altKey;
-      return !(ctrlV || shiftInsert);
+      if (ctrlV || shiftInsert) return false;
+      const action = isTerminalFindChord(event);
+      if (!action) return true;
+      event.preventDefault();
+      if (action === "open") findApi.current.open();
+      else if (action === "next") findApi.current.findNext();
+      else findApi.current.findPrevious();
+      return false;
     });
 
     // A clipboard holding only an image has no text for xterm to paste. Agents
@@ -516,6 +671,8 @@ export const TerminalSurface = memo(function TerminalSurface({
       disposed = true;
       gpu.unregister(paneId);
       terminals.delete(paneId);
+      searchAddonRef.current = null;
+      results.dispose();
       clearTimeout(resizeTimer);
       clearTimeout(fitTimer);
       clearPreviewScale();
@@ -627,8 +784,12 @@ export const TerminalSurface = memo(function TerminalSurface({
   }, [paneId, generation, canStart]);
 
   // 4. Focus follows the layout, so keystrokes land where the border says.
+  // Leave the caret in the find field if that is what just received the click.
   useEffect(() => {
-    if (focused) termRef.current?.focus();
+    if (!focused) return;
+    const bar = searchInputRef.current?.closest("[role='search']");
+    if (bar?.contains(document.activeElement)) return;
+    termRef.current?.focus();
   }, [focused]);
 
   return (
@@ -651,7 +812,43 @@ export const TerminalSurface = memo(function TerminalSurface({
           </button>
         </div>
       ) : null}
-      <div ref={hostRef} className="min-h-0 w-full flex-1 overflow-hidden" />
+      <div className="relative flex min-h-0 w-full flex-1 flex-col overflow-hidden">
+        {searchOpen ? (
+          <TerminalSearch
+            value={searchTerm}
+            onValueChange={(value) => {
+              searchTermRef.current = value;
+              setSearchTerm(value);
+              const addon = searchAddonRef.current;
+              if (!addon) return;
+              if (!value) {
+                addon.clearDecorations();
+                setSearchResults({ resultIndex: -1, resultCount: 0 });
+                return;
+              }
+              addon.findNext(value, searchOptions(true, searchCaseRef.current));
+            }}
+            caseSensitive={searchCaseSensitive}
+            onCaseSensitiveChange={(value) => {
+              searchCaseRef.current = value;
+              setSearchCaseSensitive(value);
+              const needle = searchTermRef.current;
+              if (!needle) return;
+              searchAddonRef.current?.findNext(
+                needle,
+                searchOptions(true, value),
+              );
+            }}
+            resultIndex={searchResults.resultIndex}
+            resultCount={searchResults.resultCount}
+            onNext={() => findApi.current.findNext()}
+            onPrevious={() => findApi.current.findPrevious()}
+            onClose={() => findApi.current.close()}
+            inputRef={searchInputRef}
+          />
+        ) : null}
+        <div ref={hostRef} className="min-h-0 w-full flex-1 overflow-hidden" />
+      </div>
       {starting ? (
         <div className="absolute inset-0 z-10 grid place-items-center bg-[color:var(--keel-term-solid)]">
           <div role="status" className="flex max-w-64 flex-col items-center gap-2 px-4 text-center">

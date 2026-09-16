@@ -27,6 +27,7 @@ import {
 
 import { languageFor } from "@/components/editor/language";
 import { keelEditorTheme } from "@/components/editor/theme";
+import { registerEditorView } from "@/lib/editorViews";
 import { useWorkspace } from "@/state/workspace";
 
 export function CodeEditor({
@@ -89,6 +90,7 @@ export function CodeEditor({
       }),
     });
     viewRef.current = view;
+    const unregister = registerEditorView(id, view);
 
     // Another pane showing this file typed into it.
     const unsubscribe = useWorkspace.subscribe((next) => {
@@ -100,6 +102,7 @@ export function CodeEditor({
     });
 
     return () => {
+      unregister();
       unsubscribe();
       view.destroy();
       viewRef.current = null;

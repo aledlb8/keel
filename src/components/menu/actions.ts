@@ -26,6 +26,7 @@ import {
   FolderPlus,
   Folders,
   FolderOutput,
+  FileSearch,
   Keyboard,
   Layers,
   LayoutGrid,
@@ -219,6 +220,13 @@ export function goBarMenu(actions: TitlebarActions): MenuEntry[] {
       icon: Search,
       shortcut: shortcutKeys("goTo"),
       onSelect: actions.goTo,
+    },
+    {
+      kind: "item",
+      label: "Find in files",
+      icon: FileSearch,
+      shortcut: shortcutKeys("findInFiles"),
+      onSelect: actions.findInFiles,
     },
     {
       kind: "item",
@@ -800,6 +808,17 @@ export function paneMenu(
     ...(isEditor
       ? []
       : ([
+          ...(pane.agentId
+            ? [
+                {
+                  kind: "check" as const,
+                  label: "Mute notifications",
+                  checked: pane.muted === true,
+                  onChange: (checked: boolean) =>
+                    state.setPaneMuted(paneId, checked),
+                } satisfies MenuEntry,
+              ]
+            : []),
           {
             kind: "item",
             label: "Restart",
@@ -855,6 +874,13 @@ export function terminalMenu(projectId: string, paneId: string): MenuEntry[] {
       label: "Select all",
       icon: TextSelect,
       onSelect: terminal.selectAll,
+    },
+    {
+      kind: "item",
+      label: "Find in scrollback",
+      icon: Search,
+      shortcut: "Ctrl+F",
+      onSelect: terminal.find,
     },
     {
       kind: "item",

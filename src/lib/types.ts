@@ -60,6 +60,11 @@ export interface Pane {
    * set runs no process — the agent and session fields above stay empty.
    */
   editor?: PaneEditor;
+  /**
+   * When true, this pane does not chime or raise an OS toast. Omitted when
+   * false so the saved layout stays clean.
+   */
+  muted?: boolean;
 }
 
 /** A file, or one side of a git change, open in an editor pane. */

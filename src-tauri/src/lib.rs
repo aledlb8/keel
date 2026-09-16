@@ -1,6 +1,7 @@
 mod agents;
 mod blocking;
 mod git;
+mod grep;
 mod paths;
 mod procs;
 mod pty;
@@ -11,18 +12,25 @@ mod vpn;
 mod vpn_profile;
 mod vpn_proxy;
 mod vpn_service;
+mod watch;
 mod workspace;
 
 use tauri::Manager;
 
 use pty::PtyManager;
 use vpn::VpnManager;
+use watch::WatchManager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
+        .setup(|app| {
+            app.manage(WatchManager::new(app.handle().clone()));
+            Ok(())
+        })
         .manage(PtyManager::default())
         .manage(VpnManager::default())
         .invoke_handler(tauri::generate_handler![
@@ -47,6 +55,9 @@ pub fn run() {
             workspace::workspace_delete,
             workspace::workspace_rename,
             workspace::workspace_search,
+            grep::workspace_grep,
+            watch::workspace_watch,
+            watch::workspace_unwatch,
             git::git_status,
             git::git_diff,
             git::git_stage,
@@ -97,5 +108,8 @@ fn shutdown_managed(app: &tauri::AppHandle) {
     }
     if let Some(vpn) = app.try_state::<VpnManager>() {
         vpn.shutdown();
+    }
+    if let Some(watch) = app.try_state::<WatchManager>() {
+        watch.shutdown();
     }
 }

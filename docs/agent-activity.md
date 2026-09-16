@@ -42,6 +42,12 @@ Restarts invalidate the detector immediately. PTY start/exit events and parsed
 screen callbacks carry the pane generation so an old process cannot update its
 replacement. Host loss invalidates prompt evidence until fresh output arrives.
 
+OS toasts and a short chime fire only when the window is unfocused — the island
+already covers an in-app finish. A pane can be muted so it never toasts or
+chimes. Process death is a separate "exited" alert, not a completion. On Windows,
+toasts use the app identity of an installed build; `pnpm dev` may show them as
+PowerShell.
+
 Regression coverage lives in `agentActivity.test.ts` and
 `attentionTracking.test.ts`. A release smoke test should also exercise installed
 CLI versions with a long thinking/tool turn, an approval wait, a queued turn,

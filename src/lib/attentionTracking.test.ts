@@ -3,6 +3,7 @@ import { afterEach, beforeEach, it, mock } from "node:test";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { startAttentionTracking, useKeel } from "../state/store.ts";
 import type { AgentScreen } from "./agentActivity.ts";
+import { shouldAlert } from "./agentNotify.ts";
 import type { Project } from "./types.ts";
 
 const state = useKeel.getState;
@@ -203,4 +204,39 @@ it("a session capture completed after restart cannot bind the old conversation",
   await capture;
   assert.equal(state().projects[0].decks[0].panes.agent.sessionReady, false);
   assert.equal(state().projects[0].decks[0].panes.agent.sessionId, null);
+});
+
+function alertFor(paneId: string, kind: "done" | "exited") {
+  const project = state().projects[0];
+  const pane = project.decks[0].panes[paneId];
+  return {
+    kind,
+    paneId: pane.id,
+    title: pane.title,
+    projectName: project.name,
+    muted: pane.muted === true,
+    windowFocused: focused,
+    restoring: state().restoreStatus === "restoring",
+    silentPane: Boolean(pane.editor) || !pane.agentId,
+  };
+}
+
+it("a finished unwatched agent is eligible for an OS toast", () => {
+  startTurn();
+  render(ready);
+  tick(2_450);
+  assert.equal(state().status.agent, "done");
+  assert.equal(focused, false);
+  assert.deepEqual(shouldAlert(alertFor("agent", "done")), { notify: true, chime: true });
+});
+
+it("an agent process death is eligible for an OS toast, and mute strips from the pane", () => {
+  state().notePaneExit("agent");
+  assert.equal(state().exited.agent, true);
+  assert.deepEqual(shouldAlert(alertFor("agent", "exited")), { notify: true, chime: true });
+  state().setPaneMuted("agent", true);
+  assert.equal(state().projects[0].decks[0].panes.agent.muted, true);
+  assert.deepEqual(shouldAlert(alertFor("agent", "exited")), { notify: false, chime: false });
+  state().setPaneMuted("agent", false);
+  assert.equal("muted" in state().projects[0].decks[0].panes.agent, false);
 });

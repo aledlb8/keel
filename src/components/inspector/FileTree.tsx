@@ -42,6 +42,7 @@ import { DockNotice } from "@/components/Dock";
 import { InlineRename } from "@/components/InlineRename";
 import { FileIcon } from "@/components/inspector/FileIcon";
 import { GitLetter } from "@/components/inspector/GitLetter";
+import { RecentDot } from "@/components/inspector/RecentDot";
 import {
   ContextMenuEntries,
   type MenuEntry,
@@ -52,6 +53,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { dirtyFolders, fileName, gitBadgeMap, parentRel } from "@/lib/git";
+import { isRecent, recentAt } from "@/lib/recentFiles";
 import { bindingFor, matchesBinding } from "@/lib/keymap";
 import { cn } from "@/lib/utils";
 import type { GitFileStatus, WorkspaceEntry } from "@/lib/workspace";
@@ -575,6 +577,9 @@ function TreeRow({
   context: TreeContext;
   leaving: boolean;
 }) {
+  const root = useWorkspace((state) => state.root);
+  const recentTick = useWorkspace((state) => state.recentEpoch);
+  void recentTick;
   const folder = entry.kind === "dir";
   const open = Boolean(context.expanded[entry.rel]);
   const selected = context.selectedRel === entry.rel;
@@ -677,7 +682,10 @@ function TreeRow({
                 >
                   {entry.name}
                 </span>
-                <span className="flex shrink-0 items-center group-hover/entry:hidden group-focus-visible/entry:hidden">
+                <span className="flex shrink-0 items-center gap-1 group-hover/entry:hidden group-focus-visible/entry:hidden">
+                  {root && isRecent(root, entry.rel) ? (
+                    <RecentDot at={recentAt(root, entry.rel)} />
+                  ) : null}
                   {badge ? (
                     <GitLetter status={badge} />
                   ) : changedInside ? (

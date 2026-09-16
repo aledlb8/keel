@@ -35,6 +35,7 @@ import {
 import { Popover } from "radix-ui";
 import {
   ArrowUpRight,
+  FileSearch,
   FolderOpen,
   FolderPlus,
   Keyboard,
@@ -876,6 +877,7 @@ function Switcher({
       action("vpn", "Private VPN", <ShieldCheck className="size-3.5" />, actions.openVpn),
       action("sidebar", "Collapse or expand the sidebar", <PanelLeft className="size-3.5" />, actions.toggleSidebar, shortcutKeys("toggleSidebar")),
       action("inspector", "Collapse or expand files and git", <PanelRight className="size-3.5" />, actions.toggleInspector, shortcutKeys("toggleInspector")),
+      action("findInFiles", "Find in files", <FileSearch className="size-3.5" />, actions.findInFiles, shortcutKeys("findInFiles")),
       action("shortcuts", "Keyboard shortcuts", <Keyboard className="size-3.5" />, actions.showShortcuts),
     );
 

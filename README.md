@@ -5,7 +5,6 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/aledlb8/keel/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/aledlb8/keel/actions/workflows/ci.yml/badge.svg" /></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue.svg" /></a>
 </p>
 
@@ -23,9 +22,9 @@ Built with Tauri 2, React 19, TypeScript, Rust, Vite, CodeMirror, and xterm.js.
 - Group related projects into workspaces in the sidebar; each project keeps its own folders, decks, and terminals.
 - Keep processes running while you switch projects or deck layouts.
 - Restore saved projects, layouts, terminals, and resumable agent sessions.
-- Browse and edit project files with an integrated CodeMirror editor.
-- Inspect Git status and diffs, then stage, commit, fetch, pull, push, and manage branches.
-- Surface agent activity and supported subscription-usage windows in the workspace UI.
+- Browse and edit project files with an integrated CodeMirror editor, and search file contents across the project.
+- Inspect Git status and diffs, then stage, commit, fetch, pull, push, and manage branches. The file tree and git status refresh from filesystem events, with a mark on files touched in the last few minutes.
+- Surface agent activity and supported subscription-usage windows in the workspace UI. An agent that finishes or exits while the window is in the background raises an OS notification and a chime; a pane can mute those.
 - Configure agent commands, profiles, colors, and discovery paths from the app.
 - On Windows, optionally route Keel traffic through an isolated OpenVPN tunnel without replacing the machine's preferred default route.
 
@@ -85,6 +84,8 @@ Common shortcuts:
 | Shortcut | Action |
 | --- | --- |
 | `Ctrl+P` | Go to a terminal, deck, or action |
+| `Ctrl+Shift+F` | Find in files |
+| `Ctrl+F` | Find in the focused editor or terminal scrollback |
 | `Ctrl+T` | Add terminals |
 | `Ctrl+W` | Close the focused pane |
 | `Ctrl+1…9` | Jump to a deck |

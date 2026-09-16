@@ -89,6 +89,15 @@ describe("matchShortcut", () => {
     );
   });
 
+  it("maps Ctrl+Shift+F to find in files and leaves Ctrl+F to the editor", () => {
+    assert.deepEqual(
+      matchShortcut(chord("KeyF", { ctrlKey: true, shiftKey: true })),
+      { action: "findInFiles" },
+    );
+    assert.equal(matchShortcut(chord("KeyF", { ctrlKey: true })), null);
+    assert.equal(matchShortcut(chord("KeyF")), null);
+  });
+
   it("does not steal bare Ctrl+D, Ctrl+S or Ctrl+E from the terminal", () => {
     assert.equal(matchShortcut(chord("KeyD", { ctrlKey: true })), null);
     assert.equal(matchShortcut(chord("KeyS", { ctrlKey: true })), null);

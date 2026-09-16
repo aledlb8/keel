@@ -45,6 +45,13 @@ import {
   matchShortcut,
 } from "@/lib/keymap";
 import { onPtyAgentExit, onPtyAgentStart, onPtyExit } from "@/lib/pty";
+import { pruneRecent } from "@/lib/recentFiles";
+import {
+  isWatching,
+  onWorkspaceChanged,
+  workspaceUnwatch,
+  workspaceWatch,
+} from "@/lib/workspaceWatch";
 import {
   activeDeck,
   deckOfPane,
@@ -100,6 +107,10 @@ export default function App() {
   const projects = useKeel((state) => state.projects);
   const agents = useKeel((state) => state.agents);
   const activeProjectId = useKeel((state) => state.activeProjectId);
+  const projectPaths = [...new Set(projects.map((item) => item.path))]
+    .filter(Boolean)
+    .sort()
+    .join("\n");
   // Menus, tooltips and hints print the active chords. Re-render the shell when
   // they change so every label follows at once.
   useKeel((state) => state.keybindings);
@@ -120,6 +131,63 @@ export default function App() {
       clearTimeout(timer);
     };
   }, [vpnConnected]);
+
+  useEffect(() => {
+    const paths = projectPaths ? projectPaths.split("\n") : [];
+    let cancelled = false;
+    const started: string[] = [];
+
+    void (async () => {
+      for (const path of paths) {
+        try {
+          await workspaceWatch(path);
+          if (cancelled) {
+            void workspaceUnwatch(path).catch(() => {});
+            continue;
+          }
+          started.push(path);
+        } catch {
+          /* Inspector keeps the 4s poll for a folder the watcher could not cover. */
+        }
+      }
+      if (!cancelled) {
+        useWorkspace.getState().setFsWatch(isWatching(useWorkspace.getState().root));
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      useWorkspace.getState().setFsWatch(false);
+      for (const path of started) void workspaceUnwatch(path).catch(() => {});
+    };
+  }, [projectPaths]);
+
+  useEffect(() => {
+    const project = useKeel
+      .getState()
+      .projects.find((item) => item.id === activeProjectId);
+    useWorkspace.getState().setFsWatch(isWatching(project?.path ?? null));
+  }, [activeProjectId, projectPaths]);
+
+  useEffect(() => {
+    let stop: (() => void) | undefined;
+    let alive = true;
+    void onWorkspaceChanged((event) => {
+      useWorkspace.getState().applyFsChange(event.root, event.rels, event.git);
+    }).then((unlisten) => {
+      if (!alive) unlisten();
+      else stop = unlisten;
+    });
+    const expire = window.setInterval(() => {
+      pruneRecent();
+      useWorkspace.getState().bumpRecent();
+    }, 30_000);
+    return () => {
+      alive = false;
+      stop?.();
+      window.clearInterval(expire);
+    };
+  }, []);
 
   useEffect(() => {
     void useKeel.getState().init();
@@ -224,7 +292,11 @@ export default function App() {
         return;
       }
 
-      if (isEditableTarget(event.target)) return;
+      // Find in files is a window action even when the caret is in an editor
+      // or a field. Ctrl+F stays with the editor; this chord is ours.
+      if (isEditableTarget(event.target) && !matchesBinding(event, bindingFor("findInFiles"))) {
+        return;
+      }
 
       const matched = matchShortcut(event);
       if (!matched) return;
@@ -265,6 +337,14 @@ export default function App() {
         case "toggleInspector":
           claim();
           setInspector((previous) => !previous);
+          return;
+        case "findInFiles":
+          claim();
+          setInspector(true);
+          useWorkspace.getState().setTab("search");
+          requestAnimationFrame(() => {
+            document.querySelector<HTMLInputElement>("[data-grep-query]")?.focus();
+          });
           return;
         case "menuBar":
           claim();
@@ -385,6 +465,13 @@ export default function App() {
       deck?.focused &&
       useWorkspace.getState().closePaneSafely(project.id, deck.focused),
     goTo: () => useKeel.getState().setSwitcher(true),
+    findInFiles: () => {
+      setInspector(true);
+      useWorkspace.getState().setTab("search");
+      requestAnimationFrame(() => {
+        document.querySelector<HTMLInputElement>("[data-grep-query]")?.focus();
+      });
+    },
     jumpToWaiting: () => {
       const paneId = useKeel.getState().jumpToNextWaiting();
       if (!paneId) return;

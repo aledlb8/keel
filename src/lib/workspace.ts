@@ -63,6 +63,31 @@ export function workspaceSearch(
   return invoke("workspace_search", { root, query });
 }
 
+export interface GrepHit {
+  rel: string;
+  line: number;
+  column: number;
+  text: string;
+}
+
+export interface GrepResults {
+  hits: GrepHit[];
+  truncated: boolean;
+}
+
+export function workspaceGrep(
+  root: string,
+  query: string,
+  opts?: { caseSensitive?: boolean; regex?: boolean },
+): Promise<GrepResults> {
+  return invoke("workspace_grep", {
+    root,
+    query,
+    caseSensitive: opts?.caseSensitive ?? false,
+    isRegex: opts?.regex ?? false,
+  });
+}
+
 export type GitFileStatus =
   | "modified"
   | "added"
