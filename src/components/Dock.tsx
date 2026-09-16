@@ -100,7 +100,7 @@ export function RailTip({
           sideOffset={12}
           collisionPadding={8}
           className={cn(
-            "z-50 flex items-center gap-2 rounded-[var(--keel-r-chip)] border border-line-strong bg-popover px-2 py-1 text-[12px] text-foreground shadow-[var(--keel-lift)] duration-150 animate-in fade-in-0",
+            "k-tip-surface z-50 flex items-center gap-2 px-2 py-1 duration-150 animate-in fade-in-0",
             side === "right" ? "slide-in-from-left-1" : "slide-in-from-right-1",
           )}
         >

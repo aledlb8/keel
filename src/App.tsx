@@ -31,6 +31,7 @@ import { ShortcutsDialog } from "@/components/ShortcutsDialog";
 import { Inspector } from "@/components/inspector/Inspector";
 import { Sidebar } from "@/components/Sidebar";
 import { StatusBar } from "@/components/StatusBar";
+import { TitleTips } from "@/components/TitleTips";
 import { Titlebar, type TitlebarActions } from "@/components/Titlebar";
 import { VpnDialog } from "@/components/VpnDialog";
 import { Button } from "@/components/ui/button";
@@ -466,6 +467,8 @@ export default function App() {
           projectName={project?.name ?? null}
         />
       </div>
+
+      <TitleTips />
 
       <StatusBar
         project={project}
