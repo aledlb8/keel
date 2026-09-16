@@ -30,6 +30,9 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             app.manage(WatchManager::new(app.handle().clone()));
+            // Tauri 2 does not wrap wry's with_browser_accelerator_keys.
+            #[cfg(windows)]
+            disable_browser_accelerator_keys(app);
             Ok(())
         })
         .manage(PtyManager::default())
@@ -106,6 +109,34 @@ pub fn run() {
                 shutdown_managed(app);
             }
         });
+}
+
+/// Turn off WebView2's F5 / Ctrl+R / zoom chords so they cannot reload this webview.
+#[cfg(windows)]
+fn disable_browser_accelerator_keys(app: &tauri::App) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let _ = window.with_webview(|webview| {
+        let _ = disable_webview2_accelerator_keys(webview);
+    });
+}
+
+#[cfg(windows)]
+fn disable_webview2_accelerator_keys(
+    webview: tauri::webview::PlatformWebview,
+) -> windows_core::Result<()> {
+    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
+    use windows_core::Interface;
+
+    unsafe {
+        webview
+            .controller()
+            .CoreWebView2()?
+            .Settings()?
+            .cast::<ICoreWebView2Settings3>()?
+            .SetAreBrowserAcceleratorKeysEnabled(false)
+    }
 }
 
 fn shutdown_managed(app: &tauri::AppHandle) {

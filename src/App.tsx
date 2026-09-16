@@ -17,7 +17,7 @@
  * a dialog; the space next to a terminal belongs to the terminal.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
 import { AgentSettingsDialog } from "@/components/AgentSettingsDialog";
@@ -35,6 +35,12 @@ import { Titlebar, type TitlebarActions } from "@/components/Titlebar";
 import { VpnDialog } from "@/components/VpnDialog";
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
+import {
+  isAppModalOpen,
+  isBrowserChromeKey,
+  radixDialogOpen,
+  shouldIgnoreAppShortcut,
+} from "@/lib/appShortcuts";
 import { pickProjectFolder, statePath } from "@/lib/backend";
 import { startCloseGuard } from "@/lib/closeGuard";
 import { onHostLost } from "@/lib/invoke";
@@ -67,6 +73,8 @@ export default function App() {
   const launching = useKeel((state) => state.launcher);
   const setLaunching = useKeel((state) => state.setLauncher);
   const [shortcuts, setShortcuts] = useState(false);
+  const shortcutsOpen = useRef(false);
+  shortcutsOpen.current = shortcuts;
   const [overview, setOverview] = useState(false);
   // Expanded or folded to the rail. A view preference, so it lives with the
   // window rather than in the saved projects.
@@ -240,6 +248,29 @@ export default function App() {
       if (focus instanceof HTMLElement && focus.closest("[data-shortcut-recorder]")) {
         return;
       }
+
+      // WebView2 would otherwise reload (F5 / Ctrl+R) or zoom. Do this even
+      // on repeat so holding F5 cannot slip through after the first press.
+      if (isBrowserChromeKey(event)) {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        return;
+      }
+
+      if (event.repeat) return;
+
+      const keel = useKeel.getState();
+      const modalOpen = isAppModalOpen({
+        radixDialog: radixDialogOpen(document),
+        agentSettings: keel.agentSettings.open,
+        vpnDialog: keel.vpn.dialogOpen,
+        launcher: keel.launcher,
+        switcher: keel.switcher,
+        restoreFailed: keel.ready && keel.restoreStatus === "failed",
+        shortcuts: shortcutsOpen.current,
+      });
+      if (shouldIgnoreAppShortcut(event, { modalOpen })) return;
 
       // Rename (F2 unless you changed it) renames the focused terminal — but
       // only when the keystroke comes from a terminal (or from nowhere in
