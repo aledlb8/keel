@@ -124,14 +124,14 @@ export default function App() {
   useEffect(() => {
     void useKeel.getState().init();
     const stopTracking = startAttentionTracking();
-    const unlisten = onPtyExit((paneId) =>
-      useKeel.getState().notePaneExit(paneId),
-    );
-    const unlistenAgent = onPtyAgentExit((paneId) =>
-      useKeel.getState().releaseAgent(paneId),
-    );
-    const unlistenStart = onPtyAgentStart((paneId) => {
-      void useKeel.getState().captureSession(paneId);
+    const unlisten = onPtyExit((paneId, generation) => {
+      useKeel.getState().notePaneExit(paneId, generation);
+    });
+    const unlistenAgent = onPtyAgentExit((paneId, generation) => {
+      useKeel.getState().releaseAgent(paneId, generation);
+    });
+    const unlistenStart = onPtyAgentStart((paneId, generation) => {
+      void useKeel.getState().captureSession(paneId, generation);
     });
     const stopHost = onHostLost(() => useKeel.getState().noteHostLost());
     // No browser context menu anywhere: "Reload" and "Inspect" have no business

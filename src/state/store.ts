@@ -10,6 +10,7 @@
  */
 
 import { create } from "zustand";
+import { AgentActivity, agentSignal, type AgentScreen } from "../lib/agentActivity.ts";
 
 import * as backend from "../lib/backend.ts";
 import type { DropZone } from "../lib/dock.ts";
@@ -95,48 +96,9 @@ export type RestoreStatus = "idle" | "restoring" | "partial" | "failed";
  * Per-pane output bookkeeping. Lives outside the store on purpose: a busy agent
  * writes hundreds of times a second and none of that should re-render React.
  */
-interface Activity {
-  /** When the current process was started. */
-  spawnedAt: number;
-  /** Last keystroke (or mouse / focus report) sent to the process. */
-  lastInput: number;
-  /** Last time the grid changed size, which makes a TUI repaint. */
-  lastResize: number;
-  lastOutput: number;
-  /** Start of the current burst of unprompted output; `null` between bursts. */
-  runStart: number | null;
-}
-const activity = new Map<string, Activity>();
+const activity = new Map<string, AgentActivity>();
 /** Pane ids that already reported a post-reopen spawn settle. */
 const restoreSettled = new Set<string>();
-
-function activityOf(paneId: string): Activity {
-  let entry = activity.get(paneId);
-  if (!entry) {
-    entry = {
-      spawnedAt: 0,
-      lastInput: 0,
-      lastResize: 0,
-      lastOutput: 0,
-      runStart: null,
-    };
-    activity.set(paneId, entry);
-  }
-  return entry;
-}
-
-/*
- * "Working" is read off output alone, so these thresholds are all about telling
- * an agent at work apart from everything else that makes a terminal print.
- */
-/** Output this soon after a keystroke or resize is the terminal answering it. */
-const REPLY_MS = 300;
-/** An agent's launch banner and first paint are not work. */
-const STARTUP_MS = 6_000;
-/** A burst has to keep going this long to be work rather than a redraw. */
-const MIN_RUN_MS = 1_200;
-/** Silence this long ends a burst: the agent was working and is now done. */
-const QUIET_MS = 3_000;
 
 /** A name being edited in place, and which copy of it on screen is the editor. */
 export interface RenameTarget {
@@ -218,13 +180,13 @@ export interface KeelState {
   generations: Record<string, number>;
   restartPane: (paneId: string) => void;
   /** Agent process left the shell; the next spawn should not type the command. */
-  releaseAgent: (paneId: string) => void;
+  releaseAgent: (paneId: string, generation?: number) => void;
   /** First successful spawn: later launches should resume this conversation. */
   markSessionReady: (paneId: string) => void;
   /** Bind this pane to the conversation that actually started in it. */
   bindSession: (paneId: string, sessionId: string) => void;
   /** After the agent process appears, record its real conversation id. */
-  captureSession: (paneId: string) => Promise<void>;
+  captureSession: (paneId: string, generation?: number) => Promise<void>;
 
   /** The agents & profiles dialog; `agentId` preselects an agent. */
   agentSettings: { open: boolean; agentId: string | null };
@@ -402,8 +364,9 @@ export interface KeelState {
   toggleZoom: (projectId: string, paneId: string) => void;
 
   noteOutput: (paneId: string) => void;
-  noteActivity: (paneId: string, kind: PaneActivity) => void;
-  notePaneExit: (paneId: string) => void;
+  noteActivity: (paneId: string, kind: PaneActivity, data?: string) => void;
+  noteScreen: (paneId: string, generation: number, screen: AgentScreen) => void;
+  notePaneExit: (paneId: string, generation?: number) => void;
 }
 
 /** How long a closing pane takes to shrink away. Matches `k-pane-out`. */
@@ -863,7 +826,11 @@ export const useKeel = create<KeelState>((set, get) => {
   /** Looking at a finished agent — focusing it, typing into it — clears "done". */
   function acknowledge(paneId: string) {
     if (get().status[paneId] !== "done") return;
-    set((state) => ({ status: { ...state.status, [paneId]: "idle" } }));
+    set((state) => {
+      const doneAt = { ...state.doneAt };
+      delete doneAt[paneId];
+      return { status: { ...state.status, [paneId]: "idle" }, doneAt };
+    });
   }
 
   return {
@@ -894,12 +861,15 @@ export const useKeel = create<KeelState>((set, get) => {
 
     async init() {
       restoreSettled.clear();
+      activity.clear();
       const existing = countPanes(get().projects);
       set({
         restoreStatus: existing > 0 ? "restoring" : "idle",
         restoreLeft: 0,
         ready: false,
         hostLost: false,
+        status: {},
+        doneAt: {},
       });
 
       let agents: Agent[] = [];
@@ -999,6 +969,7 @@ export const useKeel = create<KeelState>((set, get) => {
         status: {},
         exited: {},
         restoreStatus: "idle",
+        doneAt: {},
         restoreLeft: 0,
         restorePanes: {},
         ready: true,
@@ -1031,6 +1002,7 @@ export const useKeel = create<KeelState>((set, get) => {
 
     noteHostLost() {
       if (get().hostLost) return;
+      for (const entry of activity.values()) entry.resize();
       set({ hostLost: true });
     },
 
@@ -1145,6 +1117,10 @@ export const useKeel = create<KeelState>((set, get) => {
 
     restartPane(paneId) {
       const pane = findPane(paneId);
+      if (!pane || pane.editor) return;
+      activity.delete(paneId);
+      acknowledge(paneId);
+      set((state) => ({ status: { ...state.status, [paneId]: "idle" } }));
       if (pane?.agentId && !pane.resumeAgent) {
         patchPane(paneId, (current) => ({ ...current, resumeAgent: true }), true);
       }
@@ -1156,9 +1132,13 @@ export const useKeel = create<KeelState>((set, get) => {
       }));
     },
 
-    releaseAgent(paneId) {
+    releaseAgent(paneId, generation) {
+      if (generation !== undefined && (get().generations[paneId] ?? 0) !== generation) return;
       const pane = findPane(paneId);
       if (!pane?.agentId || !pane.resumeAgent) return;
+      activity.delete(paneId);
+      acknowledge(paneId);
+      set((state) => ({ status: { ...state.status, [paneId]: "idle" } }));
       patchPane(paneId, (current) => ({ ...current, resumeAgent: false }), true);
     },
 
@@ -1179,7 +1159,8 @@ export const useKeel = create<KeelState>((set, get) => {
       );
     },
 
-    async captureSession(paneId) {
+    async captureSession(paneId, generation) {
+      if (generation !== undefined && (get().generations[paneId] ?? 0) !== generation) return;
       const pane = findPane(paneId);
       if (!pane?.agentId || !pane.resumeAgent) return;
       // Already bound to a real conversation. Restarting this pane resumes
@@ -1191,7 +1172,8 @@ export const useKeel = create<KeelState>((set, get) => {
       const store = agent?.session?.store;
       if (store !== "grok" && store !== "claude") return;
 
-      const spawnedAt = activity.get(paneId)?.spawnedAt ?? Date.now();
+      const capturedActivity = activity.get(paneId);
+      const spawnedAt = capturedActivity?.spawnedAt ?? Date.now();
 
       for (let attempt = 0; attempt < 6; attempt += 1) {
         if (attempt > 0) {
@@ -1201,7 +1183,7 @@ export const useKeel = create<KeelState>((set, get) => {
         if (!live?.resumeAgent) return;
         if (live.sessionReady) return;
         // A restart while we were waiting belongs to a later capture.
-        if ((activity.get(paneId)?.spawnedAt ?? spawnedAt) !== spawnedAt) return;
+        if (activity.get(paneId) !== capturedActivity) return;
 
         const recent = await backend
           .sessionRecent({
@@ -1211,6 +1193,8 @@ export const useKeel = create<KeelState>((set, get) => {
             accountId: live.accountId,
           })
           .catch(() => [] as { id: string; mtimeMs: number }[]);
+
+        if (activity.get(paneId) !== capturedActivity || !findPane(paneId)?.resumeAgent) return;
 
         const captured = pickCapturedSession({
           // Never wait for a leftover generated UUID. Fresh launches do not
@@ -2208,53 +2192,49 @@ export const useKeel = create<KeelState>((set, get) => {
     },
 
     noteOutput(paneId) {
-      const entry = activityOf(paneId);
-      const now = Date.now();
-      // Echo, a repaint after a resize, or a launch banner: the terminal is
-      // answering something, not doing work on its own.
-      const reply =
-        now - entry.lastInput < REPLY_MS ||
-        now - entry.lastResize < REPLY_MS ||
-        now - entry.spawnedAt < STARTUP_MS;
-      if (entry.runStart === null && !reply) entry.runStart = now;
-      entry.lastOutput = now;
+      activity.get(paneId)?.output(performance.now());
     },
 
-    noteActivity(paneId, kind) {
-      const entry = activityOf(paneId);
-      const now = Date.now();
+    noteScreen(paneId, generation, screen) {
+      if ((get().generations[paneId] ?? 0) !== generation) return;
+      const pane = findPane(paneId);
+      if (!pane?.agentId || !pane.resumeAgent || pane.editor) return;
+      activity.get(paneId)?.screen(
+        agentSignal(pane.agentId, screen), performance.now(), screen.lines.join("\n"),
+      );
+    },
 
+    noteActivity(paneId, kind, data) {
       if (kind === "spawn") {
-        entry.spawnedAt = now;
-        entry.runStart = null;
+        if (!findPane(paneId)) return;
+        activity.set(paneId, new AgentActivity(Date.now()));
         // A fresh process starts with a clean slate: not dead, not done.
         set((state) => {
-          if (!(paneId in state.exited) && !(paneId in state.status)) {
-            return state;
-          }
           const exited = { ...state.exited };
           delete exited[paneId];
           const status = { ...state.status };
           delete status[paneId];
-          return { exited, status };
+          const doneAt = { ...state.doneAt };
+          delete doneAt[paneId];
+          return { exited, status, doneAt };
         });
         return;
       }
 
       if (kind === "resize") {
-        entry.lastResize = now;
+        activity.get(paneId)?.resize();
         return;
       }
 
-      entry.lastInput = now;
-      // Typing breaks up a burst of echo that would otherwise pass for work —
-      // unless the agent is already working, which typing does not stop.
-      if (get().status[paneId] !== "working") entry.runStart = null;
+      if (activity.get(paneId)?.input(data ?? "", performance.now()) === "report") return;
       acknowledge(paneId);
     },
 
-    notePaneExit(paneId) {
+    notePaneExit(paneId, generation) {
+      if (!findPane(paneId) || (generation !== undefined &&
+        (get().generations[paneId] ?? 0) !== generation)) return;
       activity.delete(paneId);
+      acknowledge(paneId);
       set((state) => ({
         exited: { ...state.exited, [paneId]: true },
         status: { ...state.status, [paneId]: "idle" },
@@ -2265,11 +2245,8 @@ export const useKeel = create<KeelState>((set, get) => {
 
 /**
  * Agent status tracking. One timer for the whole app derives every pane's status
- * from output timing, and only writes to the store when something changed.
- *
- * idle → working once an agent has produced unprompted output for a sustained
- * stretch; working → done once it has gone quiet; done → idle when you focus or
- * type into it. Plain shells and exited panes stay idle.
+ * from live turn evidence, and only writes when something changed. Neither
+ * silence nor restored output is a completion event.
  */
 export function startAttentionTracking(): () => void {
   const timer = setInterval(() => {
@@ -2279,6 +2256,7 @@ export function startAttentionTracking(): () => void {
     let changed = false;
 
     const now = Date.now();
+    const clock = performance.now();
     // The terminal in front of you, while the window has focus. An agent that
     // finishes there was never waiting for you.
     const watching = document.hasFocus()
@@ -2295,22 +2273,13 @@ export function startAttentionTracking(): () => void {
           if (
             pane.agentId !== null &&
             pane.resumeAgent &&
+            !pane.editor &&
+            !state.hostLost &&
+            !(paneId in state.closing) &&
             entry &&
             !(paneId in state.exited)
           ) {
-            if (entry.runStart !== null && now - entry.lastOutput >= QUIET_MS) {
-              entry.runStart = null;
-            }
-            const sustained =
-              entry.runStart !== null &&
-              entry.lastOutput - entry.runStart >= MIN_RUN_MS;
-            if (sustained || (previous === "working" && entry.runStart !== null)) {
-              current = "working";
-            } else if (previous === "working") {
-              current = paneId === watching ? "idle" : "done";
-            } else {
-              current = previous;
-            }
+            current = entry.status(previous, clock, paneId === watching);
           }
 
           next[paneId] = current;
@@ -2318,14 +2287,19 @@ export function startAttentionTracking(): () => void {
             nextDoneAt[paneId] =
               previous === "done" ? (state.doneAt[paneId] ?? now) : now;
           }
-          if (current !== previous) changed = true;
+          if (current !== state.status[paneId]) changed = true;
         }
       }
     }
 
+    for (const paneId of activity.keys()) {
+      if (!(paneId in next)) activity.delete(paneId);
+    }
+
     if (
       changed ||
-      Object.keys(next).length !== Object.keys(state.status).length
+      Object.keys(next).length !== Object.keys(state.status).length ||
+      Object.keys(nextDoneAt).length !== Object.keys(state.doneAt).length
     ) {
       useKeel.setState({ status: next, doneAt: nextDoneAt });
     }

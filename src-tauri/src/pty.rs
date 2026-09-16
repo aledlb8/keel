@@ -40,6 +40,7 @@ pub struct PtySession {
 /// process tree is gone and the shell is sitting at a prompt again.
 struct AgentWatch {
     shell_pid: u32,
+    generation: u64,
     alive: Arc<AtomicBool>,
     saw_agent: bool,
 }
@@ -71,6 +72,8 @@ impl PtyManager {
 pub struct SpawnOptions {
     /// Frontend-generated pane id. Stable for the life of the pane.
     pub id: String,
+    #[serde(default)]
+    pub generation: u64,
     /// Shell to run. `None` means "whatever this machine's default is".
     #[serde(default)]
     pub shell: Option<String>,
@@ -96,6 +99,7 @@ pub struct SpawnOptions {
 #[serde(rename_all = "camelCase")]
 pub struct PtyExit {
     pub id: String,
+    pub generation: u64,
 }
 
 /// The default contents of `shell-init.ps1`.
@@ -336,6 +340,7 @@ pub fn pty_spawn(
 
     {
         let id = options.id.clone();
+        let generation = options.generation;
         let alive = Arc::clone(&alive);
         let app = app.clone();
         std::thread::Builder::new()
@@ -373,7 +378,7 @@ pub fn pty_spawn(
                     })
                     .unwrap_or(false);
                 if still_current {
-                    let _ = app.emit("pty:exit", PtyExit { id });
+                    let _ = app.emit("pty:exit", PtyExit { id, generation });
                 }
             })
             .map_err(|err| format!("could not start the reader thread: {err}"))?;
@@ -419,7 +424,14 @@ pub fn pty_spawn(
     // has exited — otherwise Ctrl+C, close, reopen types `grok` again.
     if typed_command {
         if let Some(pid) = shell_pid {
-            watch_agent(&manager, &app, options.id.clone(), pid, alive);
+            watch_agent(
+                &manager,
+                &app,
+                options.id.clone(),
+                options.generation,
+                pid,
+                alive,
+            );
         }
     }
 
@@ -433,6 +445,7 @@ fn watch_agent(
     manager: &PtyManager,
     app: &AppHandle,
     id: String,
+    generation: u64,
     shell_pid: u32,
     alive: Arc<AtomicBool>,
 ) {
@@ -441,6 +454,7 @@ fn watch_agent(
             id,
             AgentWatch {
                 shell_pid,
+                generation,
                 alive,
                 saw_agent: false,
             },
@@ -459,27 +473,27 @@ fn start_agent_watcher(app: AppHandle) {
         .spawn(move || loop {
             std::thread::sleep(Duration::from_millis(AGENT_WATCH_MS));
             let (started, finished) = collect_agent_events(&app);
-            for id in started {
-                let _ = app.emit("pty:agent-start", PtyExit { id });
+            for event in started {
+                let _ = app.emit("pty:agent-start", event);
             }
-            for id in finished {
+            for event in finished {
                 // A restart under the same pane id inserts a new watch before
                 // we emit; that spawn is a fresh agent and must not be released.
                 let replaced = app
                     .state::<PtyManager>()
                     .watches
                     .lock()
-                    .map(|watches| watches.contains_key(&id))
+                    .map(|watches| watches.contains_key(&event.id))
                     .unwrap_or(true);
                 if replaced {
                     continue;
                 }
-                let _ = app.emit("pty:agent-exit", PtyExit { id });
+                let _ = app.emit("pty:agent-exit", event);
             }
         });
 }
 
-fn collect_agent_events(app: &AppHandle) -> (Vec<String>, Vec<String>) {
+fn collect_agent_events(app: &AppHandle) -> (Vec<PtyExit>, Vec<PtyExit>) {
     let manager = app.state::<PtyManager>();
     let mut watches = match manager.watches.lock() {
         Ok(guard) => guard,
@@ -505,12 +519,18 @@ fn collect_agent_events(app: &AppHandle) -> (Vec<String>, Vec<String>) {
         }
         if procs::has_descendants(&parents, watch.shell_pid) {
             if !watch.saw_agent {
-                started.push(id.clone());
+                started.push(PtyExit {
+                    id: id.clone(),
+                    generation: watch.generation,
+                });
             }
             watch.saw_agent = true;
             true
         } else if watch.saw_agent {
-            finished.push(id.clone());
+            finished.push(PtyExit {
+                id: id.clone(),
+                generation: watch.generation,
+            });
             false
         } else {
             true

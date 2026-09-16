@@ -15,9 +15,9 @@ export type LayoutNode =
     };
 
 /**
- * What a pane's agent is doing, inferred from output timing alone. Plain shells
- * are always `idle`; `done` means an agent finished working and you have not
- * been back to it since.
+ * What a pane's agent is doing, inferred from live turn and prompt evidence.
+ * Plain shells are always `idle`; `done` means a supported agent returned to
+ * its prompt after working and you have not been back to it since.
  */
 export type PaneStatus = "idle" | "working" | "done";
 

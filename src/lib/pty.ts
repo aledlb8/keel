@@ -12,6 +12,7 @@ import { invoke } from "./invoke.ts";
 
 export interface SpawnOptions {
   id: string;
+  generation: number;
   shell?: string | null;
   cwd?: string | null;
   /** Typed into the shell once it is up. This is how an agent gets launched. */
@@ -60,25 +61,26 @@ export function ptyAlive(id: string): Promise<boolean> {
 
 /** Fires when a pane's shell finally exits. */
 export function onPtyExit(
-  handler: (id: string) => void,
+  handler: (id: string, generation: number) => void,
 ): Promise<() => void> {
-  return listen<{ id: string }>("pty:exit", (event) => handler(event.payload.id));
+  return listen<{ id: string; generation: number }>("pty:exit", (event) =>
+    handler(event.payload.id, event.payload.generation));
 }
 
 /** Fires when the agent typed into a pane has exited and left the shell. */
 export function onPtyAgentExit(
-  handler: (id: string) => void,
+  handler: (id: string, generation: number) => void,
 ): Promise<() => void> {
-  return listen<{ id: string }>("pty:agent-exit", (event) =>
-    handler(event.payload.id),
+  return listen<{ id: string; generation: number }>("pty:agent-exit", (event) =>
+    handler(event.payload.id, event.payload.generation),
   );
 }
 
 /** Fires when the typed-in agent process has actually appeared. */
 export function onPtyAgentStart(
-  handler: (id: string) => void,
+  handler: (id: string, generation: number) => void,
 ): Promise<() => void> {
-  return listen<{ id: string }>("pty:agent-start", (event) =>
-    handler(event.payload.id),
+  return listen<{ id: string; generation: number }>("pty:agent-start", (event) =>
+    handler(event.payload.id, event.payload.generation),
   );
 }

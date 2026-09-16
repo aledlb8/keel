@@ -1,0 +1,48 @@
+# Agent activity detection
+
+Completion is a turn transition, not an output timeout. The former detector
+declared a pane finished after three seconds of silence and treated output
+after six seconds of startup as work. Both assumptions fail for thinking,
+tool execution, network pauses, and slow conversation restoration.
+
+`src/lib/agentActivity.ts` owns one detector per terminal process lifetime.
+Only a local Enter submission arms it. Startup banners, historical spinners,
+restored responses, resize output, and terminal focus/device reports cannot
+create a completed turn. Bracketed paste is input, not submission. Escape and
+Ctrl+C cancel completion eligibility.
+
+A completion requires observed busy UI followed by a recognised live input
+prompt, stable for two seconds, with no visible changes for one second. Busy,
+retry, and approval indicators prevent completion. Pending xterm writes block
+completion until their parsed cells have been inspected. Identical redraws and
+terminal title changes do not restart the visible-change timer. Durations use
+`performance.now()`; wall time is only used for notification ordering and
+conversation capture.
+
+The screen reader uses the active buffer's `baseY`, never `viewportY`, so user
+scrolling cannot turn historical output into current state. Sampling is bounded
+to 120 rows, coalesced with a 50 ms timer, and works on hidden decks. Raw PTY
+bytes still go directly to xterm, which handles ANSI escapes, wrapping, cursor
+movement, alternate buffers, and fragmented UTF-8 before detection.
+
+Current prompt adapters cover Claude Code, Codex, and Gemini CLI. These are
+conservative UI heuristics, not an agent lifecycle protocol. Changed layouts,
+localised/custom interfaces, clipped prompts, very fast turns with no observed
+busy frame, and other agents may not produce a finished alert. Unknown layouts
+never fall back to silence-based completion. An unconfirmed submission settles
+to idle; an observed running turn remains working until there is enough evidence
+to finish or the user cancels/the process exits. Auto-started work with no local
+submission does not produce completion notifications. Add captured screen
+fixtures and lifecycle tests when extending an adapter. Structured provider
+lifecycle events would be a stronger future signal than terminal UI parsing.
+
+The store consumes completion once: it records `doneAt` only for an unwatched
+pane and clears the timestamp on acknowledgement, restart, or process exit.
+Restarts invalidate the detector immediately. PTY start/exit events and parsed
+screen callbacks carry the pane generation so an old process cannot update its
+replacement. Host loss invalidates prompt evidence until fresh output arrives.
+
+Regression coverage lives in `agentActivity.test.ts` and
+`attentionTracking.test.ts`. A release smoke test should also exercise installed
+CLI versions with a long thinking/tool turn, an approval wait, a queued turn,
+a hidden deck, a custom Claude status line, and a restored conversation.

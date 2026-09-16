@@ -6,7 +6,7 @@
  *  1. The terminal is created once and never torn down while its pane exists.
  *     Hidden decks stay mounted — unmounting would drop scrollback.
  *  2. Bytes from Rust go straight into `write()`. No decoding, no line
- *     splitting, no state derived from the stream beyond "something arrived".
+ *     splitting. Activity reads parsed cells after writes have drained.
  *  3. The grid is resized in exactly one place, `refit`, and everything that can
  *     change a cell's size — layout, a renderer swap — goes through it. A grid
  *     that disagrees with the PTY by a single column is what garbles agent TUIs.
@@ -19,6 +19,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal, type ITheme, type IWindowsPty } from "@xterm/xterm";
 
+import { readAgentScreen } from "@/lib/agentActivity";
 import { createPromptDraft, type TitleSource } from "@/lib/paneTitle";
 import { resizePty, spawnPty, writePty } from "@/lib/pty";
 import type { PaneActivity } from "@/lib/types";
@@ -243,7 +244,7 @@ export interface TerminalSurfaceProps {
   focused: boolean;
   onOutput: (paneId: string) => void;
   /** Keystrokes, resizes and (re)starts — the things output is a reply to. */
-  onActivity?: (paneId: string, kind: PaneActivity) => void;
+  onActivity?: (paneId: string, kind: PaneActivity, data?: string) => void;
   onFocus: (paneId: string) => void;
   /** Spawn settled — ok or fail. Used for reopen chrome + spawn-fail UI. */
   onSpawnResult?: (paneId: string, ok: boolean, reason?: string) => void;
@@ -456,9 +457,13 @@ export const TerminalSurface = memo(function TerminalSurface({
     refit("commit");
 
     const typed = term.onData((data) => {
-      handlers.current.onActivity?.(paneId, "input");
-      const brief = promptDraft.current.push(data);
-      if (brief) handlers.current.onTitle?.(paneId, brief, "prompt");
+      if (pty.current.ready) {
+        handlers.current.onActivity?.(paneId, "input", data);
+        const brief = promptDraft.current.push(data);
+        if (brief) handlers.current.onTitle?.(paneId, brief, "prompt");
+      }
+      // Startup cursor/device queries also arrive here, sometimes before the
+      // spawn promise settles. The shell still needs those replies.
       void writePty(paneId, data).catch(() => {});
     });
 
@@ -543,6 +548,8 @@ export const TerminalSurface = memo(function TerminalSurface({
   // does not leak out the PC's normal route.
   useEffect(() => {
     let cancelled = false;
+    let screenTimer: ReturnType<typeof setTimeout> | undefined;
+    let pendingWrites = 0;
     const term = termRef.current;
     if (!term) return;
     if (!canStart) return;
@@ -551,6 +558,16 @@ export const TerminalSurface = memo(function TerminalSurface({
     const startingProxyPort =
       networkAtStart.phase === "connected" ? networkAtStart.proxyPort : null;
     promptDraft.current.reset();
+
+    const isCurrent = () => !cancelled &&
+      (useKeel.getState().generations[paneId] ?? 0) === generation;
+    const sampleScreen = () => {
+      screenTimer = undefined;
+      if (!isCurrent() || pendingWrites !== 0) return;
+      useKeel.getState().noteScreen(
+        paneId, generation, readAgentScreen(term.buffer.active, term.rows),
+      );
+    };
 
     const start = async () => {
       pty.current.ready = false;
@@ -563,6 +580,7 @@ export const TerminalSurface = memo(function TerminalSurface({
         await spawnPty(
           {
             id: paneId,
+            generation,
             cwd,
             command,
             accountEnv,
@@ -571,31 +589,38 @@ export const TerminalSurface = memo(function TerminalSurface({
             rows,
           },
           (bytes) => {
-            if (cancelled) return;
-            termRef.current?.write(bytes);
+            if (!isCurrent()) return;
             handlers.current.onOutput(paneId);
+            pendingWrites++;
+            term.write(bytes, () => {
+              pendingWrites--;
+              if (!isCurrent() || pendingWrites !== 0 || screenTimer !== undefined) return;
+              // Timers also run for hidden decks, unlike animation frames.
+              screenTimer = setTimeout(sampleScreen, 50);
+            });
           },
         );
-        if (cancelled) return;
+        if (!isCurrent()) return;
         setSpawnedProxyPort(startingProxyPort);
         pty.current = { ready: true, cols, rows };
         // The layout may have moved while the process was starting.
         actions.current.syncPty();
         handlers.current.onSpawnResult?.(paneId, true);
       } catch (error) {
-        if (cancelled) return;
+        if (!isCurrent()) return;
         const reason = String(error);
         // Keep a brief stream note; actionable UI lives in toast + Relaunch.
         term.writeln(`\r\n\x1b[31m${reason}\x1b[0m`);
         handlers.current.onSpawnResult?.(paneId, false, reason);
       } finally {
-        if (!cancelled) setSettledGeneration(generation);
+        if (isCurrent()) setSettledGeneration(generation);
       }
     };
 
     void start();
     return () => {
       cancelled = true;
+      clearTimeout(screenTimer);
     };
     // Spawn inputs are read at restart time; generation is the explicit trigger.
     // eslint-disable-next-line react-hooks/exhaustive-deps

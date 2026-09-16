@@ -54,7 +54,7 @@ export interface PaneViewProps {
   hidden: boolean;
   onFocus: (paneId: string) => void;
   onOutput: (paneId: string) => void;
-  onActivity: (paneId: string, kind: PaneActivity) => void;
+  onActivity: (paneId: string, kind: PaneActivity, data?: string) => void;
   onSplit: (paneId: string, direction: "row" | "column") => void;
   onZoom: (paneId: string) => void;
   onClose: (paneId: string) => void;
