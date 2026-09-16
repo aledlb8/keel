@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { beforeEach, it } from "node:test";
 import { mockIPC } from "@tauri-apps/api/mocks";
-import { diffTabId, fileTabId, useWorkspace } from "../state/workspace.ts";
+import { diffTabId, fileTabId, unsavedFiles, unsavedFilesAll, useWorkspace } from "../state/workspace.ts";
 import type { GitDiff, GitStatus, PrList } from "./workspace.ts";
 
 const state = useWorkspace.getState;
@@ -12,7 +12,7 @@ const status: GitStatus = {
 const branches = { current: "main", detached: false, items: [] };
 const prs: PrList = { available: true, items: [], error: null };
 const diff: GitDiff = { path: "a.ts", binary: false, hunks: [] };
-const contents = { text: "hello", size: 5, binary: false, truncated: false };
+const contents = { text: "hello", size: 5, binary: false, truncated: false, mtimeMs: 1 };
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -195,4 +195,84 @@ it("reads fresh status after a mutation and releases busy without waiting for Gi
   pendingPrs.resolve(prs);
   await prRequest;
   await tick();
+});
+
+function ipc(handlers: Record<string, (args: Record<string, unknown>) => unknown>) {
+  mockIPC((cmd, args) => {
+    const handler = handlers[cmd];
+    if (handler) return handler(args as Record<string, unknown>);
+    if (cmd === "git_status") return status;
+    return [];
+  });
+}
+
+it("does not write a truncated file and skips a generic save error", async () => {
+  const writes: string[] = [];
+  ipc({
+    workspace_read: () => ({ ...contents, truncated: true, text: "partial" }),
+    workspace_write: () => {
+      writes.push("workspace_write");
+    },
+  });
+  await state().openFile("big.ts");
+  await state().saveTab(fileTabId("big.ts"));
+  assert.deepEqual(writes, []);
+});
+
+it("passes the snapshot mtime when saving and stores the new one", async () => {
+  const writes: Record<string, unknown>[] = [];
+  ipc({
+    workspace_read: () => ({ ...contents, mtimeMs: 42 }),
+    workspace_write: (args) => {
+      writes.push(args);
+      return 99;
+    },
+  });
+  await state().openFile("a.ts");
+  await state().saveTab(fileTabId("a.ts"));
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0]?.expectedMtimeMs, 42);
+  assert.equal(state().snapshots[fileTabId("a.ts")]?.mtimeMs, 99);
+  assert.equal(state().originals[fileTabId("a.ts")], "hello");
+});
+
+it("reloads a clean tab when the file changes on disk", async () => {
+  let text = "hello";
+  ipc({
+    workspace_read: () => ({
+      ...contents,
+      text,
+      mtimeMs: text === "hello" ? 1 : 2,
+    }),
+  });
+  await state().openFile("a.ts");
+  text = "there";
+  state().applyFsChange("project-a", ["a.ts"], false);
+  await tick();
+  await tick();
+  const id = fileTabId("a.ts");
+  assert.equal(state().buffers[id], "there");
+  assert.equal(state().originals[id], "there");
+  assert.equal(state().snapshots[id]?.mtimeMs, 2);
+});
+
+it("marks a dirty tab when the file changes on disk and does not clobber it", async () => {
+  ipc({ workspace_read: () => contents });
+  await state().openFile("a.ts");
+  const id = fileTabId("a.ts");
+  state().setBuffer(id, "mine");
+  state().applyFsChange("project-a", ["a.ts"], false);
+  assert.equal(state().externalChange[id], true);
+  assert.equal(state().buffers[id], "mine");
+  assert.equal(state().originals[id], "hello");
+});
+
+it("lists unsaved files in this project and in stashed ones", async () => {
+  ipc({ workspace_read: () => contents });
+  await state().openFile("a.ts");
+  state().setBuffer(fileTabId("a.ts"), "dirty");
+  assert.deepEqual(unsavedFiles(), [{ id: fileTabId("a.ts"), name: "a.ts" }]);
+  state().setRoot("project-b");
+  assert.deepEqual(unsavedFiles(), []);
+  assert.deepEqual(unsavedFilesAll(), [{ name: "a.ts" }]);
 });

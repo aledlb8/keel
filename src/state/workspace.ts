@@ -82,6 +82,8 @@ interface WorkspaceState {
   diffs: Record<string, GitDiff>;
   editorLoading: Record<string, boolean>;
   editorErrors: Record<string, string | null>;
+  /** Dirty file tab whose disk copy changed; save will fail the mtime check. */
+  externalChange: Record<string, boolean>;
   busy: boolean;
 
   /**
@@ -121,8 +123,12 @@ interface WorkspaceState {
   ensureDocument: (ref: EditorRef) => Promise<void>;
   /** Close one tab of an editor pane, asking first if that drops unsaved edits. */
   closeTab: (projectId: string, paneId: string, id: string) => void;
-  /** Close any pane from the UI. An editor pane asks before dropping unsaved edits. */
+  /** Close any pane from the UI. Asks before dropping unsaved edits or killing an agent. */
   closePaneSafely: (projectId: string, paneId: string) => void;
+  /** Drop a project after confirming unsaved files in it. */
+  removeProjectSafely: (projectId: string) => void;
+  /** Drop a deck after confirming unsaved files it uniquely holds. */
+  removeDeckSafely: (projectId: string, deckId: string) => void;
   setActiveEditor: (id: string) => void;
   setBuffer: (id: string, value: string) => void;
   saveActive: () => Promise<void>;
@@ -171,6 +177,7 @@ function isDirty(state: WorkspaceState, id: string): boolean {
 const reads = new WorkspaceReads();
 let projectVersion = 0;
 let grepGeneration = 0;
+let searchGeneration = 0;
 
 type EditorDocs = Pick<
   WorkspaceState,
@@ -182,6 +189,7 @@ type EditorDocs = Pick<
   | "diffs"
   | "editorLoading"
   | "editorErrors"
+  | "externalChange"
 >;
 
 /**
@@ -201,6 +209,7 @@ function emptyDocs(): EditorDocs {
     diffs: {},
     editorLoading: {},
     editorErrors: {},
+    externalChange: {},
   };
 }
 
@@ -221,6 +230,7 @@ function settledDocs(state: WorkspaceState): EditorDocs {
     diffs: keep(state.diffs),
     editorLoading: keep(state.editorLoading),
     editorErrors: keep(state.editorErrors),
+    externalChange: keep(state.externalChange),
   };
 }
 
@@ -259,11 +269,14 @@ function dropDocument(
   const { [id]: _d, ...diffs } = state.diffs;
   const { [id]: _l, ...editorLoading } = state.editorLoading;
   const { [id]: _e, ...editorErrors } = state.editorErrors;
+  const { [id]: _x, ...externalChange } = state.externalChange;
   const activeEditor =
     state.activeEditor === id
       ? (editors[editors.length - 1]?.id ?? null)
       : state.activeEditor;
-  set({ editors, buffers, originals, snapshots, diffs, editorLoading, editorErrors, activeEditor });
+  set({
+    editors, buffers, originals, snapshots, diffs, editorLoading, editorErrors, externalChange, activeEditor,
+  });
 }
 
 /** Forget files no pane shows any more, once a closing pane has finished leaving. */
@@ -352,6 +365,56 @@ function openEditor(
   });
 }
 
+function fileRelAffected(tabRel: string, rels: string[]): boolean {
+  if (rels.some((rel) => rel === "")) return true;
+  const parent = parentRel(tabRel);
+  for (const rel of rels) {
+    if (rel === tabRel || rel === parent) return true;
+    if (rel && tabRel.startsWith(`${rel}/`)) return true;
+  }
+  return false;
+}
+
+/** Re-read a clean open file. Does not remount the editor; the buffer subscription updates it. */
+function reloadTab(
+  id: string,
+  set: (partial: Partial<WorkspaceState>) => void,
+  get: () => WorkspaceState,
+) {
+  const state = get();
+  const root = state.root;
+  const tab = state.editors.find((item) => item.id === id);
+  if (!root || !tab || tab.kind !== "file") return Promise.resolve();
+  if (state.editorLoading[id]) return Promise.resolve();
+  return reads.run(`reload:${id}`, async (isCurrent) => {
+    try {
+      const contents = await api.workspaceRead(root, tab.rel);
+      if (!isCurrent() || get().root !== root) return;
+      if (!get().editors.some((item) => item.id === id)) return;
+      const now = get();
+      if ((now.buffers[id] ?? "") !== (now.originals[id] ?? "")) {
+        if (!now.externalChange[id]) {
+          set({ externalChange: { ...now.externalChange, [id]: true } });
+          toast.error(`${tab.name} changed on disk.`);
+        }
+        return;
+      }
+      const { [id]: _cleared, ...externalChange } = get().externalChange;
+      set({
+        buffers: { ...get().buffers, [id]: contents.text },
+        originals: { ...get().originals, [id]: contents.text },
+        snapshots: { ...get().snapshots, [id]: contents },
+        editorErrors: { ...get().editorErrors, [id]: null },
+        externalChange,
+      });
+    } catch (error) {
+      if (isCurrent() && get().editors.some((item) => item.id === id)) {
+        set({ editorErrors: { ...get().editorErrors, [id]: errorMessage(error) } });
+      }
+    }
+  });
+}
+
 /** How long rows keep their enter or leave marker. Matches `k-row-in` / `k-row-out`. */
 const ROW_ENTER_MS = 240;
 const ROW_LEAVE_MS = 180;
@@ -422,6 +485,7 @@ function retarget(
     snapshots: rekey(state.snapshots),
     editorLoading: rekey(state.editorLoading),
     editorErrors: rekey(state.editorErrors),
+    externalChange: rekey(state.externalChange),
     activeEditor: state.activeEditor
       ? (ids[state.activeEditor] ?? state.activeEditor)
       : null,
@@ -552,6 +616,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   diffs: {},
   editorLoading: {},
   editorErrors: {},
+  externalChange: {},
   busy: false,
   fsWatch: false,
   recentEpoch: 0,
@@ -561,6 +626,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     if (previous === root) return;
     projectVersion += 1;
     grepGeneration += 1;
+    searchGeneration += 1;
     reads.reset();
     if (previous) stashedDocs.set(previous, settledDocs(get()));
     // No project at all: nothing will come back for what was open.
@@ -613,6 +679,20 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const full = rels.some((rel) => rel === "");
     if (full || rels.length > 0) void get().refreshTree();
     if (git || full) void get().refreshGit();
+    const open = get();
+    for (const tab of open.editors) {
+      if (tab.kind !== "file") continue;
+      if (!fileRelAffected(tab.rel, rels)) continue;
+      const dirty = (open.buffers[tab.id] ?? "") !== (open.originals[tab.id] ?? "");
+      if (dirty) {
+        if (!get().externalChange[tab.id]) {
+          set({ externalChange: { ...get().externalChange, [tab.id]: true } });
+          toast.error(`${tab.name} changed on disk.`);
+        }
+      } else {
+        void reloadTab(tab.id, set, get);
+      }
+    }
   },
   setShowHidden: async (showHidden) => {
     // The tree stays up while the new listings load — clearing it first blanked
@@ -665,7 +745,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   },
   setQuery: (query) => {
     set({ query });
-    if (query.trim().length < 2) set({ searchHits: null });
+    if (query.trim().length < 2) {
+      searchGeneration += 1;
+      set({ searchHits: null });
+    }
   },
   setCommitMessage: (commitMessage) => set({ commitMessage }),
   setSelected: (selectedRel) => set({ selectedRel }),
@@ -738,13 +821,18 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const needle = query.trim();
     set({ query });
     if (!root || needle.length < 2) {
+      searchGeneration += 1;
       set({ searchHits: null });
       return;
     }
+    const generation = ++searchGeneration;
+    const version = projectVersion;
     try {
       const searchHits = await api.workspaceSearch(root, needle);
+      if (generation !== searchGeneration || version !== projectVersion) return;
       set({ searchHits });
     } catch (error) {
+      if (generation !== searchGeneration || version !== projectVersion) return;
       toast.error(error instanceof Error ? error.message : String(error));
     }
   },
@@ -873,9 +961,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         (tab) => last.includes(tab.id) && isDirty(get(), tab.id),
       );
       if (dirty.length) {
+        const first = dirty[0];
         const ok = window.confirm(
-          dirty.length === 1
-            ? `Discard unsaved changes to ${dirty[0].name}?`
+          dirty.length === 1 && first
+            ? `Discard unsaved changes to ${first.name}?`
             : `Discard unsaved changes in ${dirty.length} files?`,
         );
         if (!ok) return;
@@ -884,7 +973,65 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       releaseLater(root, last, set, get);
       return;
     }
+    if (
+      pane.agentId &&
+      !(paneId in keel.exited) &&
+      !(paneId in keel.closing)
+    ) {
+      const ok = window.confirm(
+        `Closing ${pane.title || "this terminal"} stops the agent. There is no undo.`,
+      );
+      if (!ok) return;
+    }
     keel.dismissPane(projectId, paneId);
+  },
+
+  removeProjectSafely: (projectId) => {
+    const keel = useKeel.getState();
+    const project = keel.projects.find((item) => item.id === projectId);
+    if (!project) return;
+    const state = get();
+    const dirty =
+      state.root === project.path
+        ? state.editors.filter((tab) => isDirty(state, tab.id))
+        : [];
+    if (dirty.length) {
+      const first = dirty[0];
+      const ok = window.confirm(
+        dirty.length === 1 && first
+          ? `Remove this project and discard unsaved changes to ${first.name}?`
+          : `Remove this project and discard unsaved changes in ${dirty.length} files?`,
+      );
+      if (!ok) return;
+    }
+    keel.removeProject(projectId);
+  },
+
+  removeDeckSafely: (projectId, deckId) => {
+    const keel = useKeel.getState();
+    const project = keel.projects.find((item) => item.id === projectId);
+    const deck = project?.decks.find((item) => item.id === deckId);
+    if (!project || !deck) return;
+    const state = get();
+    const dirty =
+      state.root === project.path
+        ? state.editors.filter((tab) => {
+            if (!isDirty(state, tab.id)) return false;
+            return Object.values(deck.panes).some((pane) =>
+              pane.editor?.tabs.some((ref) => editorRefId(ref) === tab.id),
+            );
+          })
+        : [];
+    if (dirty.length) {
+      const first = dirty[0];
+      const ok = window.confirm(
+        dirty.length === 1 && first
+          ? `Remove this deck and discard unsaved changes to ${first.name}?`
+          : `Remove this deck and discard unsaved changes in ${dirty.length} files?`,
+      );
+      if (!ok) return;
+    }
+    keel.removeDeck(projectId, deckId);
   },
 
   setActiveEditor: (id) => set({ activeEditor: id }),
@@ -901,12 +1048,23 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const root = state.root;
     const tab = state.editors.find((item) => item.id === id);
     if (!root || !tab || tab.kind !== "file") return;
-    if (!state.snapshots[id] || state.editorLoading[id] || state.editorErrors[id]) return;
-    if (state.snapshots[id].binary) return;
+    const snapshot = state.snapshots[id];
+    if (!snapshot || state.editorLoading[id] || state.editorErrors[id]) return;
+    if (snapshot.binary || snapshot.truncated) return;
+    const written = state.buffers[id] ?? "";
     try {
-      await api.workspaceWrite(root, tab.rel, state.buffers[id] ?? "");
+      const mtimeMs = await api.workspaceWrite(root, tab.rel, written, snapshot.mtimeMs);
+      const { [id]: _cleared, ...externalChange } = get().externalChange;
+      const nextSnapshot: FileContents = {
+        ...snapshot,
+        text: written,
+        mtimeMs,
+        size: new TextEncoder().encode(written).length,
+      };
       set({
-        originals: { ...get().originals, [id]: state.buffers[id] ?? "" },
+        originals: { ...get().originals, [id]: written },
+        snapshots: { ...get().snapshots, [id]: nextSnapshot },
+        externalChange,
       });
       void get().refreshGit();
     } catch (error) {
@@ -1096,4 +1254,26 @@ export function canMoveInto(rel: string, targetDir: string): boolean {
 export function editorDirty(state: WorkspaceState, id: string | null): boolean {
   if (!id) return false;
   return isDirty(state, id);
+}
+
+export function unsavedFiles(): { id: string; name: string }[] {
+  const state = useWorkspace.getState();
+  return state.editors
+    .filter((tab) => tab.kind === "file" && isDirty(state, tab.id))
+    .map((tab) => ({ id: tab.id, name: tab.name }));
+}
+
+/** Stashed docs in other projects are also unsaved. */
+export function unsavedFilesAll(): { name: string }[] {
+  const current = unsavedFiles().map(({ name }) => ({ name }));
+  const stashed: { name: string }[] = [];
+  for (const docs of stashedDocs.values()) {
+    for (const tab of docs.editors) {
+      if (tab.kind !== "file") continue;
+      if ((docs.buffers[tab.id] ?? "") !== (docs.originals[tab.id] ?? "")) {
+        stashed.push({ name: tab.name });
+      }
+    }
+  }
+  return [...current, ...stashed];
 }

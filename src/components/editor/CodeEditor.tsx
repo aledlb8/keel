@@ -16,7 +16,7 @@ import {
 } from "@codemirror/commands";
 import { bracketMatching } from "@codemirror/language";
 import { searchKeymap } from "@codemirror/search";
-import { EditorState } from "@codemirror/state";
+import { Compartment, EditorState } from "@codemirror/state";
 import {
   EditorView,
   highlightActiveLine,
@@ -29,6 +29,10 @@ import { languageFor } from "@/components/editor/language";
 import { keelEditorTheme } from "@/components/editor/theme";
 import { registerEditorView } from "@/lib/editorViews";
 import { useWorkspace } from "@/state/workspace";
+
+function editorLock(readOnly: boolean) {
+  return [EditorView.editable.of(!readOnly), EditorState.readOnly.of(readOnly)];
+}
 
 export function CodeEditor({
   id,
@@ -49,8 +53,9 @@ export function CodeEditor({
 
     const state = useWorkspace.getState();
     const snapshot = state.snapshots[id];
-    const readOnly = Boolean(snapshot?.binary);
+    let readOnly = Boolean(snapshot?.binary || snapshot?.truncated);
     const language = languageFor(rel);
+    const lock = new Compartment();
     /** The buffer as this surface last wrote or received it. */
     let known = state.buffers[id] ?? "";
     const view = new EditorView({
@@ -77,8 +82,7 @@ export function CodeEditor({
             ...searchKeymap,
             indentWithTab,
           ]),
-          EditorView.editable.of(!readOnly),
-          EditorState.readOnly.of(readOnly),
+          lock.of(editorLock(readOnly)),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) {
               known = update.state.doc.toString();
@@ -94,6 +98,12 @@ export function CodeEditor({
 
     // Another pane showing this file typed into it.
     const unsubscribe = useWorkspace.subscribe((next) => {
+      const snap = next.snapshots[id];
+      const nextReadOnly = Boolean(snap?.binary || snap?.truncated);
+      if (nextReadOnly !== readOnly) {
+        readOnly = nextReadOnly;
+        view.dispatch({ effects: lock.reconfigure(editorLock(readOnly)) });
+      }
       const text = next.buffers[id];
       if (text === undefined || text === known) return;
       known = text;

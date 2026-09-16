@@ -417,7 +417,7 @@ function PathBar({
             ) : null}
             <span className="k-tag">{tab.staged ? "Staged" : "Working tree"}</span>
           </>
-        ) : dirty ? (
+        ) : dirty && !truncated ? (
           <>
             <span className="text-faint">Unsaved</span>
             <button
@@ -429,7 +429,7 @@ function PathBar({
               Save
             </button>
           </>
-        ) : (
+        ) : truncated ? null : (
           <span className="text-faint">{languageName(tab.rel)}</span>
         )}
       </div>

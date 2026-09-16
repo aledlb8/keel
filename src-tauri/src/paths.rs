@@ -2,10 +2,47 @@
 
 use std::path::{Component, Path, PathBuf};
 
+fn name_is_git(name: &std::ffi::OsStr) -> bool {
+    #[cfg(windows)]
+    {
+        name.eq_ignore_ascii_case(".git")
+    }
+    #[cfg(not(windows))]
+    {
+        name == std::ffi::OsStr::new(".git")
+    }
+}
+
+/// True when any component is `.git`. Windows compares ASCII-case-insensitively.
+pub fn has_git_component(rel: &Path) -> bool {
+    rel.components().any(|component| match component {
+        Component::Normal(name) => name_is_git(name),
+        _ => false,
+    })
+}
+
+/// The `.git` folder cannot be changed from here.
+pub fn rejects_git_component(rel: &Path) -> Result<(), String> {
+    if has_git_component(rel) {
+        Err("The .git folder cannot be changed from here.".into())
+    } else {
+        Ok(())
+    }
+}
+
+/// The `.git` folder cannot be opened from here.
+pub fn rejects_git_open(rel: &Path) -> Result<(), String> {
+    if has_git_component(rel) {
+        Err("The .git folder cannot be opened from here.".into())
+    } else {
+        Ok(())
+    }
+}
+
 /// Folders that are noise in a project tree. `.git` is always skipped, even
 /// when hidden files are on — it is not a place you edit.
 pub fn is_skipped_dir(name: &str, show_hidden: bool) -> bool {
-    if name == ".git" {
+    if name_is_git(std::ffi::OsStr::new(name)) {
         return true;
     }
     matches!(
@@ -166,5 +203,19 @@ mod tests {
     fn posix_joins_with_slashes() {
         let path = PathBuf::from("src").join("lib").join("git.ts");
         assert_eq!(to_posix(&path), "src/lib/git.ts");
+    }
+
+    #[test]
+    fn rejects_git_paths() {
+        assert!(rejects_git_component(Path::new(".git")).is_err());
+        assert!(rejects_git_component(Path::new(".git/hooks/pre-commit")).is_err());
+        assert!(rejects_git_open(Path::new("src/.git/HEAD")).is_err());
+        assert!(rejects_git_component(Path::new("src/lib.rs")).is_ok());
+        assert!(rejects_git_component(Path::new("file.git")).is_ok());
+        #[cfg(windows)]
+        {
+            assert!(rejects_git_component(Path::new(".GIT/hooks/x")).is_err());
+            assert!(rejects_git_open(Path::new("src/.Git/config")).is_err());
+        }
     }
 }

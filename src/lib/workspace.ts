@@ -14,6 +14,7 @@ export interface FileContents {
   binary: boolean;
   truncated: boolean;
   size: number;
+  mtimeMs: number;
 }
 
 export function workspaceList(
@@ -32,8 +33,14 @@ export function workspaceWrite(
   root: string,
   rel: string,
   contents: string,
-): Promise<void> {
-  return invoke("workspace_write", { root, rel, contents });
+  expectedMtimeMs?: number | null,
+): Promise<number> {
+  return invoke("workspace_write", {
+    root,
+    rel,
+    contents,
+    expectedMtimeMs: expectedMtimeMs ?? null,
+  });
 }
 
 export function workspaceCreate(
