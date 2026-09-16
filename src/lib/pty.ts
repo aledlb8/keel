@@ -13,13 +13,13 @@ import { invoke } from "./invoke.ts";
 export interface SpawnOptions {
   id: string;
   generation: number;
-  shell?: string | null;
-  cwd?: string | null;
+  shell?: string | null | undefined;
+  cwd?: string | null | undefined;
   /** Typed into the shell once it is up. This is how an agent gets launched. */
-  command?: string | null;
-  accountEnv?: string | null;
-  accountId?: string | null;
-  env?: Record<string, string>;
+  command?: string | null | undefined;
+  accountEnv?: string | null | undefined;
+  accountId?: string | null | undefined;
+  env?: Record<string, string> | undefined;
   cols: number;
   rows: number;
 }
@@ -39,8 +39,17 @@ export async function spawnPty(
   await invoke("pty_spawn", { options, onData: channel });
 }
 
-export function writePty(id: string, data: string): Promise<void> {
-  return invoke("pty_write", { id, data });
+/** Matches the Rust writer chunk so a huge paste yields instead of one IPC stall. */
+const WRITE_CHUNK = 64 * 1024;
+
+export async function writePty(id: string, data: string): Promise<void> {
+  if (!data) return;
+  for (let offset = 0; offset < data.length; offset += WRITE_CHUNK) {
+    await invoke("pty_write", { id, data: data.slice(offset, offset + WRITE_CHUNK) });
+    if (offset + WRITE_CHUNK < data.length) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  }
 }
 
 export function resizePty(
@@ -53,10 +62,6 @@ export function resizePty(
 
 export function killPty(id: string): Promise<void> {
   return invoke("pty_kill", { id });
-}
-
-export function ptyAlive(id: string): Promise<boolean> {
-  return invoke("pty_alive", { id });
 }
 
 /** Fires when a pane's shell finally exits. */

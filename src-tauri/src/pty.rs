@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -28,12 +29,23 @@ use crate::procs;
 /// Read buffer per pane. A blocking `read` returns whatever is available up to
 /// this size, so a chatty agent naturally coalesces into few large sends.
 const READ_BUFFER: usize = 64 * 1024;
+/// Reject a single `pty_write` larger than this so a stuck paste cannot pin RAM.
+const MAX_PTY_WRITE: usize = 1_048_576;
+const WRITE_CHUNK: usize = 64 * 1024;
+/// ConPTY / xterm still work at this size; anything larger is a hostile resize.
+const PTY_MAX_DIM: u16 = 512;
+
+type PtyWriter = Arc<Mutex<Box<dyn Write + Send>>>;
+type PtyWriterGuard<'a> = std::sync::MutexGuard<'a, Box<dyn Write + Send>>;
 
 pub struct PtySession {
     master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+    writer: PtyWriter,
     child: Box<dyn Child + Send + Sync>,
     alive: Arc<AtomicBool>,
+    /// Windows job so the shell tree dies with the pane. Held for `Drop`.
+    #[allow(dead_code)]
+    _job: Option<procs::KillOnCloseJob>,
 }
 
 /// Watches a pane whose shell had an agent typed into it, until that agent
@@ -164,7 +176,7 @@ try {
 ///
 /// Returns `None` if the file cannot be written, and the caller just launches a
 /// plain shell: a stock prompt beats no terminal.
-fn powershell_init(app: &AppHandle) -> Option<std::path::PathBuf> {
+fn powershell_init(app: &AppHandle) -> Option<PathBuf> {
     let dir = app.path().app_config_dir().ok()?;
     std::fs::create_dir_all(&dir).ok()?;
     let file = dir.join("shell-init.ps1");
@@ -214,14 +226,40 @@ pub fn is_env_name(key: &str) -> bool {
         })
 }
 
-pub fn home_dir() -> Option<std::path::PathBuf> {
+/// `CreateProcess` / portable-pty abort on NUL in an environment value.
+pub fn is_env_value(value: &str) -> bool {
+    !value.as_bytes().contains(&0)
+}
+
+fn clamp_pty_dims(cols: u16, rows: u16) -> (u16, u16) {
+    (cols.clamp(1, PTY_MAX_DIM), rows.clamp(1, PTY_MAX_DIM))
+}
+
+fn write_pty_bytes(writer: &mut dyn Write, data: &[u8]) -> Result<(), String> {
+    for chunk in data.chunks(WRITE_CHUNK) {
+        writer.write_all(chunk).map_err(|err| err.to_string())?;
+    }
+    writer.flush().map_err(|err| err.to_string())
+}
+
+fn pty_write_too_large(len: usize) -> bool {
+    len > MAX_PTY_WRITE
+}
+
+fn lock_writer(writer: &PtyWriter) -> Result<PtyWriterGuard<'_>, String> {
+    writer
+        .lock()
+        .map_err(|_| "pty writer is poisoned".to_string())
+}
+
+pub fn home_dir() -> Option<PathBuf> {
     #[cfg(windows)]
     {
-        std::env::var_os("USERPROFILE").map(std::path::PathBuf::from)
+        std::env::var_os("USERPROFILE").map(PathBuf::from)
     }
     #[cfg(not(windows))]
     {
-        std::env::var_os("HOME").map(std::path::PathBuf::from)
+        std::env::var_os("HOME").map(PathBuf::from)
     }
 }
 
@@ -233,9 +271,10 @@ pub fn pty_spawn(
     on_data: Channel<Response>,
 ) -> Result<(), String> {
     let pty_system = portable_pty::native_pty_system();
+    let (cols, rows) = clamp_pty_dims(options.cols, options.rows);
     let size = PtySize {
-        rows: options.rows.max(1),
-        cols: options.cols.max(1),
+        rows,
+        cols,
         pixel_width: 0,
         pixel_height: 0,
     };
@@ -283,15 +322,18 @@ pub fn pty_spawn(
 
     let cwd = options
         .cwd
-        .map(std::path::PathBuf::from)
-        .filter(|path| path.is_dir())
+        .as_deref()
+        .filter(|cwd| crate::roots::is_under_registered(Path::new(cwd)))
+        .map(PathBuf::from)
         .or_else(home_dir);
     if let Some(cwd) = cwd {
         cmd.cwd(cwd);
     }
 
     for (key, value) in &options.env {
-        cmd.env(key, value);
+        if is_env_name(key) && is_env_value(value) {
+            cmd.env(key, value);
+        }
     }
     if let (Some(key), Some(account_id)) = (&options.account_env, &options.account_id) {
         let valid_key = is_env_name(key);
@@ -335,8 +377,10 @@ pub fn pty_spawn(
         .master
         .take_writer()
         .map_err(|err| format!("could not write to the pty: {err}"))?;
+    let writer: PtyWriter = Arc::new(Mutex::new(writer));
 
     let alive = Arc::new(AtomicBool::new(true));
+    let job = child.process_id().and_then(procs::adopt_kill_on_close);
 
     {
         let id = options.id.clone();
@@ -386,9 +430,10 @@ pub fn pty_spawn(
 
     let session = PtySession {
         master: pair.master,
-        writer,
+        writer: Arc::clone(&writer),
         child,
         alive: Arc::clone(&alive),
+        _job: job,
     };
     let shell_pid = session.child.process_id();
 
@@ -400,25 +445,22 @@ pub fn pty_spawn(
         previous.alive.store(false, Ordering::SeqCst);
         let _ = previous.child.kill();
     }
+    drop(sessions);
 
     // Typed in, not exec'd, so the shell is still there when the agent quits.
+    // Writer lock only — never the session map — so a blocked stdin cannot
+    // freeze resize/kill of other panes.
     let typed_command = options
         .command
         .as_ref()
         .filter(|command| !command.trim().is_empty());
     if let Some(command) = typed_command {
-        if let Some(session) = sessions.get_mut(&options.id) {
-            let line = format!("{command}\r");
-            session
-                .writer
-                .write_all(line.as_bytes())
-                .map_err(|err| format!("could not send the startup command: {err}"))?;
-            let _ = session.writer.flush();
-        }
+        let line = format!("{command}\r");
+        let mut guard = lock_writer(&writer)?;
+        write_pty_bytes(&mut **guard, line.as_bytes())
+            .map_err(|err| format!("could not send the startup command: {err}"))?;
     }
     let typed_command = typed_command.is_some();
-
-    drop(sessions);
 
     // A pane that launched an agent should reopen as a shell once that agent
     // has exited — otherwise Ctrl+C, close, reopen types `grok` again.
@@ -539,69 +581,123 @@ fn collect_agent_events(app: &AppHandle) -> (Vec<PtyExit>, Vec<PtyExit>) {
     (started, finished)
 }
 
-#[tauri::command]
-pub fn pty_write(manager: State<'_, PtyManager>, id: String, data: String) -> Result<(), String> {
-    let mut sessions = manager
-        .sessions
-        .lock()
-        .map_err(|_| "pty state is poisoned".to_string())?;
-    let session = sessions
-        .get_mut(&id)
-        .ok_or_else(|| format!("no terminal named {id}"))?;
-    session
-        .writer
-        .write_all(data.as_bytes())
-        .map_err(|err| err.to_string())?;
-    session.writer.flush().map_err(|err| err.to_string())
-}
-
-#[tauri::command]
-pub fn pty_resize(
-    manager: State<'_, PtyManager>,
-    id: String,
-    cols: u16,
-    rows: u16,
-) -> Result<(), String> {
-    let sessions = manager
-        .sessions
-        .lock()
-        .map_err(|_| "pty state is poisoned".to_string())?;
-    let Some(session) = sessions.get(&id) else {
-        // Resizes race with closing panes; a missing pane is not an error.
-        return Ok(());
-    };
-    session
-        .master
-        .resize(PtySize {
-            rows: rows.max(1),
-            cols: cols.max(1),
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .map_err(|err| err.to_string())
-}
-
-#[tauri::command]
-pub fn pty_kill(manager: State<'_, PtyManager>, id: String) -> Result<(), String> {
-    let mut sessions = manager
-        .sessions
-        .lock()
-        .map_err(|_| "pty state is poisoned".to_string())?;
-    if let Some(mut session) = sessions.remove(&id) {
-        session.alive.store(false, Ordering::SeqCst);
-        session.child.kill().map_err(|err| err.to_string())?;
+#[tauri::command(async)]
+pub async fn pty_write(app: AppHandle, id: String, data: String) -> Result<(), String> {
+    if pty_write_too_large(data.len()) {
+        return Err(format!(
+            "terminal write is limited to {MAX_PTY_WRITE} bytes"
+        ));
     }
-    Ok(())
+    crate::blocking::run(move || {
+        let writer = {
+            let manager = app.state::<PtyManager>();
+            let sessions = manager
+                .sessions
+                .lock()
+                .map_err(|_| "pty state is poisoned".to_string())?;
+            let session = sessions
+                .get(&id)
+                .ok_or_else(|| format!("no terminal named {id}"))?;
+            Arc::clone(&session.writer)
+        };
+        let mut guard = lock_writer(&writer)?;
+        write_pty_bytes(&mut **guard, data.as_bytes())
+    })
+    .await
 }
 
-#[tauri::command]
-pub fn pty_alive(manager: State<'_, PtyManager>, id: String) -> Result<bool, String> {
-    let sessions = manager
-        .sessions
-        .lock()
-        .map_err(|_| "pty state is poisoned".to_string())?;
-    Ok(sessions
-        .get(&id)
-        .map(|session| session.alive.load(Ordering::SeqCst))
-        .unwrap_or(false))
+#[tauri::command(async)]
+pub async fn pty_resize(app: AppHandle, id: String, cols: u16, rows: u16) -> Result<(), String> {
+    let (cols, rows) = clamp_pty_dims(cols, rows);
+    crate::blocking::run(move || {
+        let manager = app.state::<PtyManager>();
+        let sessions = manager
+            .sessions
+            .lock()
+            .map_err(|_| "pty state is poisoned".to_string())?;
+        let Some(session) = sessions.get(&id) else {
+            // Resizes race with closing panes; a missing pane is not an error.
+            return Ok(());
+        };
+        // MasterPty is not cloneable, so resize holds the map lock. It is
+        // usually fast; never hold this lock across a write.
+        session
+            .master
+            .resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|err| err.to_string())
+    })
+    .await
+}
+
+#[tauri::command(async)]
+pub async fn pty_kill(app: AppHandle, id: String) -> Result<(), String> {
+    crate::blocking::run(move || {
+        let session = {
+            let manager = app.state::<PtyManager>();
+            let mut sessions = manager
+                .sessions
+                .lock()
+                .map_err(|_| "pty state is poisoned".to_string())?;
+            sessions.remove(&id)
+        };
+        let Some(mut session) = session else {
+            return Ok(());
+        };
+        session.alive.store(false, Ordering::SeqCst);
+        session.child.kill().map_err(|err| err.to_string())
+    })
+    .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn env_name_accepts_shell_variables() {
+        assert!(is_env_name("PATH"));
+        assert!(is_env_name("_"));
+        assert!(is_env_name("FOO_BAR"));
+        assert!(is_env_name("A1"));
+    }
+
+    #[test]
+    fn env_name_rejects_empty_digits_and_punctuation() {
+        assert!(!is_env_name(""));
+        assert!(!is_env_name("1ABC"));
+        assert!(!is_env_name("FOO-BAR"));
+        assert!(!is_env_name("FOO=BAR"));
+        assert!(!is_env_name("FOO\0BAR"));
+        assert!(!is_env_name("FOO BAR"));
+    }
+
+    #[test]
+    fn env_value_rejects_nul() {
+        assert!(is_env_value(""));
+        assert!(is_env_value(r"C:\Windows\system32"));
+        assert!(is_env_value(".EXE;.BAT"));
+        assert!(!is_env_value("a\0b"));
+        assert!(!is_env_value("\0"));
+    }
+
+    #[test]
+    fn clamp_pty_dims_floors_and_caps() {
+        assert_eq!(clamp_pty_dims(0, 0), (1, 1));
+        assert_eq!(clamp_pty_dims(80, 24), (80, 24));
+        assert_eq!(clamp_pty_dims(512, 512), (512, 512));
+        assert_eq!(clamp_pty_dims(1000, 2000), (512, 512));
+        assert_eq!(clamp_pty_dims(u16::MAX, 1), (512, 1));
+    }
+
+    #[test]
+    fn write_payload_rejects_over_one_mib() {
+        assert!(!pty_write_too_large(0));
+        assert!(!pty_write_too_large(MAX_PTY_WRITE));
+        assert!(pty_write_too_large(MAX_PTY_WRITE + 1));
+    }
 }

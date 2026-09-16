@@ -36,6 +36,97 @@ pub fn has_descendants(parents: &HashMap<u32, u32>, root: u32) -> bool {
     false
 }
 
+/// Job handle whose members are killed when the handle is dropped.
+///
+/// Empty on non-Windows. Assignment is best-effort: a process already in a
+/// non-nested job, or a vanished PID, leaves the PTY running without a job.
+pub struct KillOnCloseJob {
+    #[cfg(windows)]
+    _handle: JobHandle,
+}
+
+#[cfg(windows)]
+struct JobHandle(winapi::shared::ntdef::HANDLE);
+
+#[cfg(windows)]
+unsafe impl Send for KillOnCloseJob {}
+#[cfg(windows)]
+unsafe impl Sync for KillOnCloseJob {}
+
+#[cfg(windows)]
+impl Drop for JobHandle {
+    fn drop(&mut self) {
+        unsafe {
+            winapi::um::handleapi::CloseHandle(self.0);
+        }
+    }
+}
+
+/// Assign `pid` to a kill-on-close job. `None` if the platform cannot, or
+/// assignment failed — the caller still owns the process.
+pub fn adopt_kill_on_close(pid: u32) -> Option<KillOnCloseJob> {
+    #[cfg(windows)]
+    {
+        windows_adopt_job(pid)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
+#[cfg(windows)]
+fn windows_adopt_job(pid: u32) -> Option<KillOnCloseJob> {
+    use std::ptr::null_mut;
+
+    use winapi::um::handleapi::CloseHandle;
+    use winapi::um::jobapi2::{
+        AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject,
+    };
+    use winapi::um::processthreadsapi::OpenProcess;
+    use winapi::um::winnt::{
+        JobObjectExtendedLimitInformation, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
+    };
+
+    if pid == 0 {
+        return None;
+    }
+
+    unsafe {
+        let handle = CreateJobObjectW(null_mut(), null_mut());
+        if handle.is_null() {
+            return None;
+        }
+        let job = KillOnCloseJob {
+            _handle: JobHandle(handle),
+        };
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        let sized = SetInformationJobObject(
+            job._handle.0,
+            JobObjectExtendedLimitInformation,
+            std::ptr::addr_of_mut!(info).cast(),
+            std::mem::size_of_val(&info) as u32,
+        );
+        if sized == 0 {
+            return None;
+        }
+        let process = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid);
+        if process.is_null() {
+            return None;
+        }
+        let ok = AssignProcessToJobObject(job._handle.0, process) != 0;
+        CloseHandle(process);
+        if ok {
+            Some(job)
+        } else {
+            None
+        }
+    }
+}
+
 #[cfg(windows)]
 fn platform_parents() -> HashMap<u32, u32> {
     windows_parents()

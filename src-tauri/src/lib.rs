@@ -39,7 +39,6 @@ pub fn run() {
             pty::pty_write,
             pty::pty_resize,
             pty::pty_kill,
-            pty::pty_alive,
             agents::detect_agents,
             agents::agent_catalogue_path,
             agents::agent_catalogue_defaults,
