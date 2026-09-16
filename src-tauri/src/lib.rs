@@ -16,7 +16,7 @@ mod vpn_service;
 mod watch;
 mod workspace;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 use pty::PtyManager;
 use vpn::VpnManager;
@@ -82,12 +82,18 @@ pub fn run() {
             vpn::vpn_disconnect,
         ])
         .on_window_event(|window, event| {
-            // Closing the window must take every child process with it, or the
-            // agents keep running headless. The private OpenVPN tunnel is the
-            // same: it exists only for this app.
-            if let tauri::WindowEvent::Destroyed | tauri::WindowEvent::CloseRequested { .. } = event
-            {
-                shutdown_managed(window.app_handle());
+            // CloseRequested is a *request*. Killing PTYs here would destroy
+            // unsaved work before the UI can ask. The frontend confirms, then
+            // destroys the window; Destroyed is what tears children down.
+            match event {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    api.prevent_close();
+                    let _ = window.emit("app:close-requested", ());
+                }
+                tauri::WindowEvent::Destroyed => {
+                    shutdown_managed(window.app_handle());
+                }
+                _ => {}
             }
         })
         .build(tauri::generate_context!())

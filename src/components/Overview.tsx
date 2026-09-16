@@ -21,6 +21,7 @@ import { listPanes } from "@/lib/tree";
 import { cn } from "@/lib/utils";
 import type { Agent, Project } from "@/lib/types";
 import { useKeel } from "@/state/store";
+import { useWorkspace } from "@/state/workspace";
 
 export interface OverviewProps {
   project: Project;
@@ -147,7 +148,7 @@ export function Overview({ project, agents, onClose }: OverviewProps) {
                   type="button"
                   aria-label={`Close ${deck.name}`}
                   onClick={() =>
-                    useKeel.getState().removeDeck(project.id, deck.id)
+                    useWorkspace.getState().removeDeckSafely(project.id, deck.id)
                   }
                   data-danger="true"
                   className="k-icon-btn size-6 opacity-0 transition-opacity group-hover/deck:opacity-100 focus-visible:opacity-100"

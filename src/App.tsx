@@ -36,6 +36,7 @@ import { VpnDialog } from "@/components/VpnDialog";
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
 import { pickProjectFolder, statePath } from "@/lib/backend";
+import { startCloseGuard } from "@/lib/closeGuard";
 import { onHostLost } from "@/lib/invoke";
 import {
   bindingFor,
@@ -201,6 +202,7 @@ export default function App() {
       void useKeel.getState().captureSession(paneId, generation);
     });
     const stopHost = onHostLost(() => useKeel.getState().noteHostLost());
+    const stopClose = startCloseGuard();
     // No browser context menu anywhere: "Reload" and "Inspect" have no business
     // in a desktop app. Every surface with something to offer opens its own.
     const blockNativeMenu = (event: MouseEvent) => event.preventDefault();
@@ -208,6 +210,7 @@ export default function App() {
     return () => {
       stopTracking();
       stopHost();
+      stopClose();
       window.removeEventListener("contextmenu", blockNativeMenu);
       void unlisten.then((stop) => stop());
       void unlistenAgent.then((stop) => stop());
@@ -425,7 +428,8 @@ export default function App() {
     addFolder: () => void pickFolder(),
     addWorkspace: () => useKeel.getState().addWorkspace(),
     addTerminals: () => setLaunching(true),
-    removeProject: () => project && useKeel.getState().removeProject(project.id),
+    removeProject: () =>
+      project && useWorkspace.getState().removeProjectSafely(project.id),
     newDeck: () => project && useKeel.getState().addDeck(project.id),
     showOverview: () => setOverview(true),
     fullscreenPane: () =>

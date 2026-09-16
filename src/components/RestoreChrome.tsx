@@ -22,8 +22,9 @@ export function RestoreChrome() {
               Couldn&apos;t restore your layout
             </p>
             <p className="mt-2 text-[13px] leading-relaxed text-dim">
-              Last session&apos;s file didn&apos;t load cleanly. Retry it, or
-              start from an empty deck.
+              Last session&apos;s file didn&apos;t load cleanly. Saving is
+              paused so it isn&apos;t overwritten. Retry it, or start from an
+              empty deck.
             </p>
             <div className="mt-4 flex justify-center gap-2">
               <Button

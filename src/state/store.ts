@@ -29,7 +29,7 @@ import {
   type KeybindingOverrides,
   type ShortcutId,
 } from "../lib/keymap.ts";
-import { pickCapturedSession, unboundSession } from "../lib/launch.ts";
+import { isSessionId, pickCapturedSession, unboundSession } from "../lib/launch.ts";
 import {
   briefFromOsc,
   briefFromPrompt,
@@ -37,7 +37,7 @@ import {
   type TitleSource,
 } from "../lib/paneTitle.ts";
 import { editorRefId, editorRefName } from "../lib/editorRefs.ts";
-import { moveTo } from "../lib/order.ts";
+import { moveTo, swapAt } from "../lib/order.ts";
 import { killPty } from "../lib/pty.ts";
 import {
   balance,
@@ -157,6 +157,8 @@ export interface KeelState {
   closeVpnSettings: () => void;
 
   init: () => Promise<void>;
+  /** Write the current layout now, skipping the debounce. */
+  flushPersist: () => void;
   /** Re-run state_load / hydrate after a failed restore. */
   retryRestore: () => Promise<void>;
   /** Abandon broken session layout → empty projects UI. */
@@ -440,7 +442,7 @@ function shift<T>(items: T[], match: (item: T) => boolean, delta: -1 | 1): T[] {
   const to = from + delta;
   if (from < 0 || to < 0 || to >= items.length) return items;
   const next = [...items];
-  [next[from], next[to]] = [next[to], next[from]];
+  swapAt(next, from, to);
   return next;
 }
 
@@ -702,9 +704,13 @@ export const useKeel = create<KeelState>((set, get) => {
   /** Debounced write-through. Every mutation calls this; disk sees one write. */
   function persist(immediate = false) {
     if (!get().ready) return;
+    // A failed restore must not write the empty in-memory document over keel.json.
+    if (get().restoreStatus === "failed") return;
     if (saveTimer) clearTimeout(saveTimer);
     const write = () => {
       saveTimer = null;
+      if (!get().ready) return;
+      if (get().restoreStatus === "failed") return;
       const { projects, workspaces, sidebar, activeProjectId, accounts, vpn, keybindings } =
         get();
       const projectIds = new Set(projects.map((project) => project.id));
@@ -781,13 +787,17 @@ export const useKeel = create<KeelState>((set, get) => {
     for (const project of state.projects) {
       const deck = deckOfPane(project, paneId);
       if (!deck || !deck.panes[paneId]) continue;
-      updateDeck(project.id, deck.id, (current) => ({
-        ...current,
-        panes: {
-          ...current.panes,
-          [paneId]: change(current.panes[paneId]),
-        },
-      }));
+      updateDeck(project.id, deck.id, (current) => {
+        const pane = current.panes[paneId];
+        if (!pane) return current;
+        return {
+          ...current,
+          panes: {
+            ...current.panes,
+            [paneId]: change(pane),
+          },
+        };
+      });
       if (immediate) persist(true);
       return;
     }
@@ -867,9 +877,18 @@ export const useKeel = create<KeelState>((set, get) => {
     hostLost: false,
     vpn: emptyVpn(DEFAULT_VPN),
 
+    flushPersist() {
+      persist(true);
+    },
+
     async init() {
       restoreSettled.clear();
       activity.clear();
+      // A debounce from the previous session must not land during this load.
+      if (saveTimer) {
+        clearTimeout(saveTimer);
+        saveTimer = null;
+      }
       const existing = countPanes(get().projects);
       set({
         restoreStatus: existing > 0 ? "restoring" : "idle",
@@ -969,7 +988,6 @@ export const useKeel = create<KeelState>((set, get) => {
         }
       }
       set({
-        accounts: [],
         projects: [],
         workspaces: [],
         sidebar: [],
@@ -1049,18 +1067,22 @@ export const useKeel = create<KeelState>((set, get) => {
         const account = get().accounts.find((item) => item.id === accountId);
         if (!account || account.agentId !== pane.agentId) return;
       }
-      updateDeck(projectId, deck.id, (current) => ({
-        ...current,
-        panes: {
-          ...current.panes,
-          [paneId]: {
-            ...current.panes[paneId],
-            accountId,
-            // A different login has its own session store.
-            ...unboundSession(),
+      updateDeck(projectId, deck.id, (current) => {
+        const currentPane = current.panes[paneId];
+        if (!currentPane) return current;
+        return {
+          ...current,
+          panes: {
+            ...current.panes,
+            [paneId]: {
+              ...currentPane,
+              accountId,
+              // A different login has its own session store.
+              ...unboundSession(),
+            },
           },
-        },
-      }));
+        };
+      });
     },
 
     renameAccount(accountId, name) {
@@ -1120,7 +1142,45 @@ export const useKeel = create<KeelState>((set, get) => {
 
     async saveAgents(agents) {
       const detected = await backend.saveAgentCatalogue(agents);
-      set({ agents: detected });
+      const known = new Set(detected.map((agent) => agent.id));
+      const state = get();
+      const accounts = state.accounts.filter((account) =>
+        known.has(account.agentId),
+      );
+      let projectsTouched = false;
+      const projects = state.projects.map((project) => {
+        let projectTouched = false;
+        const decks = project.decks.map((deck) => {
+          let touched = false;
+          const panes = Object.fromEntries(
+            Object.entries(deck.panes).map(([id, pane]) => {
+              if (!pane.agentId || known.has(pane.agentId)) return [id, pane];
+              touched = true;
+              return [
+                id,
+                {
+                  ...pane,
+                  agentId: null,
+                  accountId: null,
+                  resumeAgent: false,
+                  ...unboundSession(),
+                },
+              ];
+            }),
+          );
+          if (touched) projectTouched = true;
+          return touched ? { ...deck, panes } : deck;
+        });
+        if (projectTouched) projectsTouched = true;
+        return projectTouched ? { ...project, decks } : project;
+      });
+      const accountsTouched = accounts.length !== state.accounts.length;
+      set({
+        agents: detected,
+        ...(accountsTouched ? { accounts } : {}),
+        ...(projectsTouched ? { projects } : {}),
+      });
+      if (accountsTouched || projectsTouched) persist();
     },
 
     restartPane(paneId) {
@@ -1166,6 +1226,7 @@ export const useKeel = create<KeelState>((set, get) => {
     },
 
     bindSession(paneId, sessionId) {
+      if (!isSessionId(sessionId)) return;
       const pane = findPane(paneId);
       if (!pane) return;
       if (pane.sessionId === sessionId && pane.sessionReady) return;
@@ -1443,17 +1504,21 @@ export const useKeel = create<KeelState>((set, get) => {
     renamePane(projectId, paneId, title) {
       const clean = title.trim();
       if (!clean) return;
-      updateDeckOfPane(projectId, paneId, (deck) => ({
-        ...deck,
-        panes: {
-          ...deck.panes,
-          [paneId]: {
-            ...deck.panes[paneId],
-            title: clean,
-            titleLocked: true,
+      updateDeckOfPane(projectId, paneId, (deck) => {
+        const pane = deck.panes[paneId];
+        if (!pane) return deck;
+        return {
+          ...deck,
+          panes: {
+            ...deck.panes,
+            [paneId]: {
+              ...pane,
+              title: clean,
+              titleLocked: true,
+            },
           },
-        },
-      }));
+        };
+      });
     },
 
     autoTitlePane(paneId, raw, source) {
@@ -1773,7 +1838,7 @@ export const useKeel = create<KeelState>((set, get) => {
           decks,
           activeDeckId:
             current.activeDeckId === deckId
-              ? decks[0].id
+              ? (decks[0]?.id ?? current.activeDeckId)
               : current.activeDeckId,
         };
       });
@@ -2011,7 +2076,7 @@ export const useKeel = create<KeelState>((set, get) => {
         (paneId) => deck.panes[paneId]?.editor,
       );
       const holding = editors.find((paneId) =>
-        deck.panes[paneId].editor?.tabs.some((tab) => editorRefId(tab) === id),
+        deck.panes[paneId]?.editor?.tabs.some((tab) => editorRefId(tab) === id),
       );
       const focusedEditor =
         deck.focused && editors.includes(deck.focused) ? deck.focused : null;
@@ -2020,6 +2085,7 @@ export const useKeel = create<KeelState>((set, get) => {
       if (target) {
         updateDeck(projectId, deck.id, (current) => {
           const pane = current.panes[target];
+          if (!pane) return current;
           const tabs = pane.editor?.tabs ?? [];
           const next = tabs.some((tab) => editorRefId(tab) === id)
             ? tabs
@@ -2076,17 +2142,24 @@ export const useKeel = create<KeelState>((set, get) => {
         return;
       }
       // Closing the tab you are on shows its neighbour, the way browsers do.
+      const neighbour = rest[Math.min(index, rest.length - 1)] ?? rest[0];
+      if (!neighbour) {
+        get().dismissPane(projectId, paneId);
+        return;
+      }
       const active =
-        editor.active === tabId
-          ? editorRefId(rest[Math.min(index, rest.length - 1)])
-          : editor.active;
-      updateDeckOfPane(projectId, paneId, (deck) => ({
-        ...deck,
-        panes: {
-          ...deck.panes,
-          [paneId]: showTab(deck.panes[paneId], rest, active),
-        },
-      }));
+        editor.active === tabId ? editorRefId(neighbour) : editor.active;
+      updateDeckOfPane(projectId, paneId, (deck) => {
+        const currentPane = deck.panes[paneId];
+        if (!currentPane) return deck;
+        return {
+          ...deck,
+          panes: {
+            ...deck.panes,
+            [paneId]: showTab(currentPane, rest, active),
+          },
+        };
+      });
     },
 
     rewriteEditorTabs(projectPath, change) {

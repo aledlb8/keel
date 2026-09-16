@@ -568,7 +568,7 @@ export function projectMenu(projectId: string): MenuEntry[] {
       destructive: true,
       confirm:
         count > 0 ? `Close ${plural(count, "terminal")} and remove` : "Click again to remove",
-      onSelect: () => state.removeProject(projectId),
+      onSelect: () => useWorkspace.getState().removeProjectSafely(projectId),
     },
   ];
 }
@@ -686,7 +686,8 @@ export function deckMenu(projectId: string, deckId: string): MenuEntry[] {
       icon: Trash2,
       destructive: true,
       confirm: count > 0 ? `Close ${plural(count, "terminal")}` : undefined,
-      onSelect: () => state.removeDeck(projectId, deckId),
+      onSelect: () =>
+        useWorkspace.getState().removeDeckSafely(projectId, deckId),
     },
   ];
 }
