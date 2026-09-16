@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import {
   applySession,
+  isSessionId,
   pickCapturedSession,
   unboundSession,
 } from "./launch.ts";
@@ -64,14 +65,14 @@ describe("applySession", () => {
         sessionId: leftoverId,
         sessionReady: true,
       }),
-      "grok --resume 11111111-1111-4111-8111-111111111111",
+      'grok --resume "11111111-1111-4111-8111-111111111111"',
     );
     assert.equal(
       applySession("grok", grokBare, {
         sessionId: leftoverId,
         sessionReady: true,
       }),
-      "grok --resume 11111111-1111-4111-8111-111111111111",
+      'grok --resume "11111111-1111-4111-8111-111111111111"',
     );
   });
 
@@ -92,14 +93,14 @@ describe("applySession", () => {
         sessionId: "abc-123",
         sessionReady: true,
       }),
-      "claude --resume abc-123",
+      'claude --resume "abc-123"',
     );
     assert.equal(
       applySession("claude", claudeBare, {
         sessionId: "abc-123",
         sessionReady: true,
       }),
-      "claude --resume abc-123",
+      'claude --resume "abc-123"',
     );
   });
 
@@ -109,7 +110,7 @@ describe("applySession", () => {
         sessionId: leftoverId,
         sessionReady: true,
       }),
-      "grok --yolo --resume 11111111-1111-4111-8111-111111111111",
+      'grok --yolo --resume "11111111-1111-4111-8111-111111111111"',
     );
   });
 
@@ -134,7 +135,7 @@ describe("applySession", () => {
         sessionId: "abc",
         sessionReady: true,
       }),
-      "codex resume abc",
+      'codex resume "abc"',
     );
   });
 
@@ -144,7 +145,7 @@ describe("applySession", () => {
         sessionId: "abc",
         sessionReady: true,
       }),
-      "codex resume abc --search",
+      'codex resume "abc" --search',
     );
   });
 
@@ -158,7 +159,7 @@ describe("applySession", () => {
         sessionId: "sess",
         sessionReady: true,
       }),
-      "gemini --resume sess",
+      'gemini --resume "sess"',
     );
   });
 
@@ -212,7 +213,7 @@ describe("session identity", () => {
     const restored = { sessionId: "abc-123", sessionReady: true };
     assert.equal(
       applySession("claude", claudeBare, restored),
-      "claude --resume abc-123",
+      'claude --resume "abc-123"',
     );
   });
 
@@ -220,6 +221,43 @@ describe("session identity", () => {
     const leftover = { sessionId: leftoverId, sessionReady: false };
     assert.equal(applySession("claude", claude, leftover), "claude");
     assert.equal(applySession("grok", grok, leftover), "grok");
+  });
+
+  it("does not interpolate a session id that is not a single safe word", () => {
+    assert.equal(
+      applySession("grok", grok, {
+        sessionId: "x & calc",
+        sessionReady: true,
+      }),
+      "grok",
+    );
+    assert.equal(
+      applySession("claude", claude, {
+        sessionId: "x & calc",
+        sessionReady: true,
+      }),
+      "claude",
+    );
+  });
+});
+
+describe("isSessionId", () => {
+  it("accepts uuid and simple captured names", () => {
+    assert.equal(isSessionId(leftoverId), true);
+    assert.equal(isSessionId("abc-123"), true);
+    assert.equal(isSessionId("a".repeat(128)), true);
+    assert.equal(isSessionId(".."), true);
+  });
+
+  it("rejects empty, too long, spaces, and shell metacharacters", () => {
+    assert.equal(isSessionId(""), false);
+    assert.equal(isSessionId("a".repeat(129)), false);
+    assert.equal(isSessionId("has space"), false);
+    assert.equal(isSessionId("x & calc"), false);
+    assert.equal(isSessionId("id;rm"), false);
+    assert.equal(isSessionId(";"), false);
+    assert.equal(isSessionId("$()"), false);
+    assert.equal(isSessionId("$(reboot)"), false);
   });
 });
 

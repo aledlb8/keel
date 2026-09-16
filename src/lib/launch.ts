@@ -29,6 +29,11 @@ export function unboundSession(): SessionState {
   return { sessionId: null, sessionReady: false };
 }
 
+const SESSION_ID = /^[A-Za-z0-9._-]{1,128}$/;
+export function isSessionId(id: string): boolean {
+  return SESSION_ID.test(id);
+}
+
 /**
  * Which conversation on disk belongs to this spawn.
  *
@@ -87,8 +92,8 @@ function fillTemplate(template: string, id: string | null): string | null {
   const trimmed = template.trim();
   if (!trimmed) return null;
   if (trimmed.includes("{id}")) {
-    if (!id) return null;
-    return trimmed.replace(/\{id\}/g, id);
+    if (!id || !isSessionId(id)) return null;
+    return trimmed.replace(/\{id\}/g, `"${id}"`);
   }
   return trimmed;
 }
