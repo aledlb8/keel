@@ -6,6 +6,7 @@ import {
   briefFromPrompt,
   createPromptDraft,
   isGenericLabel,
+  sanitizeTitle,
   TITLE_MAX,
   type TitleAgent,
 } from "./paneTitle.ts";
@@ -71,6 +72,26 @@ describe("briefFromOsc", () => {
     assert.equal(briefFromOsc("~/Documents/code/keel", claude), null);
     assert.equal(briefFromOsc("powershell.exe", claude), null);
     assert.equal(briefFromOsc("Administrator: C:\\Windows", claude), null);
+  });
+
+  it("strips controls and refuses Keel impersonation", () => {
+    assert.equal(briefFromOsc("Keel", claude), null);
+    assert.equal(briefFromOsc("Keel\nYour files are gone", claude), null);
+    assert.equal(
+      briefFromOsc("Keel — fix the login redirect", claude),
+      "fix the login redirect",
+    );
+    assert.equal(
+      briefFromOsc("fix the\x07 login\nredirect", claude),
+      "fix the login redirect",
+    );
+  });
+});
+
+describe("sanitizeTitle", () => {
+  it("turns C0/C1 into spaces and trims", () => {
+    assert.equal(sanitizeTitle("fix\nthe\x1btask\x9B"), "fix the task");
+    assert.equal(sanitizeTitle("\x00Keel\r\n"), "Keel");
   });
 });
 

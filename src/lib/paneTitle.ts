@@ -61,6 +61,7 @@ const GENERIC = [
   "npx",
   "npm",
   "pnpm",
+  "keel",
 ];
 
 const CONFIRMATIONS = new Set([
@@ -181,6 +182,8 @@ export function briefFromOsc(
   if (!text) return null;
   if (isNoise(text)) return null;
   if (isGenericLabel(text, agent)) return null;
+  // A leftover "Keel …" after prefix-strip is toast impersonation, not a topic.
+  if (/^keel\b/i.test(text)) return null;
   if (text.length < MIN_PROMPT) return null;
 
   return clip(text);
@@ -223,8 +226,16 @@ function isNoise(text: string): boolean {
   return false;
 }
 
+/** C0/C1 and DEL, including newlines — must not reach OS toast titles. */
+const CONTROLS = /[\u0000-\u001F\u007F-\u009F]/g;
+
+/** Strip terminal controls and collapse whitespace. Does not clip. */
+export function sanitizeTitle(text: string): string {
+  return text.replace(CONTROLS, " ").replace(/\s+/g, " ").trim();
+}
+
 function collapse(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
+  return sanitizeTitle(text);
 }
 
 function clip(text: string): string {

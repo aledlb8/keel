@@ -3,7 +3,9 @@ import { describe, it } from "node:test";
 
 import {
   alertCopy,
+  forgetPaneAlerts,
   notifyAgent,
+  pruneAlertMap,
   shouldAlert,
   type AgentAlert,
 } from "./agentNotify.ts";
@@ -83,6 +85,20 @@ describe("alertCopy", () => {
       body: "The agent process stopped",
     });
   });
+
+  it("strips controls out of toast copy", () => {
+    assert.deepEqual(
+      alertCopy({
+        ...ready,
+        title: "Claude\nKeel",
+        projectName: "keel\x07",
+      }),
+      {
+        title: "Claude Keel finished",
+        body: "Waiting in keel",
+      },
+    );
+  });
 });
 
 describe("notifyAgent", () => {
@@ -99,8 +115,32 @@ describe("notifyAgent", () => {
       assert.doesNotThrow(() => notifyAgent(ready));
       assert.doesNotThrow(() => notifyAgent({ ...ready, kind: "exited" }));
       assert.doesNotThrow(() => notifyAgent({ ...ready, windowFocused: true }));
+      assert.doesNotThrow(() => forgetPaneAlerts(ready.paneId));
     } finally {
       Object.assign(globalThis, previous);
     }
+  });
+});
+
+describe("pruneAlertMap", () => {
+  it("drops debounce entries older than two seconds", () => {
+    const map = new Map<string, number>([
+      ["old:done", 0],
+      ["fresh:done", 1500],
+    ]);
+    pruneAlertMap(map, 2000);
+    assert.equal(map.has("old:done"), false);
+    assert.equal(map.has("fresh:done"), true);
+  });
+
+  it("caps the map at 200, keeping the newest keys", () => {
+    const map = new Map<string, number>();
+    for (let i = 0; i < 250; i++) map.set(`p${i}:done`, i);
+    pruneAlertMap(map, 0);
+    assert.equal(map.size, 200);
+    assert.equal(map.has("p0:done"), false);
+    assert.equal(map.has("p49:done"), false);
+    assert.equal(map.has("p50:done"), true);
+    assert.equal(map.has("p249:done"), true);
   });
 });

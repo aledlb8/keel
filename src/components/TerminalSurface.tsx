@@ -22,7 +22,7 @@ import { Terminal, type ITheme, type IWindowsPty } from "@xterm/xterm";
 
 import { TerminalSearch } from "@/components/TerminalSearch";
 import { readAgentScreen } from "@/lib/agentActivity";
-import { createPromptDraft, type TitleSource } from "@/lib/paneTitle";
+import { briefFromOsc, createPromptDraft, type TitleSource } from "@/lib/paneTitle";
 import { resizePty, spawnPty, writePty } from "@/lib/pty";
 import {
   isTerminalFindChord,
@@ -36,6 +36,13 @@ import { useKeel } from "@/state/store";
  * redraws on top of that. Dragging a seam should cost one of those, not sixty.
  */
 const PTY_RESIZE_DELAY_MS = 60;
+
+/** xterm will happily feed a multi-megabyte clipboard into `onData`. */
+const PASTE_MAX_CHARS = 256 * 1024;
+
+function capPaste(text: string): string {
+  return text.length > PASTE_MAX_CHARS ? text.slice(0, PASTE_MAX_CHARS) : text;
+}
 
 /**
  * How long after the layout stops moving before we recell the grid.
@@ -169,7 +176,7 @@ export function terminalCommands(paneId: string) {
         .readText()
         // `paste` goes through the same path as typing, bracketed when the
         // program asked for that.
-        .then((text) => text && term()?.paste(text))
+        .then((text) => text && term()?.paste(capPaste(text)))
         .catch(() => {});
       term()?.focus();
     },
@@ -272,8 +279,8 @@ export interface TerminalSurfaceProps {
   /** Typed into the shell once. Changing it does nothing until a restart. */
   command: string | null;
   /** CLI-specific config-home variable and the selected isolated profile. */
-  accountEnv?: string | null;
-  accountId?: string | null;
+  accountEnv?: string | null | undefined;
+  accountId?: string | null | undefined;
   /** Bumping this respawns the process in the same terminal, keeping scrollback. */
   generation: number;
   /** On the active deck of the active project — i.e. actually on screen. */
@@ -281,12 +288,12 @@ export interface TerminalSurfaceProps {
   focused: boolean;
   onOutput: (paneId: string) => void;
   /** Keystrokes, resizes and (re)starts — the things output is a reply to. */
-  onActivity?: (paneId: string, kind: PaneActivity, data?: string) => void;
+  onActivity?: ((paneId: string, kind: PaneActivity, data?: string) => void) | undefined;
   onFocus: (paneId: string) => void;
   /** Spawn settled — ok or fail. Used for reopen chrome + spawn-fail UI. */
-  onSpawnResult?: (paneId: string, ok: boolean, reason?: string) => void;
+  onSpawnResult?: ((paneId: string, ok: boolean, reason?: string) => void) | undefined;
   /** A prompt was submitted, or the process set the window title. */
-  onTitle?: (paneId: string, title: string, source: TitleSource) => void;
+  onTitle?: ((paneId: string, title: string, source: TitleSource) => void) | undefined;
 }
 
 /**
@@ -467,7 +474,7 @@ export const TerminalSurface = memo(function TerminalSurface({
       minimumContrastRatio: 1,
       // Known up front so the scrollback heuristics apply from the first byte;
       // the build number is filled in below once the webview reports it.
-      windowsPty: isWindows ? { backend: "conpty" } : undefined,
+      ...(isWindows ? { windowsPty: { backend: "conpty" as const } } : {}),
       theme: keelTerminalTheme(),
     });
 
@@ -600,6 +607,7 @@ export const TerminalSurface = memo(function TerminalSurface({
     layout.observe(host);
     refit("commit");
 
+    let writes: Promise<void> = Promise.resolve();
     const typed = term.onData((data) => {
       if (pty.current.ready) {
         handlers.current.onActivity?.(paneId, "input", data);
@@ -608,11 +616,14 @@ export const TerminalSurface = memo(function TerminalSurface({
       }
       // Startup cursor/device queries also arrive here, sometimes before the
       // spawn promise settles. The shell still needs those replies.
-      void writePty(paneId, data).catch(() => {});
+      writes = writes.catch(() => {}).then(() => writePty(paneId, data));
+      void writes;
     });
 
     const titled = term.onTitleChange((title) => {
-      handlers.current.onTitle?.(paneId, title, "osc");
+      // briefFromOsc strips C0/C1, generic program names, and "Keel".
+      const brief = briefFromOsc(title, null);
+      if (brief) handlers.current.onTitle?.(paneId, brief, "osc");
     });
 
     const textarea = term.textarea;
@@ -656,6 +667,16 @@ export const TerminalSurface = memo(function TerminalSurface({
       event.stopImmediatePropagation();
       void writePty(paneId, "\x16").catch(() => {});
     };
+    const pasteCap = (event: ClipboardEvent) => {
+      const data = event.clipboardData;
+      if (!data) return;
+      const text = data.getData("text/plain");
+      if (!text || text.length <= PASTE_MAX_CHARS) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      term.paste(capPaste(text));
+    };
+    textarea?.addEventListener("paste", pasteCap, true);
     textarea?.addEventListener("paste", pasteImage, true);
 
     // Theme / class changes update the palette in place — never remount xterm.
@@ -679,6 +700,7 @@ export const TerminalSurface = memo(function TerminalSurface({
       layout.disconnect();
       palette.disconnect();
       textarea?.removeEventListener("focus", noteFocus);
+      textarea?.removeEventListener("paste", pasteCap, true);
       textarea?.removeEventListener("paste", pasteImage, true);
       typed.dispose();
       titled.dispose();
@@ -749,12 +771,18 @@ export const TerminalSurface = memo(function TerminalSurface({
             if (!isCurrent()) return;
             handlers.current.onOutput(paneId);
             pendingWrites++;
-            term.write(bytes, () => {
-              pendingWrites--;
-              if (!isCurrent() || pendingWrites !== 0 || screenTimer !== undefined) return;
-              // Timers also run for hidden decks, unlike animation frames.
-              screenTimer = setTimeout(sampleScreen, 50);
-            });
+            try {
+              term.write(bytes, () => {
+                pendingWrites--;
+                if (!isCurrent() || pendingWrites !== 0 || screenTimer !== undefined) return;
+                // Timers also run for hidden decks, unlike animation frames.
+                screenTimer = setTimeout(sampleScreen, 50);
+              });
+            } catch {
+              // xterm throws once its ~50 MB write buffer is full. Drop the
+              // chunk rather than leave activity sampling wedged.
+              pendingWrites = 0;
+            }
           },
         );
         if (!isCurrent()) return;
