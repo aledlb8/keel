@@ -17,7 +17,7 @@ The feature is an application-routing convenience, not a host firewall or proces
 
 ## Profile isolation
 
-Keel writes a temporary working copy of the selected profile. The generated configuration suppresses server-pushed routing and DNS changes, removes inherited explicit routes, and adds a low-priority default route through the VPN gateway. The normal Windows default route therefore remains preferred for unpinned traffic while tunnel-pinned sockets retain a usable route.
+Keel writes a working copy of the selected profile to a fixed path (`keel-app.ovpn` in the user's OpenVPN config directory). The generated configuration suppresses server-pushed routing and DNS changes, removes inherited explicit routes, and adds a low-priority default route through the VPN gateway. The normal Windows default route therefore remains preferred for unpinned traffic while tunnel-pinned sockets retain a usable route.
 
 The original profile is never rewritten by this process.
 

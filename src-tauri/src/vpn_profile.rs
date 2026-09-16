@@ -4,38 +4,175 @@
 //! default route and the whole PC goes through the VPN. The documented way to
 //! keep the PC off the VPN is a client-side override:
 //!
-//! - strip any `redirect-gateway` already in the file
+//! - keep only an allowlist of client-tunnel directives (scripts, plugins,
+//!   management, and unknown verbs are dropped)
+//! - strip routing/DNS even when those verbs are on the allowlist
 //! - `route-nopull` so pushed routes/DNS never hit the routing table
 //! - `pull-filter ignore "redirect-gateway"` as a belt (OpenVPN 2.4+)
 //!
 //! The TUN/TAP still gets an address. Keel then binds *its* traffic to that
 //! interface. Everyone else keeps using the normal default route.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-/// Directives that would steal the PC's default route, DNS, or leak-block the
-/// rest of the machine. Dropped from the copy Keel actually runs.
-fn is_system_wide_line(trimmed: &str) -> bool {
-    let lower = trimmed.to_ascii_lowercase();
-    let first = lower.split_whitespace().next().unwrap_or("");
+/// Inline PEM/key/auth blobs. Unknown tags (including `<http-proxy>`) are skipped.
+const INLINE_FILE_TAGS: &[&str] = &[
+    "ca",
+    "cert",
+    "key",
+    "tls-auth",
+    "tls-crypt",
+    "tls-crypt-v2",
+    "auth-user-pass",
+];
+
+fn directive_verb(trimmed: &str) -> &str {
+    trimmed.split_whitespace().next().unwrap_or("")
+}
+
+fn eq_verb(verb: &str, expected: &str) -> bool {
+    verb.eq_ignore_ascii_case(expected)
+}
+
+/// Client-tunnel verbs plus what `isolate_profile_with` appends. Host takeover
+/// verbs sit on this list only so the strip check can name them explicitly.
+fn is_allowed_directive(verb: &str) -> bool {
+    is_client_tunnel_directive(verb) || is_stripped_host_directive(verb)
+}
+
+fn is_client_tunnel_directive(verb: &str) -> bool {
     matches!(
-        first,
+        verb.to_ascii_lowercase().as_str(),
+        "client"
+            | "dev"
+            | "dev-type"
+            | "proto"
+            | "remote"
+            | "remote-random"
+            | "resolv-retry"
+            | "nobind"
+            | "persist-key"
+            | "persist-tun"
+            | "auth-user-pass"
+            | "auth"
+            | "cipher"
+            | "data-ciphers"
+            | "data-ciphers-fallback"
+            | "tls-client"
+            | "tls-version-min"
+            | "remote-cert-tls"
+            | "ca"
+            | "cert"
+            | "key"
+            | "tls-auth"
+            | "tls-crypt"
+            | "tls-crypt-v2"
+            | "key-direction"
+            | "verb"
+            | "mute"
+            | "keepalive"
+            | "ping"
+            | "ping-restart"
+            | "reneg-sec"
+            | "sndbuf"
+            | "rcvbuf"
+            | "tun-mtu"
+            | "mssfix"
+            | "fast-io"
+            | "user"
+            | "group"
+            | "compress"
+            | "comp-lzo"
+            | "auth-nocache"
+            | "pull"
+            | "ncp-ciphers"
+            | "engine"
+            | "providers"
+            | "remote-cert-eku"
+            | "verify-x509-name"
+            | "tls-cipher"
+            | "tls-ciphersuites"
+            | "ns-cert-type"
+            | "key-method"
+            | "secret"
+    )
+}
+
+/// Routing/DNS that would take over the PC, and isolation lines we re-append.
+fn is_stripped_host_directive(verb: &str) -> bool {
+    matches!(
+        verb.to_ascii_lowercase().as_str(),
         "redirect-gateway"
             | "redirect-gateway-ipv6"
-            | "route-nopull"
-            | "route-noexec"
-            | "block-outside-dns"
-            | "register-dns"
-            | "pull-filter"
-            | "ip-win32"
-            | "windows-driver"
+            | "dhcp-option"
             | "route"
             | "route-ipv6"
             | "redirect-private"
+            | "block-outside-dns"
+            | "register-dns"
+            | "route-nopull"
+            | "route-noexec"
+            | "pull-filter"
+            | "ip-win32"
+            | "windows-driver"
             | "explicit-exit-notify"
-    ) || lower.contains("block-outside-dns")
-        || lower.starts_with("dhcp-option dns")
-        || lower.starts_with("dhcp-option domain")
+    )
+}
+
+fn is_external_material_directive(verb: &str) -> bool {
+    matches!(
+        verb.to_ascii_lowercase().as_str(),
+        "ca" | "cert" | "key" | "tls-auth" | "tls-crypt" | "tls-crypt-v2" | "secret"
+    )
+}
+
+fn has_directive_args(trimmed: &str) -> bool {
+    let mut parts = trimmed.split_whitespace();
+    parts.next();
+    parts.next().is_some()
+}
+
+fn is_inline_arg(arg: &str) -> bool {
+    arg.eq_ignore_ascii_case("[inline]")
+}
+
+/// Drop filesystem forms of key material. `ca [inline]` is not a path; the
+/// matching `<ca>` block (if any) is kept separately.
+fn is_external_material_path(verb: &str, trimmed: &str) -> bool {
+    if !is_external_material_directive(verb) {
+        return false;
+    }
+    let mut parts = trimmed.split_whitespace();
+    parts.next();
+    match parts.next() {
+        None => false,
+        Some(arg) => !is_inline_arg(arg),
+    }
+}
+
+fn is_keep_inline_tag(name: &str) -> bool {
+    INLINE_FILE_TAGS.iter().any(|tag| eq_verb(name, tag))
+}
+
+/// `(tag, closing)` for a line that is an OpenVPN inline `<tag>` / `</tag>`.
+fn parse_inline_tag(trimmed: &str) -> Option<(String, bool)> {
+    if !trimmed.starts_with('<') {
+        return None;
+    }
+    let end = trimmed.find('>')?;
+    let inner = trimmed[1..end].trim();
+    if inner.is_empty() {
+        return None;
+    }
+    let (name, closing) = match inner.strip_prefix('/') {
+        Some(rest) => (rest.trim(), true),
+        None => (inner, false),
+    };
+    let name = name.split_whitespace().next()?.to_ascii_lowercase();
+    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return None;
+    }
+    Some((name, closing))
 }
 
 /// Rewrite a `.ovpn` so bringing it up does not take over the PC.
@@ -46,14 +183,60 @@ pub fn isolate_profile(source: &str) -> String {
 /// `windows_driver` is an OpenVPN `--windows-driver` value, e.g. `tap-windows6`.
 pub fn isolate_profile_with(source: &str, windows_driver: Option<&str>) -> String {
     let mut body = String::with_capacity(source.len() + 512);
+    // Some(tag) while inside an allowed PEM/auth block; skipped tags use `skip`.
+    let mut keep_block: Option<String> = None;
+    let mut skip_block: Option<String> = None;
     for line in source.lines() {
         let trimmed = line.trim();
+        if keep_block.is_some() {
+            body.push_str(line);
+            body.push('\n');
+            if let Some((name, true)) = parse_inline_tag(trimmed) {
+                if keep_block.as_deref() == Some(name.as_str()) {
+                    keep_block = None;
+                }
+            }
+            continue;
+        }
+        if skip_block.is_some() {
+            if let Some((name, true)) = parse_inline_tag(trimmed) {
+                if skip_block.as_deref() == Some(name.as_str()) {
+                    skip_block = None;
+                }
+            }
+            continue;
+        }
         if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with(';') {
             body.push_str(line);
             body.push('\n');
             continue;
         }
-        if is_system_wide_line(trimmed) {
+        if let Some((name, closing)) = parse_inline_tag(trimmed) {
+            if closing {
+                continue;
+            }
+            if is_keep_inline_tag(&name) {
+                body.push_str(line);
+                body.push('\n');
+                keep_block = Some(name);
+                continue;
+            }
+            // `<connection>` groups remotes; drop the tags, allowlist the body.
+            if name == "connection" {
+                continue;
+            }
+            skip_block = Some(name);
+            continue;
+        }
+        let verb = directive_verb(trimmed);
+        if !is_allowed_directive(verb) || is_stripped_host_directive(verb) {
+            continue;
+        }
+        if is_external_material_path(verb, trimmed) {
+            continue;
+        }
+        if eq_verb(verb, "auth-user-pass") && has_directive_args(trimmed) {
+            body.push_str("auth-user-pass\n");
             continue;
         }
         body.push_str(line);
@@ -106,17 +289,12 @@ pub fn needs_interactive_auth(source: &str) -> bool {
         if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with(';') {
             continue;
         }
-        let mut parts = trimmed.split_whitespace();
-        let Some(verb) = parts.next() else {
-            continue;
-        };
-        if !verb.eq_ignore_ascii_case("auth-user-pass") {
-            continue;
+        let verb = directive_verb(trimmed);
+        if verb.eq_ignore_ascii_case("auth-user-pass") {
+            // Isolation strips any credentials-file argument, so OpenVPN would
+            // block on stdin unless the profile also has an inline block.
+            return true;
         }
-        return match parts.next() {
-            None => true,
-            Some(path) => !Path::new(path).is_file(),
-        };
     }
     false
 }
@@ -268,8 +446,92 @@ MIIB
     fn autologin_profile_does_not_need_stdin() {
         assert!(!needs_interactive_auth(SAMPLE));
         assert!(needs_interactive_auth("client\nauth-user-pass\n"));
+        assert!(needs_interactive_auth(
+            "client\nauth-user-pass /tmp/creds.txt\n"
+        ));
         assert!(!needs_interactive_auth(
             "client\n<auth-user-pass>\nuser\npass\n</auth-user-pass>\n"
         ));
+    }
+
+    fn has_directive(config: &str, verb: &str) -> bool {
+        config.lines().any(|line| {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with(';') {
+                return false;
+            }
+            trimmed
+                .split_whitespace()
+                .next()
+                .is_some_and(|first| first.eq_ignore_ascii_case(verb))
+        })
+    }
+
+    #[test]
+    fn isolate_drops_scripts_plugins_and_passthrough() {
+        let source = r#"
+client
+dev tun
+proto udp
+remote vpn.example.com 1194
+up /bin/true
+plugin /tmp/evil.so
+management 127.0.0.1 9999
+setenv FOO BAR
+dhcp-option  DNS 10.0.0.1
+<ca>
+-----BEGIN CERTIFICATE-----
+MIIB
+-----END CERTIFICATE-----
+</ca>
+"#;
+        let isolated = isolate_profile(source);
+        assert!(isolated.contains("remote vpn.example.com 1194"));
+        assert!(isolated.contains("<ca>"));
+        assert!(isolated.contains("MIIB"));
+        assert!(isolated.contains("</ca>"));
+        assert!(!has_directive(&isolated, "up"));
+        assert!(!has_directive(&isolated, "plugin"));
+        assert!(!has_directive(&isolated, "management"));
+        assert!(!has_directive(&isolated, "setenv"));
+        assert!(!has_directive(&isolated, "dhcp-option"));
+        assert!(!isolated.contains("/bin/true"));
+        assert!(!isolated.contains("/tmp/evil.so"));
+        assert!(!isolated.contains("127.0.0.1 9999"));
+        assert!(!isolated.contains("FOO BAR"));
+        assert!(!isolated.contains("10.0.0.1"));
+    }
+
+    #[test]
+    fn isolate_strips_credential_and_key_file_paths() {
+        let source = "client\nauth-user-pass /tmp/creds.txt\nca /tmp/ca.crt\ncert /tmp/client.crt\nkey /tmp/client.key\nsecret /tmp/static.key\n";
+        let isolated = isolate_profile(source);
+        assert!(has_directive(&isolated, "auth-user-pass"));
+        assert!(!isolated.contains("/tmp/creds.txt"));
+        assert!(!has_directive(&isolated, "ca"));
+        assert!(!has_directive(&isolated, "cert"));
+        assert!(!has_directive(&isolated, "key"));
+        assert!(!has_directive(&isolated, "secret"));
+        assert!(!isolated.contains("/tmp/"));
+    }
+
+    #[test]
+    fn isolate_skips_unknown_inline_blocks_and_keeps_connection_remotes() {
+        let source = r#"
+client
+<http-proxy>
+remote evil.example 1194
+up /bin/true
+</http-proxy>
+<connection>
+remote vpn.example.com 1194
+</connection>
+"#;
+        let isolated = isolate_profile(source);
+        assert!(isolated.contains("remote vpn.example.com 1194"));
+        assert!(!isolated.contains("evil.example"));
+        assert!(!isolated.contains("/bin/true"));
+        assert!(!isolated.contains("<http-proxy>"));
+        assert!(!isolated.contains("<connection>"));
     }
 }

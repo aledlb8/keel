@@ -534,6 +534,8 @@ fn spawn_openvpn_direct(exe: &Path, config: &Path, log: &Path) -> Result<OpenVpn
         .arg(log)
         .arg("--verb")
         .arg("3")
+        .arg("--script-security")
+        .arg("0")
         .current_dir(workdir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())

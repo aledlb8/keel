@@ -13,7 +13,7 @@ pub const KEEL_EXIT_EVENT: &str = r"Local\keel-openvpn-exit";
 
 pub fn engine_startup_options(config: &std::path::Path, log: &std::path::Path) -> String {
     let mut options = format!(
-        "--config \"{}\" --log \"{}\" --verb 3",
+        "--config \"{}\" --log \"{}\" --verb 3 --script-security 0",
         config.display(),
         log.display()
     );
@@ -1361,6 +1361,7 @@ ERROR: command failed: returned error code 1
         assert!(options.contains("--config"));
         assert!(options.contains("keel-app.ovpn"));
         assert!(options.contains("--verb 3"));
+        assert!(options.contains("--script-security 0"));
         if cfg!(windows) {
             assert!(options.contains("--service"));
             assert!(options.contains(super::KEEL_EXIT_EVENT));
