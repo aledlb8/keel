@@ -11,6 +11,7 @@
 
 import type { ReactNode } from "react";
 
+import { markFor } from "@/lib/agentMark";
 import { cn } from "@/lib/utils";
 
 const STROKE = {
@@ -72,13 +73,13 @@ export interface AgentMarkProps {
   /** Catalogue id, or null for a plain shell. */
   agentId: string | null | undefined;
   /** Used for the letter fallback. */
-  name?: string;
+  name?: string | undefined;
   accent: string;
   /** Outer size in px. */
-  size?: number;
-  variant?: "tile" | "glyph";
-  muted?: boolean;
-  className?: string;
+  size?: number | undefined;
+  variant?: "tile" | "glyph" | undefined;
+  muted?: boolean | undefined;
+  className?: string | undefined;
 }
 
 export function AgentMark({
@@ -90,7 +91,7 @@ export function AgentMark({
   muted,
   className,
 }: AgentMarkProps) {
-  const mark = MARKS[agentId ?? "shell"];
+  const mark = markFor(MARKS, agentId);
   const tile = variant === "tile";
   const glyph = tile ? Math.round(size * 0.58) : size;
   const letter = (name?.trim()[0] ?? "?").toUpperCase();

@@ -48,14 +48,14 @@ export function looksLikeHostDeath(error: unknown): boolean {
   const msg = raw.trim().toLowerCase();
   if (!msg || msg === "undefined" || msg === "[object object]") return true;
 
+  // Git/HTTP "connection refused" and friends are not a dead webview bridge.
   return (
     /webview/.test(msg) ||
     /\bipc\b/.test(msg) ||
-    /disconnected|connection (?:lost|closed|refused|reset)/.test(msg) ||
-    /failed to (?:communicate|contact|invoke)/.test(msg) ||
+    /tauri[\s._-]?api/.test(msg) ||
+    /failed to communicate with the main process/.test(msg) ||
     /host (?:gone|unavailable|stopped|not responding)/.test(msg) ||
-    /backend (?:gone|unavailable|stopped)/.test(msg) ||
-    /tauri[\s._-]?api/.test(msg)
+    /backend (?:gone|unavailable|stopped)/.test(msg)
   );
 }
 
