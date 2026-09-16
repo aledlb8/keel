@@ -12,9 +12,10 @@
  *  - **Profiles** are a list of sign-ins, renamed and removed the way sidebar
  *    rows are: double-click, or the ⋯ that appears on hover.
  *
- * Agents save themselves: an edit is written a moment after you stop typing, as
- * soon as every entry is valid, so there is no Save button to forget. Profiles
- * live in app state and change immediately.
+ * Agents save themselves: a valid edit is written a moment after you stop
+ * typing. An invalid entry stays in the dialog with errors and does not block
+ * the others; closing asks before those edits are discarded. Profiles live in
+ * app state and change immediately.
  */
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -93,6 +94,7 @@ function expandHex(value: string): string | null {
   const match = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(value.trim());
   if (!match) return null;
   const hex = match[1];
+  if (hex === undefined) return null;
   const full =
     hex.length === 3
       ? hex
@@ -156,6 +158,29 @@ function specOf(agent: Agent): AgentSpec {
   };
 }
 
+/**
+ * What reaches the catalogue: every valid draft, and the last saved spec of an
+ * existing agent whose draft is currently invalid — so one bad field cannot
+ * delete or reset another entry.
+ */
+function specsToSave(drafts: Agent[], saved: Agent[]): AgentSpec[] {
+  const savedById = new Map(saved.map((agent) => [agent.id, agent]));
+  const specs: AgentSpec[] = [];
+  for (const draft of drafts) {
+    if (!hasProblems(draft)) {
+      specs.push(specOf(draft));
+      continue;
+    }
+    const previous = savedById.get(draft.id);
+    if (previous) specs.push(specOf(previous));
+  }
+  return specs;
+}
+
+function sameSpecs(left: AgentSpec[], right: AgentSpec[]): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 function plural(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
 }
@@ -177,6 +202,8 @@ export function AgentSettingsDialog() {
   const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   );
+  const persistSeq = useRef(0);
+  const persistTail = useRef(Promise.resolve());
 
   // Take a fresh copy of the catalogue every time the dialog opens.
   useEffect(() => {
@@ -214,7 +241,20 @@ export function AgentSettingsDialog() {
     return () => clearTimeout(timer);
   }, [saveState]);
 
-  useEffect(() => () => clearTimeout(saveTimer.current), []);
+  useEffect(() => {
+    if (open) return;
+    clearTimeout(saveTimer.current);
+    saveTimer.current = undefined;
+  }, [open]);
+
+  useEffect(
+    () => () => {
+      persistSeq.current += 1;
+      clearTimeout(saveTimer.current);
+      saveTimer.current = undefined;
+    },
+    [],
+  );
 
   const usage = useMemo(() => {
     const byAccount: Record<string, number> = {};
@@ -234,21 +274,34 @@ export function AgentSettingsDialog() {
     return { byAccount, byAgent };
   }, [projects]);
 
-  async function persist() {
+  function persist(): Promise<void> {
     clearTimeout(saveTimer.current);
     saveTimer.current = undefined;
-    const next = draftsRef.current;
-    // Nothing reaches disk while any entry is invalid; the fields say why.
-    if (next.some(hasProblems)) return;
-    setSaveState("saving");
-    try {
-      await useKeel.getState().saveAgents(next.map(specOf));
-      setSaveState("saved");
-      setSaveError(null);
-    } catch (error) {
-      setSaveState("error");
-      setSaveError(String(error));
+    const payload = specsToSave(draftsRef.current, useKeel.getState().agents);
+    if (sameSpecs(payload, useKeel.getState().agents.map(specOf))) {
+      return persistTail.current;
     }
+    const seq = ++persistSeq.current;
+    const run = persistTail.current.then(async () => {
+      if (seq !== persistSeq.current) return;
+      if (sameSpecs(payload, useKeel.getState().agents.map(specOf))) return;
+      setSaveState("saving");
+      try {
+        await useKeel.getState().saveAgents(payload);
+        if (seq !== persistSeq.current) return;
+        setSaveState("saved");
+        setSaveError(null);
+      } catch (error) {
+        if (seq !== persistSeq.current) return;
+        setSaveState("error");
+        setSaveError(String(error));
+      }
+    });
+    persistTail.current = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
   }
 
   function commit(next: Agent[], delay = SAVE_DELAY_MS) {
@@ -272,7 +325,7 @@ export function AgentSettingsDialog() {
       name: "New agent",
       command: "",
       short: "NA",
-      accent: SWATCHES[5],
+      accent: SWATCHES[5] ?? "#6c9bf5",
       accountEnv: null,
       bins: [],
       paths: [],
@@ -314,8 +367,22 @@ export function AgentSettingsDialog() {
     }
   }
 
-  function close() {
-    if (saveTimer.current !== undefined) void persist();
+  async function close() {
+    clearTimeout(saveTimer.current);
+    saveTimer.current = undefined;
+    await persist();
+    const invalid = draftsRef.current.filter(hasProblems);
+    const firstInvalid = invalid[0];
+    if (firstInvalid) {
+      const label =
+        invalid.length === 1
+          ? `${firstInvalid.name.trim() || "Untitled"} has errors and will not be saved.`
+          : `${invalid.length} agents have errors and will not be saved.`;
+      if (!window.confirm(`${label} Close anyway?`)) {
+        setSelectedId(firstInvalid.id);
+        return;
+      }
+    }
     useKeel.getState().closeAgentSettings();
   }
 
@@ -564,15 +631,16 @@ function SaveIndicator({
   error: string | null;
   blocked: boolean;
 }) {
-  const [icon, text, tone] = blocked
-    ? [null, "Fix the highlighted fields to save", "text-[color:var(--keel-dead)]"]
-    : state === "saving"
+  const [icon, text, tone] =
+    state === "saving"
       ? [<LoaderCircle key="i" className="size-3.5 animate-spin" />, "Saving", "text-faint"]
       : state === "saved"
         ? [<Check key="i" className="size-3.5" />, "Saved", "text-dim"]
         : state === "error"
           ? [null, "Couldn't save", "text-[color:var(--keel-dead)]"]
-          : [null, "Changes save automatically", "text-faint"];
+          : blocked
+            ? [null, "Agents with errors won't save", "text-[color:var(--keel-dead)]"]
+            : [null, "Changes save automatically", "text-faint"];
 
   return (
     <span
@@ -821,7 +889,7 @@ function SectionHeading({
   children,
 }: {
   title: string;
-  detail?: string;
+  detail?: string | undefined;
   children?: ReactNode;
 }) {
   return (
@@ -837,7 +905,7 @@ function SectionHeading({
   );
 }
 
-function FieldError({ message }: { message?: string }) {
+function FieldError({ message }: { message?: string | undefined }) {
   if (!message) return null;
   return (
     <p className="mt-0.5 text-[12px] text-[color:var(--keel-dead)] animate-in fade-in-0">
@@ -934,7 +1002,7 @@ function ColourPicker({
   onChange,
 }: {
   value: string;
-  problem?: string;
+  problem?: string | undefined;
   onChange: (value: string) => void;
 }) {
   const current = expandHex(value);
@@ -1422,8 +1490,8 @@ function SettingRow({
   children,
 }: {
   label: string;
-  hint?: string;
-  error?: string;
+  hint?: string | undefined;
+  error?: string | undefined;
   children: ReactNode;
 }) {
   // A div, not a <label>: the control carries its own aria-label, and a label

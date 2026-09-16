@@ -71,6 +71,7 @@ export function VpnDialog() {
   const vpn = useKeel((state) => state.vpn);
   const { tone, color } = vpnView(vpn);
   const noProfiles = vpn.profiles.length === 0;
+  const profileValue = vpn.profileId ?? vpn.profiles[0]?.id;
   const Icon =
     tone === "connected" ? ShieldCheck : tone === "error" ? ShieldAlert : ShieldOff;
 
@@ -122,7 +123,7 @@ export function VpnDialog() {
           <div className="flex flex-col gap-1.5">
             <span className="text-[12px] font-medium text-dim">Profile</span>
             <Select
-              value={vpn.profileId ?? vpn.profiles[0]?.id}
+              {...(profileValue ? { value: profileValue } : {})}
               onValueChange={(value) => useKeel.getState().setVpnProfile(value)}
               disabled={noProfiles}
             >
@@ -191,7 +192,13 @@ export function VpnDialog() {
             <Button
               size="sm"
               variant="outline"
-              onClick={() => void useKeel.getState().disconnectVpn()}
+              onClick={() => {
+                const ok = window.confirm(
+                  "Disconnect the private VPN? Keel terminals will use this PC's normal connection.",
+                );
+                if (!ok) return;
+                void useKeel.getState().disconnectVpn();
+              }}
             >
               Disconnect
             </Button>
