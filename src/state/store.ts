@@ -63,9 +63,30 @@ import type {
   PaneStatus,
   PersistedState,
   Project,
+  SidebarRoot,
   VpnSettings,
   VpnState,
+  Workspace,
 } from "../lib/types.ts";
+import {
+  dissolveWorkspace as dissolveWorkspaceLayout,
+  emptyWorkspace,
+  forgetProject,
+  insertWorkspace,
+  nextWorkspaceName,
+  normalizeWorkspaces,
+  placeProject,
+  rememberWorkspaceProject,
+  renameWorkspace as renameWorkspaceList,
+  reorderRoot,
+  repairSidebar,
+  rootIndexOfProject,
+  setWorkspaceCollapsed,
+  shiftMember,
+  shiftRoot,
+  workspaceOf,
+  type Layout,
+} from "../lib/workspaces.ts";
 
 /** UI-only reopen chrome. Never written to PersistedState. */
 export type RestoreStatus = "idle" | "restoring" | "partial" | "failed";
@@ -119,7 +140,7 @@ const QUIET_MS = 3_000;
 
 /** A name being edited in place, and which copy of it on screen is the editor. */
 export interface RenameTarget {
-  kind: "project" | "deck" | "pane";
+  kind: "workspace" | "project" | "deck" | "pane";
   id: string;
   /** A pane's name shows in both the sidebar and its own header. */
   where: "sidebar" | "pane";
@@ -139,6 +160,9 @@ export interface KeelState {
   agents: Agent[];
   accounts: AgentAccount[];
   projects: Project[];
+  workspaces: Workspace[];
+  /** Top-level sidebar order: workspaces mixed with ungrouped projects. */
+  sidebar: SidebarRoot[];
   activeProjectId: string | null;
   /** Recomputed on a timer from output timing, never written to disk. */
   status: Record<string, PaneStatus>;
@@ -155,7 +179,7 @@ export interface KeelState {
   /** Host IPC looks dead (UI banner). Not persisted. */
   hostLost: boolean;
 
-  /** Private OpenVPN tunnel. Only autoConnect/profileId are persisted. */
+  /** Private OpenVPN tunnel. Only autoConnect/connectOnLaunch/profileId are persisted. */
   vpn: VpnState;
   refreshVpn: () => Promise<void>;
   connectVpn: (profileId?: string | null) => Promise<void>;
@@ -246,18 +270,36 @@ export interface KeelState {
   stopRename: () => void;
 
   renameProject: (projectId: string, name: string) => void;
+  renameWorkspace: (workspaceId: string, name: string) => void;
   renamePane: (projectId: string, paneId: string, title: string) => void;
   /**
    * Rename a pane from what the agent is doing. No-ops if you have named it
    * yourself. OSC titles only apply while the pane still has its factory name.
    */
   autoTitlePane: (paneId: string, raw: string, source: TitleSource) => void;
-  /** Shift a project one place up or down the sidebar. */
+  /** Shift a project one place among its neighbours — members, or top-level. */
   moveProject: (projectId: string, delta: -1 | 1) => void;
+  /** Shift a workspace one place among the top-level sidebar rows. */
+  moveWorkspace: (workspaceId: string, delta: -1 | 1) => void;
   /** Shift a deck one place; its number follows its position. */
   moveDeck: (projectId: string, deckId: string, delta: -1 | 1) => void;
-  /** Put a project at `index` in the sidebar, counted without it. */
+  /**
+   * Put a standalone project at `index` among the top-level rows, counted
+   * without it. Nested projects use `placeProjectIn`.
+   */
   reorderProject: (projectId: string, index: number) => void;
+  /** Put a workspace at `index` among the top-level rows, counted without it. */
+  reorderWorkspace: (workspaceId: string, index: number) => void;
+  /**
+   * Move a project to a top-level slot or into a workspace. Covers join, leave,
+   * and reorder with one call.
+   */
+  placeProjectIn: (
+    projectId: string,
+    dest:
+      | { kind: "root"; index: number }
+      | { kind: "member"; workspaceId: string; index: number },
+  ) => void;
   /** Put a deck at `index` among its project's decks, counted without it. */
   reorderDeck: (projectId: string, deckId: string, index: number) => void;
   /**
@@ -273,11 +315,21 @@ export interface KeelState {
   ) => void;
   setAllCollapsed: (collapsed: boolean) => void;
 
-  addProject: (path: string, name?: string) => Project;
+  addProject: (path: string, name?: string, workspaceId?: string) => Project;
   removeProject: (projectId: string) => void;
   /** Selection only ever moves to another project; it is never cleared. */
   selectProject: (projectId: string) => void;
   toggleCollapsed: (projectId: string) => void;
+
+  /**
+   * Create a workspace. Pass a project to start with that member inside it.
+   * Starts an in-place rename so the placeholder name is only a moment.
+   */
+  addWorkspace: (projectId?: string) => string;
+  /** Ungroup. Member projects become standalone; they are not deleted. */
+  dissolveWorkspace: (workspaceId: string) => void;
+  selectWorkspace: (workspaceId: string) => void;
+  toggleWorkspaceCollapsed: (workspaceId: string) => void;
 
   addDeck: (projectId: string, name?: string) => string | null;
   removeDeck: (projectId: string, deckId: string) => void;
@@ -485,7 +537,7 @@ function normalizeProjects(projects: Project[]): Project[] {
 }
 
 export const DEFAULT_VPN: VpnSettings = {
-  autoConnect: true,
+  autoConnect: false,
   profileId: null,
 };
 
@@ -494,7 +546,7 @@ function readVpn(document: Record<string, unknown> | null): VpnSettings {
   if (!raw || typeof raw !== "object") return { ...DEFAULT_VPN };
   const vpn = raw as Record<string, unknown>;
   return {
-    autoConnect: vpn.autoConnect !== false,
+    autoConnect: vpn.connectOnLaunch === true,
     profileId: typeof vpn.profileId === "string" && vpn.profileId.trim()
       ? vpn.profileId
       : null,
@@ -562,8 +614,16 @@ function accountFor(spec: PaneSpec, accounts: AgentAccount[]): string | null {
   );
 }
 
+function isDocumentVersion(version: unknown): version is 3 | 4 | 5 {
+  return version === 3 || version === 4 || version === 5;
+}
+
 function readAccounts(document: Record<string, unknown> | null): AgentAccount[] {
-  if (!document || document.version !== 4 || !Array.isArray(document.accounts)) {
+  if (
+    !document ||
+    (document.version !== 4 && document.version !== 5) ||
+    !Array.isArray(document.accounts)
+  ) {
     return [];
   }
   return document.accounts.flatMap((entry) => {
@@ -674,13 +734,22 @@ export const useKeel = create<KeelState>((set, get) => {
     if (saveTimer) clearTimeout(saveTimer);
     const write = () => {
       saveTimer = null;
-      const { projects, activeProjectId, accounts, vpn, keybindings } = get();
+      const { projects, workspaces, sidebar, activeProjectId, accounts, vpn, keybindings } =
+        get();
+      const projectIds = new Set(projects.map((project) => project.id));
+      const cleaned = normalizeWorkspaces(workspaces, projectIds);
       const document: PersistedState = {
-        version: 4,
+        version: 5,
         projects,
+        workspaces: cleaned,
+        sidebar: repairSidebar(projects, cleaned, sidebar),
         activeProjectId,
         accounts,
-        vpn: { autoConnect: vpn.autoConnect, profileId: vpn.profileId },
+        vpn: {
+          autoConnect: vpn.autoConnect,
+          connectOnLaunch: vpn.autoConnect,
+          profileId: vpn.profileId,
+        },
         keybindings,
       };
       void backend.saveState(document).catch(() => {
@@ -689,6 +758,22 @@ export const useKeel = create<KeelState>((set, get) => {
     };
     if (immediate) write();
     else saveTimer = setTimeout(write, 400);
+  }
+
+  /** Saved order, with missing rows filled in so tests and old documents still work. */
+  function layoutOf(state = get()): Layout {
+    const projectIds = new Set(state.projects.map((project) => project.id));
+    const workspaces = normalizeWorkspaces(state.workspaces, projectIds);
+    return {
+      workspaces,
+      sidebar: repairSidebar(state.projects, workspaces, state.sidebar),
+    };
+  }
+
+  function patchLayout(change: (layout: Layout) => Layout) {
+    const next = change(layoutOf());
+    set({ workspaces: next.workspaces, sidebar: next.sidebar });
+    persist();
   }
 
   function findPane(paneId: string): Pane | null {
@@ -786,6 +871,8 @@ export const useKeel = create<KeelState>((set, get) => {
     agents: [],
     accounts: [],
     projects: [],
+    workspaces: [],
+    sidebar: [],
     activeProjectId: null,
     status: {},
     exited: {},
@@ -825,6 +912,8 @@ export const useKeel = create<KeelState>((set, get) => {
           agents,
           accounts: [],
           projects: [],
+          workspaces: [],
+          sidebar: [],
           activeProjectId: null,
           vpn: { ...emptyVpn(DEFAULT_VPN), spawnAllowed: true, phase: "idle" },
           ready: true,
@@ -839,10 +928,13 @@ export const useKeel = create<KeelState>((set, get) => {
 
       const document = saved as unknown as Record<string, unknown> | null;
       const projects = normalizeProjects(
-        document && (document.version === 3 || document.version === 4)
+        document && isDocumentVersion(document.version)
           ? ((document.projects as Project[]) ?? [])
           : migrate(document),
       );
+      const projectIds = new Set(projects.map((project) => project.id));
+      const workspaces = normalizeWorkspaces(document?.workspaces, projectIds);
+      const sidebar = repairSidebar(projects, workspaces, document?.sidebar);
       const accounts = readAccounts(document);
       const vpnSettings = readVpn(document);
       // Before anything renders a label or a key reaches a terminal.
@@ -861,6 +953,8 @@ export const useKeel = create<KeelState>((set, get) => {
         agents,
         accounts,
         projects,
+        workspaces,
+        sidebar,
         activeProjectId,
         ready: true,
         restoreStatus: paneCount > 0 ? "restoring" : "idle",
@@ -899,6 +993,8 @@ export const useKeel = create<KeelState>((set, get) => {
       set({
         accounts: [],
         projects: [],
+        workspaces: [],
+        sidebar: [],
         activeProjectId: null,
         status: {},
         exited: {},
@@ -1334,6 +1430,15 @@ export const useKeel = create<KeelState>((set, get) => {
       updateProject(projectId, (project) => ({ ...project, name: clean }));
     },
 
+    renameWorkspace(workspaceId, name) {
+      const clean = name.trim();
+      if (!clean) return;
+      set((state) => ({
+        workspaces: renameWorkspaceList(state.workspaces, workspaceId, clean),
+      }));
+      persist();
+    },
+
     renamePane(projectId, paneId, title) {
       const clean = title.trim();
       if (!clean) return;
@@ -1376,9 +1481,23 @@ export const useKeel = create<KeelState>((set, get) => {
     },
 
     moveProject(projectId, delta) {
-      set((state) => ({
-        projects: shift(state.projects, (item) => item.id === projectId, delta),
-      }));
+      const { workspaces, sidebar } = layoutOf();
+      const group = workspaceOf(workspaces, projectId);
+      if (group) {
+        set({ workspaces: shiftMember(workspaces, group.id, projectId, delta) });
+      } else {
+        set({
+          sidebar: shiftRoot(sidebar, { kind: "project", id: projectId }, delta),
+        });
+      }
+      persist();
+    },
+
+    moveWorkspace(workspaceId, delta) {
+      const { sidebar } = layoutOf();
+      set({
+        sidebar: shiftRoot(sidebar, { kind: "workspace", id: workspaceId }, delta),
+      });
       persist();
     },
 
@@ -1390,10 +1509,26 @@ export const useKeel = create<KeelState>((set, get) => {
     },
 
     reorderProject(projectId, index) {
-      set((state) => ({
-        projects: moveTo(state.projects, (item) => item.id === projectId, index),
-      }));
+      get().placeProjectIn(projectId, { kind: "root", index });
+    },
+
+    reorderWorkspace(workspaceId, index) {
+      const { sidebar } = layoutOf();
+      set({
+        sidebar: reorderRoot(sidebar, { kind: "workspace", id: workspaceId }, index),
+      });
       persist();
+    },
+
+    placeProjectIn(projectId, dest) {
+      if (!get().projects.some((project) => project.id === projectId)) return;
+      if (dest.kind === "member") {
+        const { workspaces } = layoutOf();
+        if (!workspaces.some((item) => item.id === dest.workspaceId)) return;
+      }
+      patchLayout((layout) =>
+        placeProject(layout.workspaces, layout.sidebar, projectId, dest),
+      );
     },
 
     reorderDeck(projectId, deckId, index) {
@@ -1421,15 +1556,29 @@ export const useKeel = create<KeelState>((set, get) => {
     setAllCollapsed(collapsed) {
       set((state) => ({
         projects: state.projects.map((project) => ({ ...project, collapsed })),
+        workspaces: state.workspaces.map((workspace) => ({
+          ...workspace,
+          collapsed,
+        })),
       }));
       persist();
     },
 
-    addProject(path, name) {
+    addProject(path, name, workspaceId) {
       const existing = get().projects.find((project) => project.path === path);
       if (existing) {
-        set({ activeProjectId: existing.id });
-        persist();
+        if (workspaceId) {
+          const { workspaces } = layoutOf();
+          const workspace = workspaces.find((item) => item.id === workspaceId);
+          if (workspace) {
+            get().placeProjectIn(existing.id, {
+              kind: "member",
+              workspaceId,
+              index: workspace.projectIds.length,
+            });
+          }
+        }
+        get().selectProject(existing.id);
         return existing;
       }
 
@@ -1442,10 +1591,28 @@ export const useKeel = create<KeelState>((set, get) => {
         activeDeckId: deck.id,
         collapsed: false,
       };
-      set((state) => ({
-        projects: [...state.projects, project],
+      const { workspaces, sidebar } = layoutOf();
+      const dest = workspaceId
+        ? workspaces.find((item) => item.id === workspaceId)
+        : null;
+      const placed = dest
+        ? placeProject(workspaces, sidebar, project.id, {
+            kind: "member",
+            workspaceId: dest.id,
+            index: dest.projectIds.length,
+          })
+        : {
+            workspaces,
+            sidebar: [...sidebar, { kind: "project" as const, id: project.id }],
+          };
+      set({
+        projects: [...get().projects, project],
+        workspaces: dest
+          ? rememberWorkspaceProject(placed.workspaces, dest.id, project.id)
+          : placed.workspaces,
+        sidebar: placed.sidebar,
         activeProjectId: project.id,
-      }));
+      });
       persist();
       return project;
     },
@@ -1460,15 +1627,23 @@ export const useKeel = create<KeelState>((set, get) => {
           activity.delete(paneId);
         }
       }
-      set((state) => {
-        const projects = state.projects.filter((item) => item.id !== projectId);
-        return {
-          projects,
-          activeProjectId:
-            state.activeProjectId === projectId
-              ? (projects[0]?.id ?? null)
-              : state.activeProjectId,
-        };
+      const { workspaces, sidebar } = layoutOf();
+      const group = workspaceOf(workspaces, projectId);
+      const neighbour =
+        group?.projectIds.find((id) => id !== projectId) ?? null;
+      const forgotten = forgetProject(workspaces, sidebar, projectId);
+      const projects = get().projects.filter((item) => item.id !== projectId);
+      const nextActive =
+        get().activeProjectId === projectId
+          ? (neighbour && projects.some((item) => item.id === neighbour)
+              ? neighbour
+              : (projects[0]?.id ?? null))
+          : get().activeProjectId;
+      set({
+        projects,
+        workspaces: forgotten.workspaces,
+        sidebar: forgotten.sidebar,
+        activeProjectId: nextActive,
       });
       persist();
     },
@@ -1476,7 +1651,85 @@ export const useKeel = create<KeelState>((set, get) => {
     selectProject(projectId) {
       // Deliberately one-way: picking a project never unpicks the current one.
       if (!get().projects.some((project) => project.id === projectId)) return;
-      set({ activeProjectId: projectId });
+      const { workspaces } = layoutOf();
+      const group = workspaceOf(workspaces, projectId);
+      set({
+        activeProjectId: projectId,
+        workspaces: group
+          ? rememberWorkspaceProject(workspaces, group.id, projectId)
+          : workspaces,
+      });
+      persist();
+    },
+
+    addWorkspace(projectId) {
+      const { workspaces, sidebar } = layoutOf();
+      const workspace = emptyWorkspace(
+        makeId("wks"),
+        nextWorkspaceName(workspaces),
+      );
+      const after = projectId
+        ? rootIndexOfProject(workspaces, sidebar, projectId)
+        : get().activeProjectId
+          ? rootIndexOfProject(workspaces, sidebar, get().activeProjectId!)
+          : sidebar.length - 1;
+      const index = after >= 0 ? after + 1 : sidebar.length;
+      let next = insertWorkspace(workspaces, sidebar, workspace, index);
+      if (projectId && get().projects.some((item) => item.id === projectId)) {
+        next = placeProject(next.workspaces, next.sidebar, projectId, {
+          kind: "member",
+          workspaceId: workspace.id,
+          index: 0,
+        });
+      }
+      set({
+        workspaces: next.workspaces,
+        sidebar: next.sidebar,
+      });
+      persist();
+      get().startRename({
+        kind: "workspace",
+        id: workspace.id,
+        where: "sidebar",
+      });
+      return workspace.id;
+    },
+
+    dissolveWorkspace(workspaceId) {
+      patchLayout((layout) =>
+        dissolveWorkspaceLayout(layout.workspaces, layout.sidebar, workspaceId),
+      );
+    },
+
+    selectWorkspace(workspaceId) {
+      const { workspaces } = layoutOf();
+      const workspace = workspaces.find((item) => item.id === workspaceId);
+      if (!workspace) return;
+      if (workspace.collapsed) {
+        set({
+          workspaces: setWorkspaceCollapsed(workspaces, workspaceId, false),
+        });
+      }
+      const member =
+        (workspace.activeProjectId &&
+        workspace.projectIds.includes(workspace.activeProjectId)
+          ? workspace.activeProjectId
+          : workspace.projectIds[0]) ?? null;
+      if (member) get().selectProject(member);
+      else persist();
+    },
+
+    toggleWorkspaceCollapsed(workspaceId) {
+      const { workspaces } = layoutOf();
+      const workspace = workspaces.find((item) => item.id === workspaceId);
+      if (!workspace) return;
+      set({
+        workspaces: setWorkspaceCollapsed(
+          workspaces,
+          workspaceId,
+          !workspace.collapsed,
+        ),
+      });
       persist();
     },
 

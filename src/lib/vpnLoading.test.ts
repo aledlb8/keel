@@ -95,6 +95,69 @@ it("late discovery cannot put a failed attempt back into connecting", async () =
   assert.equal(state().vpn.error, "OpenVPN stopped");
 });
 
+it("does not auto-connect from a leftover autoConnect default", async () => {
+  let connectCalls = 0;
+  mockIPC((cmd) => {
+    if (cmd === "vpn_connect") {
+      connectCalls += 1;
+      return connected;
+    }
+    if (cmd === "detect_agents") return [];
+    if (cmd === "state_load") {
+      return {
+        version: 5,
+        projects: [],
+        workspaces: [],
+        sidebar: [],
+        activeProjectId: null,
+        accounts: [],
+        vpn: { autoConnect: true, profileId: "test" },
+      };
+    }
+    return idle;
+  });
+  await state().init();
+  assert.equal(state().vpn.autoConnect, false);
+  assert.equal(state().vpn.spawnAllowed, true);
+  assert.equal(state().vpn.phase, "idle");
+  assert.equal(connectCalls, 0);
+});
+
+it("connects on launch only when connectOnLaunch was opted in", async () => {
+  const pending = deferred<VpnSnapshot>();
+  let connectCalls = 0;
+  mockIPC((cmd) => {
+    if (cmd === "vpn_connect") {
+      connectCalls += 1;
+      return pending.promise;
+    }
+    if (cmd === "detect_agents") return [];
+    if (cmd === "state_load") {
+      return {
+        version: 5,
+        projects: [],
+        workspaces: [],
+        sidebar: [],
+        activeProjectId: null,
+        accounts: [],
+        vpn: { autoConnect: true, connectOnLaunch: true, profileId: "test" },
+      };
+    }
+    return idle;
+  });
+  const started = state().init();
+  await started;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(state().vpn.autoConnect, true);
+  assert.equal(state().vpn.spawnAllowed, false);
+  assert.equal(state().vpn.phase, "connecting");
+  assert.equal(connectCalls, 1);
+  pending.resolve(connected);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(state().vpn.phase, "connected");
+  assert.equal(state().vpn.spawnAllowed, true);
+});
+
 for (const removal of ["pane", "deck", "project"] as const) {
   it(`closing a waiting ${removal} settles restoration`, () => {
     mockIPC(() => undefined);

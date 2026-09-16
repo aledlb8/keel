@@ -20,6 +20,7 @@ Built with Tauri 2, React 19, TypeScript, Rust, Vite, CodeMirror, and xterm.js.
 ## What it does
 
 - Launch multiple supported coding agents and plain shells side by side.
+- Group related projects into workspaces in the sidebar; each project keeps its own folders, decks, and terminals.
 - Keep processes running while you switch projects or deck layouts.
 - Restore saved projects, layouts, terminals, and resumable agent sessions.
 - Browse and edit project files with an integrated CodeMirror editor.
@@ -77,7 +78,7 @@ pnpm rust:lint
 
 ## Using Keel
 
-Add a folder to create a project, then open terminals or agent sessions inside it. Projects can contain multiple decks: independent pane layouts whose processes continue running while another deck is visible. The overview (`Ctrl+O`) shows every deck and lets you move running terminals between them.
+Add a folder to create a project, then open terminals or agent sessions inside it. Related projects can be grouped into a workspace so they sit together in the sidebar; dissolving a workspace never deletes its projects. Projects can contain multiple decks: independent pane layouts whose processes continue running while another deck is visible. The overview (`Ctrl+O`) shows every deck and lets you move running terminals between them.
 
 Common shortcuts:
 
@@ -101,7 +102,7 @@ Keel stores workspace state and agent overrides in the operating system's applic
 
 The main files are:
 
-- `keel.json` for projects, decks, layouts, and saved terminal state.
+- `keel.json` for projects, workspaces, decks, layouts, and saved terminal state.
 - `agents.json` for changes to the built-in agent catalogue.
 
 Keel can read credentials already managed by supported local agent CLIs when fetching usage information. Those credentials are not repository configuration and should never be committed to this project.

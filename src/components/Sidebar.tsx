@@ -1,16 +1,26 @@
 /**
- * The sidebar: every project, its decks, and the terminals inside them.
+ * The sidebar: workspaces, projects, decks, and the terminals inside them.
  *
- * Three kinds of row, one grammar:
+ * Four kinds of row, one grammar:
  *
  *  - **Click** goes there.
  *  - **Double-click** or **F2** renames it in place.
  *  - **Right-click**, the context-menu key, or the ⋯ that appears on hover opens
  *    everything else you can do to it. The menus are shared with the panes, so a
  *    terminal offers the same actions wherever you reach for it.
- *  - **Drag** puts it somewhere else. Projects reorder among projects, decks
- *    among the decks of their project, and terminals anywhere inside their
- *    project — between other terminals, onto a deck, or into an empty one.
+ *  - **Drag** puts it somewhere else. Workspaces reorder among the top-level
+ *    rows. Projects reorder among those rows, or drop onto a workspace to join
+ *    it. Decks stay among the decks of their project, and terminals anywhere
+ *    inside their project — between other terminals, onto a deck, or into an
+ *    empty one.
+ *
+ * A workspace is a named group of existing projects, not a folder, and it is
+ * drawn as one object rather than as a branch of a tree: a shallow well, a
+ * quiet header on top of it, and its projects inside keeping exactly the row
+ * grammar they had standing on their own. The well is what says "these belong
+ * together", so nothing inside it is indented for being there — three levels
+ * fit in 248px where four did not. With no workspaces the sidebar is exactly
+ * the list of projects it used to be.
  *
  * Decks show up as small numbered group headers once a project has two of them.
  * With one, its terminals sit straight under the project, and nothing here
@@ -23,12 +33,16 @@
  * **Exactly one row is ever filled.** Selecting a terminal makes its deck and
  * project current too, and filling all three stacked into one tall blob. So the
  * fill goes to the deepest thing that is actually current — the focused
- * terminal, else the active deck, else the project — and the rows above it say
- * "you are inside me" with weight and text colour instead. See `leafOf`.
+ * terminal, else the active deck, else the project — and the rows above it
+ * (including the workspace, if any) say "you are inside me" with weight and
+ * text colour instead. See `leafOf`.
  *
  * **Folded, it is a rail.** One toggle rides the sidebar's right edge; folding
- * narrows the band to a column of project monograms carrying the same hover and
- * selection states, a status badge, and the same context menu. See `SidebarRail`.
+ * narrows the band to a column of monograms carrying the same hover and
+ * selection states, a status badge, and the same context menu. A workspace is
+ * still the box and a project is still bare letters on the band, so the two
+ * stay one silhouette apart without spending a drop of colour. See
+ * `SidebarRail`.
  */
 
 import {
@@ -42,13 +56,21 @@ import {
   type ReactNode,
   type SetStateAction,
 } from "react";
-import { ChevronRight, Ellipsis, FolderPlus, Plus, X } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Ellipsis,
+  FolderPlus,
+  Plus,
+  X,
+} from "lucide-react";
 
 import { AgentMark } from "@/components/AgentMark";
 import { DockToggle, RailTip, RailTipProvider } from "@/components/Dock";
 import { InlineRename } from "@/components/InlineRename";
 import { FileIcon } from "@/components/inspector/FileIcon";
 import { StatusDot } from "@/components/StatusDot";
+import { WorkspaceGlyph, WorkspaceMark } from "@/components/WorkspaceMark";
 import {
   ContextMenuEntries,
   type MenuEntry,
@@ -59,6 +81,7 @@ import {
   pickProjectFolder,
   projectMenu,
   sidebarMenu,
+  workspaceMenu,
 } from "@/components/menu/actions";
 import {
   ContextMenu,
@@ -66,9 +89,11 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { bindingFor, matchesBinding } from "@/lib/keymap";
+import { monogram } from "@/lib/monogram";
 import { agentAccent } from "@/lib/tokens";
 import { listPanes } from "@/lib/tree";
 import { cn } from "@/lib/utils";
+import { repairSidebar, workspaceOf } from "@/lib/workspaces";
 import type {
   Agent,
   AgentAccount,
@@ -76,6 +101,8 @@ import type {
   Pane,
   PaneStatus,
   Project,
+  SidebarRoot,
+  Workspace,
 } from "@/lib/types";
 import {
   activeDeck,
@@ -89,8 +116,12 @@ import { useWorkspace } from "@/state/workspace";
 /**
  * Left padding per level, added to the row's own 8px. The third level leaves
  * room for the guide line under its deck's number badge.
+ *
+ * There is no extra step for a project inside a workspace. The well it sits in
+ * has already placed it, and a second cue would only cost the name characters
+ * it cannot spare.
  */
-const INDENT = [0, 14, 32];
+const INDENT = [0, 14, 32] as const;
 
 /**
  * Where a group's guide line runs, from the dock's inner edge: under the
@@ -129,6 +160,7 @@ function leafOf(project: Project, open: boolean, showDecks: boolean): Leaf {
 
 /** The thing being carried. */
 type DragItem =
+  | { kind: "workspace"; workspaceId: string }
   | { kind: "project"; projectId: string }
   | { kind: "deck"; projectId: string; deckId: string }
   | { kind: "pane"; projectId: string; deckId: string; paneId: string };
@@ -138,6 +170,8 @@ type DragItem =
  * its terminals sit straight under it, so a terminal can be dropped onto it.
  */
 type DropSpot =
+  | { kind: "workspace"; workspaceId: string }
+  | { kind: "empty-workspace"; workspaceId: string }
   | { kind: "project"; projectId: string; deckId: string | null }
   | { kind: "deck"; projectId: string; deckId: string }
   | { kind: "pane"; projectId: string; deckId: string; paneId: string }
@@ -159,6 +193,10 @@ const IDLE: SortState = { item: null, over: null };
 
 function spotKey(spot: DropSpot): string {
   switch (spot.kind) {
+    case "workspace":
+      return `workspace:${spot.workspaceId}`;
+    case "empty-workspace":
+      return `empty-workspace:${spot.workspaceId}`;
     case "project":
       return `project:${spot.projectId}`;
     case "deck":
@@ -171,6 +209,9 @@ function spotKey(spot: DropSpot): string {
 }
 
 function sameThing(item: DragItem, spot: DropSpot): boolean {
+  if (item.kind === "workspace") {
+    return spot.kind === "workspace" && spot.workspaceId === item.workspaceId;
+  }
   if (item.kind === "project") {
     return spot.kind === "project" && spot.projectId === item.projectId;
   }
@@ -178,6 +219,15 @@ function sameThing(item: DragItem, spot: DropSpot): boolean {
     return spot.kind === "deck" && spot.deckId === item.deckId;
   }
   return spot.kind === "pane" && spot.paneId === item.paneId;
+}
+
+function rootsOf() {
+  const state = useKeel.getState();
+  return repairSidebar(state.projects, state.workspaces, state.sidebar);
+}
+
+function standalone(projectId: string): boolean {
+  return workspaceOf(useKeel.getState().workspaces, projectId) === null;
 }
 
 /** Where `item` would land on `spot`, or null if it cannot go there. */
@@ -188,11 +238,29 @@ function edgeFor(
 ): Edge | null {
   if (sameThing(item, spot)) return null;
   const rect = event.currentTarget.getBoundingClientRect();
-  const half: Edge =
-    event.clientY < rect.top + rect.height / 2 ? "before" : "after";
+  const y = (event.clientY - rect.top) / Math.max(rect.height, 1);
+  const half: Edge = y < 0.5 ? "before" : "after";
 
-  if (item.kind === "project") return spot.kind === "project" ? half : null;
+  if (item.kind === "workspace") {
+    if (spot.kind === "workspace") return half;
+    if (spot.kind === "project" && standalone(spot.projectId)) return half;
+    return null;
+  }
+
+  if (item.kind === "project") {
+    if (spot.kind === "empty-workspace") return "inside";
+    if (spot.kind === "workspace") {
+      // Edges reorder among top-level rows; the middle joins the group.
+      if (y < 0.22) return "before";
+      if (y > 0.78) return "after";
+      return "inside";
+    }
+    if (spot.kind === "project") return half;
+    return null;
+  }
+
   // Decks and terminals never leave their project.
+  if (spot.kind === "workspace" || spot.kind === "empty-workspace") return null;
   if (spot.projectId !== item.projectId) return null;
   if (item.kind === "deck") return spot.kind === "deck" ? half : null;
 
@@ -210,11 +278,84 @@ function edgeFor(
 function commitDrop(item: DragItem, spot: DropSpot, edge: Edge) {
   const state = useKeel.getState();
   const after = edge === "after" ? 1 : 0;
+  const sidebar = rootsOf();
+
+  if (item.kind === "workspace") {
+    if (spot.kind !== "workspace" && spot.kind !== "project") return;
+    if (spot.kind === "project" && !standalone(spot.projectId)) return;
+    const rest = sidebar.filter(
+      (entry) => !(entry.kind === "workspace" && entry.id === item.workspaceId),
+    );
+    const target =
+      spot.kind === "workspace"
+        ? { kind: "workspace" as const, id: spot.workspaceId }
+        : { kind: "project" as const, id: spot.projectId };
+    const at = rest.findIndex(
+      (entry) => entry.kind === target.kind && entry.id === target.id,
+    );
+    if (at >= 0) state.reorderWorkspace(item.workspaceId, at + after);
+    return;
+  }
 
   if (item.kind === "project") {
-    const rest = state.projects.filter((p) => p.id !== item.projectId);
-    const at = rest.findIndex((p) => p.id === spot.projectId);
-    if (at >= 0) state.reorderProject(item.projectId, at + after);
+    if (edge === "inside") {
+      const workspaceId =
+        spot.kind === "workspace" || spot.kind === "empty-workspace"
+          ? spot.workspaceId
+          : null;
+      if (!workspaceId) return;
+      const workspace = state.workspaces.find((entry) => entry.id === workspaceId);
+      state.placeProjectIn(item.projectId, {
+        kind: "member",
+        workspaceId,
+        index: workspace?.projectIds.length ?? 0,
+      });
+      return;
+    }
+
+    if (spot.kind === "project") {
+      const group = workspaceOf(state.workspaces, spot.projectId);
+      if (group) {
+        const rest = group.projectIds.filter((id) => id !== item.projectId);
+        const at = rest.indexOf(spot.projectId);
+        if (at >= 0) {
+          state.placeProjectIn(item.projectId, {
+            kind: "member",
+            workspaceId: group.id,
+            index: at + after,
+          });
+        }
+        return;
+      }
+      const rest = sidebar.filter(
+        (entry) => !(entry.kind === "project" && entry.id === item.projectId),
+      );
+      const at = rest.findIndex(
+        (entry) => entry.kind === "project" && entry.id === spot.projectId,
+      );
+      if (at >= 0) {
+        state.placeProjectIn(item.projectId, {
+          kind: "root",
+          index: at + after,
+        });
+      }
+      return;
+    }
+
+    if (spot.kind === "workspace") {
+      const rest = sidebar.filter(
+        (entry) => !(entry.kind === "project" && entry.id === item.projectId),
+      );
+      const at = rest.findIndex(
+        (entry) => entry.kind === "workspace" && entry.id === spot.workspaceId,
+      );
+      if (at >= 0) {
+        state.placeProjectIn(item.projectId, {
+          kind: "root",
+          index: at + after,
+        });
+      }
+    }
     return;
   }
 
@@ -229,6 +370,7 @@ function commitDrop(item: DragItem, spot: DropSpot, edge: Edge) {
     return;
   }
 
+  if (spot.kind === "workspace" || spot.kind === "empty-workspace") return;
   const deck = project.decks.find((entry) => entry.id === spot.deckId);
   if (!deck) return;
   const rest = listPanes(deck.tree).filter((id) => id !== item.paneId);
@@ -328,16 +470,19 @@ type RowGroup = RenameTarget["kind"];
 
 // Spelled out per group so Tailwind can see every class name.
 const GROUP: Record<RowGroup, string> = {
+  workspace: "group/workspace",
   project: "group/project",
   deck: "group/deck",
   pane: "group/pane",
 };
 const SHOW_ON_HOVER: Record<RowGroup, string> = {
+  workspace: "group-hover/workspace:flex group-focus-visible/workspace:flex",
   project: "group-hover/project:flex group-focus-visible/project:flex",
   deck: "group-hover/deck:flex group-focus-visible/deck:flex",
   pane: "group-hover/pane:flex group-focus-visible/pane:flex",
 };
 const HIDE_ON_HOVER: Record<RowGroup, string> = {
+  workspace: "group-hover/workspace:hidden group-focus-visible/workspace:hidden",
   project: "group-hover/project:hidden group-focus-visible/project:hidden",
   deck: "group-hover/deck:hidden group-focus-visible/deck:hidden",
   pane: "group-hover/pane:hidden group-focus-visible/pane:hidden",
@@ -386,8 +531,15 @@ export function Sidebar({
   const agents = useKeel((state) => state.agents);
   const accounts = useKeel((state) => state.accounts);
   const projects = useKeel((state) => state.projects);
+  const workspaces = useKeel((state) => state.workspaces);
+  const sidebar = useKeel((state) => state.sidebar);
   const status = useKeel((state) => state.status);
   const [sort, setSort] = useState<SortState>(IDLE);
+  const roots = repairSidebar(projects, workspaces, sidebar);
+  const byProject = new Map(projects.map((project) => [project.id, project]));
+  const byWorkspace = new Map(
+    workspaces.map((workspace) => [workspace.id, workspace]),
+  );
 
   return (
     <aside
@@ -413,15 +565,31 @@ export function Sidebar({
             <span className="k-count">{projects.length}</span>
           ) : null}
           <span className="flex-1" />
-          <button
-            type="button"
-            title="Add a folder"
-            aria-label="Add a folder"
-            onClick={() => void pickProjectFolder()}
-            className="k-icon-btn size-6"
-          >
-            <Plus className="size-3.5" />
-          </button>
+          {/* Two actions, read as a pair and told apart by shape rather than
+              by label: the frame makes a group, the plus adds a folder. The
+              plus keeps a ground of its own, because it is the one you reach
+              for first and it is never hidden behind anything. */}
+          <span className="flex items-center gap-1">
+            <button
+              type="button"
+              title="New workspace"
+              aria-label="New workspace"
+              onClick={() => useKeel.getState().addWorkspace()}
+              className="k-icon-btn size-6"
+            >
+              <WorkspaceGlyph className="size-3.5" />
+            </button>
+            <button
+              type="button"
+              title="Add a folder"
+              aria-label="Add a folder"
+              data-primary="true"
+              onClick={() => void pickProjectFolder()}
+              className="k-icon-btn size-6"
+            >
+              <Plus className="size-3.5" />
+            </button>
+          </span>
         </div>
 
         <SortContext.Provider value={{ state: sort, setState: setSort }}>
@@ -432,17 +600,28 @@ export function Sidebar({
                 // A drop that lands between rows still has to end the drag.
                 onDrop={() => setSort(IDLE)}
               >
-                {projects.length === 0 ? (
+                {roots.length === 0 ? (
                   <EmptyProjects />
                 ) : (
-                  projects.map((project) => (
-                    <ProjectSection
-                      key={project.id}
-                      project={project}
+                  roots.map((root) => (
+                    <SidebarRootRow
+                      key={`${root.kind}:${root.id}`}
+                      root={root}
+                      project={
+                        root.kind === "project"
+                          ? (byProject.get(root.id) ?? null)
+                          : null
+                      }
+                      workspace={
+                        root.kind === "workspace"
+                          ? (byWorkspace.get(root.id) ?? null)
+                          : null
+                      }
+                      projects={byProject}
                       agents={agents}
                       accounts={accounts}
                       status={status}
-                      selected={project.id === activeProjectId}
+                      activeProjectId={activeProjectId}
                       onNavigate={onNavigate}
                     />
                   ))
@@ -458,7 +637,9 @@ export function Sidebar({
 
       <SidebarRail
         hidden={!collapsed}
-        projects={projects}
+        roots={roots}
+        projects={byProject}
+        workspaces={byWorkspace}
         status={status}
         activeProjectId={activeProjectId}
         onNavigate={onNavigate}
@@ -468,13 +649,6 @@ export function Sidebar({
 }
 
 // ---- Rail ------------------------------------------------------------------
-
-/** Two initials for a multi-word name, else the first two letters: "Ke", "MA". */
-function monogram(name: string): string {
-  const [first = "", second = ""] = name.split(/[\s._-]+/).filter(Boolean);
-  if (second) return (first.charAt(0) + second.charAt(0)).toUpperCase();
-  return first.charAt(0).toUpperCase() + first.charAt(1).toLowerCase();
-}
 
 /** The loudest thing any agent in the project is doing. */
 function projectAttention(
@@ -500,18 +674,22 @@ function tileDelay(index: number): CSSProperties {
 }
 
 /**
- * The folded sidebar. Every project is a tile you can click, right-click and
- * hover for its name; nothing else competes for 52 pixels.
+ * The folded sidebar. Every top-level place is a tile you can click,
+ * right-click and hover for its name; nothing else competes for 52 pixels.
  */
 function SidebarRail({
   hidden,
+  roots,
   projects,
+  workspaces,
   status,
   activeProjectId,
   onNavigate,
 }: {
   hidden: boolean;
-  projects: Project[];
+  roots: SidebarRoot[];
+  projects: Map<string, Project>;
+  workspaces: Map<string, Workspace>;
   status: Record<string, PaneStatus>;
   activeProjectId: string | null;
   onNavigate: () => void;
@@ -523,31 +701,59 @@ function SidebarRail({
         <div className="h-[44px] w-full shrink-0" />
 
         <div className="flex min-h-0 w-full flex-1 flex-col items-center gap-1 overflow-y-auto overflow-x-hidden pb-2 pt-1 [scrollbar-width:none]">
-          {projects.map((project, index) => (
-            <RailTile
-              key={project.id}
-              project={project}
-              index={index}
-              selected={project.id === activeProjectId}
-              attention={projectAttention(project, status)}
-              onNavigate={onNavigate}
-            />
-          ))}
+          {roots.map((root, index) =>
+            root.kind === "workspace" ? (
+              <RailWorkspaceTile
+                key={root.id}
+                workspace={workspaces.get(root.id)}
+                projects={projects}
+                index={index}
+                status={status}
+                activeProjectId={activeProjectId}
+                onNavigate={onNavigate}
+              />
+            ) : (
+              <RailTile
+                key={root.id}
+                project={projects.get(root.id)}
+                index={index}
+                selected={root.id === activeProjectId}
+                attention={
+                  projects.get(root.id)
+                    ? projectAttention(projects.get(root.id)!, status)
+                    : null
+                }
+                onNavigate={onNavigate}
+              />
+            ),
+          )}
 
-          {projects.length > 0 ? (
+          {roots.length > 0 ? (
             <span
               aria-hidden
               className="mx-auto my-1 h-px w-4 shrink-0 bg-line-strong"
             />
           ) : null}
 
+          <RailTip label="New workspace">
+            <button
+              type="button"
+              aria-label="New workspace"
+              onClick={() => useKeel.getState().addWorkspace()}
+              style={tileDelay(roots.length)}
+              className="k-rail-tile shrink-0 text-faint"
+            >
+              <WorkspaceGlyph className="size-4" />
+            </button>
+          </RailTip>
+
           <RailTip label="Add a folder">
             <button
               type="button"
               aria-label="Add a folder"
               onClick={() => void pickProjectFolder()}
-              style={tileDelay(projects.length)}
-              className="k-rail-tile shrink-0 text-faint"
+              style={tileDelay(roots.length + 1)}
+              className="k-rail-tile shrink-0 text-dim"
             >
               <Plus className="size-4" />
             </button>
@@ -558,6 +764,80 @@ function SidebarRail({
   );
 }
 
+function RailWorkspaceTile({
+  workspace,
+  projects,
+  index,
+  status,
+  activeProjectId,
+  onNavigate,
+}: {
+  workspace: Workspace | undefined;
+  projects: Map<string, Project>;
+  index: number;
+  status: Record<string, PaneStatus>;
+  activeProjectId: string | null;
+  onNavigate: () => void;
+}) {
+  if (!workspace) return null;
+  const members = workspace.projectIds
+    .map((id) => projects.get(id))
+    .filter((item): item is Project => Boolean(item));
+  let attention: Attention | null = null;
+  for (const project of members) {
+    const next = projectAttention(project, status);
+    if (next === "working") {
+      attention = "working";
+      break;
+    }
+    attention ??= next;
+  }
+  const selected = members.some((project) => project.id === activeProjectId);
+
+  return (
+    <ContextMenu>
+      <RailTip
+        label={workspace.name}
+        detail={
+          members.length
+            ? `${members.length} ${members.length === 1 ? "project" : "projects"}`
+            : "Empty"
+        }
+      >
+        <ContextMenuTrigger asChild>
+          <button
+            type="button"
+            aria-label={workspace.name}
+            aria-current={selected ? "page" : undefined}
+            data-kind="workspace"
+            data-selected={selected}
+            style={tileDelay(index)}
+            className="k-rail-tile shrink-0"
+            onClick={() => {
+              useKeel.getState().selectWorkspace(workspace.id);
+              onNavigate();
+            }}
+          >
+            <span className="text-[11px] font-semibold leading-none">
+              {monogram(workspace.name)}
+            </span>
+            {attention ? (
+              <span
+                aria-hidden
+                className="k-rail-badge"
+                style={{ background: BADGE[attention] }}
+              />
+            ) : null}
+          </button>
+        </ContextMenuTrigger>
+      </RailTip>
+      <ContextMenuContent>
+        <ContextMenuEntries entries={() => workspaceMenu(workspace.id)} />
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
 function RailTile({
   project,
   index,
@@ -565,12 +845,13 @@ function RailTile({
   attention,
   onNavigate,
 }: {
-  project: Project;
+  project: Project | undefined;
   index: number;
   selected: boolean;
   attention: Attention | null;
   onNavigate: () => void;
 }) {
+  if (!project) return null;
   const total = project.decks.reduce(
     (sum, deck) => sum + listPanes(deck.tree).length,
     0,
@@ -775,11 +1056,42 @@ function Count({ value, className }: { value: number; className?: string }) {
 }
 
 /**
- * Where terminals would be, in a project or deck that has none. It lines up
- * with a terminal row — a status-dot's width of air, then a mark-sized glyph —
- * so an empty project has the same silhouette as a full one. Terminals can be
- * dropped onto it.
+ * Where something would be, in a place that has none.
+ *
+ * It keeps the silhouette of the row it stands in for — a status dot's width of
+ * air, then a mark-sized glyph — so an empty project has the same shape as a
+ * full one. A workspace with no projects uses this too: one empty-row language
+ * in the dock rather than a second one a level up. Things can be dropped onto
+ * it.
  */
+function AddRow({
+  label,
+  indent,
+  sortable,
+  onAdd,
+}: {
+  label: string;
+  indent: number;
+  sortable: SortableProps;
+  onAdd: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      {...sortable}
+      onClick={onAdd}
+      style={indentStyle(indent)}
+      className="k-row group/empty text-[12px] text-faint hover:text-dim"
+    >
+      <span aria-hidden className="w-1.5 shrink-0" />
+      <span className="grid size-4 shrink-0 place-items-center rounded-[5px] border border-dashed border-line-strong transition-colors group-hover/empty:border-foreground/30">
+        <Plus className="size-2.5" />
+      </span>
+      {label}
+    </button>
+  );
+}
+
 function EmptyRow({
   project,
   deck,
@@ -795,21 +1107,13 @@ function EmptyRow({
     { kind: "empty", projectId: project.id, deckId: deck.id },
     null,
   );
-
   return (
-    <button
-      type="button"
-      {...sortable}
-      onClick={onAdd}
-      style={indentStyle(indent)}
-      className="k-row group/empty text-[12px] text-faint hover:text-dim"
-    >
-      <span aria-hidden className="w-1.5 shrink-0" />
-      <span className="grid size-4 shrink-0 place-items-center rounded-[5px] border border-dashed border-line-strong transition-colors group-hover/empty:border-foreground/30">
-        <Plus className="size-2.5" />
-      </span>
-      Add terminals
-    </button>
+    <AddRow
+      label="Add terminals"
+      indent={indent}
+      sortable={sortable}
+      onAdd={onAdd}
+    />
   );
 }
 
@@ -818,6 +1122,217 @@ interface TreeProps {
   accounts: AgentAccount[];
   status: Record<string, PaneStatus>;
   onNavigate: () => void;
+}
+
+function SidebarRootRow({
+  root,
+  project,
+  workspace,
+  projects,
+  agents,
+  accounts,
+  status,
+  activeProjectId,
+  onNavigate,
+}: TreeProps & {
+  root: SidebarRoot;
+  project: Project | null;
+  workspace: Workspace | null;
+  projects: Map<string, Project>;
+  activeProjectId: string | null;
+}) {
+  if (root.kind === "workspace") {
+    if (!workspace) return null;
+    return (
+      <WorkspaceSection
+        workspace={workspace}
+        projects={projects}
+        agents={agents}
+        accounts={accounts}
+        status={status}
+        activeProjectId={activeProjectId}
+        onNavigate={onNavigate}
+      />
+    );
+  }
+  if (!project) return null;
+  return (
+    <ProjectSection
+      project={project}
+      agents={agents}
+      accounts={accounts}
+      status={status}
+      selected={project.id === activeProjectId}
+      onNavigate={onNavigate}
+    />
+  );
+}
+
+function WorkspaceSection({
+  workspace,
+  projects,
+  agents,
+  accounts,
+  status,
+  activeProjectId,
+  onNavigate,
+}: TreeProps & {
+  workspace: Workspace;
+  projects: Map<string, Project>;
+  activeProjectId: string | null;
+}) {
+  const members = workspace.projectIds
+    .map((id) => projects.get(id))
+    .filter((item): item is Project => Boolean(item));
+  const open = !workspace.collapsed;
+  // The member you are actually in. It answers both "is this group current"
+  // and, once the group is closed, the only useful thing it can still say.
+  const inside =
+    members.find((project) => project.id === activeProjectId) ?? null;
+  const current = inside !== null;
+  const renaming = useRenaming("workspace", workspace.id);
+  const tree = { agents, accounts, status, onNavigate };
+  const sortable = useSortable(
+    { kind: "workspace", workspaceId: workspace.id },
+    renaming ? null : { kind: "workspace", workspaceId: workspace.id },
+  );
+  // A project dropped on the header joins the group, not the row, so the well
+  // is what lights up and the row inside it stays out of the way.
+  const joining = sortable["data-drop"] === "inside";
+
+  const addFolder = () => {
+    void pickProjectFolder(workspace.id);
+  };
+
+  return (
+    <div
+      className="k-workspace"
+      data-current={current ? "true" : undefined}
+      data-drop={joining ? "true" : undefined}
+    >
+      <Row
+        group="workspace"
+        menu={() => workspaceMenu(workspace.id)}
+        selected={current && !open}
+        className="h-[26px]"
+        sortable={sortable}
+        onActivate={() => {
+          useKeel.getState().selectWorkspace(workspace.id);
+          onNavigate();
+        }}
+        onRename={() => startRename("workspace", workspace.id)}
+      >
+        {/* The mark rides the same left gutter a member chevron does, so the
+            group name and the project names under it start on one column. */}
+        <WorkspaceMark
+          name={workspace.name}
+          size={16}
+          current={current}
+          className="-ml-1"
+        />
+
+        {renaming ? (
+          <InlineRename
+            value={workspace.name}
+            className="h-5 text-[12px]"
+            onCommit={(name) =>
+              useKeel.getState().renameWorkspace(workspace.id, name)
+            }
+            onDone={stopRename}
+          />
+        ) : (
+          <>
+            <span
+              className={cn(
+                "min-w-0 flex-1 truncate text-[12px]",
+                current ? "font-medium text-foreground" : "text-dim",
+              )}
+            >
+              {workspace.name}
+            </span>
+            {/* Closed over the project you are in, the group says which one,
+                so the fill it is wearing reads as an answer rather than as a
+                row that lit up for no reason you can see. */}
+            {!open && inside ? (
+              <span
+                className={cn(
+                  "max-w-[92px] shrink-0 truncate pr-1 text-[11px] text-faint",
+                  HIDE_ON_HOVER.workspace,
+                )}
+              >
+                {inside.name}
+              </span>
+            ) : (
+              <Count
+                value={members.length}
+                className={HIDE_ON_HOVER.workspace}
+              />
+            )}
+            <RowActions group="workspace">
+              <RowButton label="Add a folder to this workspace" onClick={addFolder}>
+                <Plus className="size-3" />
+              </RowButton>
+              <MoreButton />
+            </RowActions>
+            {/* A section folds from its own edge. Members disclose from the
+                left, so the two chevrons never stack into one column and the
+                header keeps reading as the lid rather than as another node. */}
+            <button
+              type="button"
+              aria-label={open ? "Collapse" : "Expand"}
+              onClick={(event) => {
+                event.stopPropagation();
+                useKeel.getState().toggleWorkspaceCollapsed(workspace.id);
+              }}
+              className="k-icon-btn -ml-1 -mr-0.5 size-[18px]"
+            >
+              <ChevronDown
+                className={cn(
+                  "size-3 transition-transform duration-150",
+                  !open && "rotate-180",
+                )}
+              />
+            </button>
+          </>
+        )}
+      </Row>
+
+      {open ? (
+        members.length > 0 ? (
+          <div className="k-workspace-body">
+            {members.map((project) => (
+              <ProjectSection
+                key={project.id}
+                project={project}
+                selected={project.id === activeProjectId}
+                {...tree}
+              />
+            ))}
+          </div>
+        ) : (
+          <EmptyWorkspaceRow workspaceId={workspace.id} onAdd={addFolder} />
+        )
+      ) : null}
+    </div>
+  );
+}
+
+function EmptyWorkspaceRow({
+  workspaceId,
+  onAdd,
+}: {
+  workspaceId: string;
+  onAdd: () => void;
+}) {
+  const sortable = useSortable({ kind: "empty-workspace", workspaceId }, null);
+  return (
+    <AddRow
+      label="Add a folder"
+      indent={INDENT[0]}
+      sortable={sortable}
+      onAdd={onAdd}
+    />
+  );
 }
 
 function ProjectSection({
@@ -990,12 +1505,7 @@ function DeckGroup({
         onRename={() => startRename("deck", deck.id)}
       >
         {/* Decks are numbered everywhere else in the app; number them here too. */}
-        <span
-          className={cn(
-            "grid h-4 min-w-4 shrink-0 place-items-center rounded-full px-1 text-[10px] font-semibold tabular-nums transition-colors",
-            active ? "bg-veil-3 text-foreground" : "bg-veil text-faint",
-          )}
-        >
+        <span className="k-deck-no" data-active={active}>
           {index + 1}
         </span>
 
@@ -1134,7 +1644,7 @@ function PaneRow({
       menu={() => paneMenu(project.id, pane.id, "sidebar")}
       selected={selected}
       title={pane.cwd ?? project.path}
-      indent={INDENT[depth] ?? INDENT[2]}
+      indent={INDENT[depth === 1 ? 1 : 2]}
       sortable={sortable}
       onActivate={() => {
         // Reaching a terminal brings its project and deck with it.

@@ -101,7 +101,7 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
 export const SHORTCUTS: Shortcut[] = [
   {
     id: "goTo",
-    label: "Go to a terminal, deck or action",
+    label: "Go to a terminal, deck, project, workspace or action",
     group: "Jump",
     family: "single",
     defaults: bind("KeyP", { ctrl: true }),

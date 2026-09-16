@@ -41,6 +41,7 @@ import { useKeel } from "@/state/store";
 
 export interface TitlebarActions {
   addFolder: () => void;
+  addWorkspace: () => void;
   addTerminals: () => void;
   removeProject: () => void;
   newDeck: () => void;

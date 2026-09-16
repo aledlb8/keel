@@ -21,9 +21,11 @@ import {
   Eraser,
   Columns3,
   FolderCog,
+  FolderInput,
   FolderOpen,
   FolderPlus,
   Folders,
+  FolderOutput,
   Keyboard,
   Layers,
   LayoutGrid,
@@ -39,6 +41,7 @@ import {
   SplitSquareVertical,
   TextSelect,
   Trash2,
+  Ungroup,
   UserRound,
   UsersRound,
   X,
@@ -47,9 +50,11 @@ import {
 import type { MenuEntry } from "@/components/menu/MenuEntries";
 import { terminalCommands } from "@/components/TerminalSurface";
 import type { TitlebarActions } from "@/components/Titlebar";
+import { WorkspaceGlyph } from "@/components/WorkspaceMark";
 import { lookingAt, waitingPanes } from "@/lib/island";
 import { deckShortcutKeys, shortcutKeys } from "@/lib/keymap";
 import { listPanes } from "@/lib/tree";
+import { repairSidebar, workspaceOf } from "@/lib/workspaces";
 import {
   activeDeck,
   deckOfPane,
@@ -74,13 +79,15 @@ function copyText(text: string) {
   void navigator.clipboard.writeText(text).catch(() => {});
 }
 
-export async function pickProjectFolder() {
+export async function pickProjectFolder(workspaceId?: string) {
   const picked = await openFolder({
     directory: true,
     multiple: false,
-    title: "Add a project folder",
+    title: workspaceId ? "Add a folder to this workspace" : "Add a project folder",
   });
-  if (typeof picked === "string") useKeel.getState().addProject(picked);
+  if (typeof picked === "string") {
+    useKeel.getState().addProject(picked, undefined, workspaceId);
+  }
 }
 
 // ---- The menu bar ------------------------------------------------------------
@@ -135,6 +142,12 @@ export function projectBarMenu(actions: TitlebarActions): MenuEntry[] {
       onSelect: actions.addFolder,
     },
     {
+      kind: "item",
+      label: "New workspace",
+      icon: WorkspaceGlyph,
+      onSelect: actions.addWorkspace,
+    },
+    {
       kind: "sub",
       label: "Switch project",
       icon: Folders,
@@ -143,10 +156,13 @@ export function projectBarMenu(actions: TitlebarActions): MenuEntry[] {
         {
           kind: "radio",
           value: state.activeProjectId ?? "",
-          options: state.projects.map((item) => ({
-            value: item.id,
-            label: item.name,
-          })),
+          options: state.projects.map((item) => {
+            const group = workspaceOf(state.workspaces, item.id);
+            return {
+              value: item.id,
+              label: group ? `${group.name} / ${item.name}` : item.name,
+            };
+          }),
           onChange: (projectId) => state.selectProject(projectId),
         },
       ],
@@ -360,13 +376,19 @@ export function helpBarMenu(actions: TitlebarActions): MenuEntry[] {
 /** The empty part of the sidebar. */
 export function sidebarMenu(): MenuEntry[] {
   const state = useKeel.getState();
-  const any = state.projects.length > 0;
+  const any = state.projects.length > 0 || state.workspaces.length > 0;
   return [
     {
       kind: "item",
       label: "Add a folder…",
       icon: FolderPlus,
       onSelect: () => void pickProjectFolder(),
+    },
+    {
+      kind: "item",
+      label: "New workspace",
+      icon: WorkspaceGlyph,
+      onSelect: () => state.addWorkspace(),
     },
     { kind: "separator" },
     {
@@ -386,14 +408,31 @@ export function sidebarMenu(): MenuEntry[] {
   ];
 }
 
+function projectPlace(projectId: string) {
+  const state = useKeel.getState();
+  const group = workspaceOf(state.workspaces, projectId);
+  if (group) {
+    const index = group.projectIds.indexOf(projectId);
+    return { index, last: group.projectIds.length - 1, group };
+  }
+  const sidebar = repairSidebar(state.projects, state.workspaces, state.sidebar);
+  const index = sidebar.findIndex(
+    (entry) => entry.kind === "project" && entry.id === projectId,
+  );
+  return { index, last: sidebar.length - 1, group: null };
+}
+
 export function projectMenu(projectId: string): MenuEntry[] {
   const state = useKeel.getState();
-  const index = state.projects.findIndex((item) => item.id === projectId);
-  const project = state.projects[index];
+  const project = state.projects.find((item) => item.id === projectId);
   if (!project) return [];
   const count = project.decks.reduce(
     (sum, deck) => sum + listPanes(deck.tree).length,
     0,
+  );
+  const place = projectPlace(projectId);
+  const others = state.workspaces.filter(
+    (workspace) => workspace.id !== place.group?.id,
   );
 
   return [
@@ -438,16 +477,72 @@ export function projectMenu(projectId: string): MenuEntry[] {
       kind: "item",
       label: "Move up",
       icon: ArrowUp,
-      disabled: index === 0,
+      disabled: place.index <= 0,
       onSelect: () => state.moveProject(projectId, -1),
     },
     {
       kind: "item",
       label: "Move down",
       icon: ArrowDown,
-      disabled: index === state.projects.length - 1,
+      disabled: place.index < 0 || place.index >= place.last,
       onSelect: () => state.moveProject(projectId, 1),
     },
+    { kind: "separator" },
+    {
+      kind: "sub",
+      label: "Move to workspace",
+      icon: FolderInput,
+      entries: [
+        {
+          kind: "item",
+          label: "New workspace",
+          icon: WorkspaceGlyph,
+          onSelect: () => state.addWorkspace(projectId),
+        },
+        ...(others.length
+          ? ([
+              { kind: "separator" } as const,
+              ...others.map(
+                (workspace) =>
+                  ({
+                    kind: "item" as const,
+                    label: workspace.name,
+                    onSelect: () =>
+                      state.placeProjectIn(projectId, {
+                        kind: "member",
+                        workspaceId: workspace.id,
+                        index: workspace.projectIds.length,
+                      }),
+                  }),
+              ),
+            ] satisfies MenuEntry[])
+          : []),
+      ],
+    },
+    ...(place.group
+      ? [
+          {
+            kind: "item" as const,
+            label: "Remove from workspace",
+            icon: FolderOutput,
+            onSelect: () => {
+              const sidebar = repairSidebar(
+                state.projects,
+                state.workspaces,
+                state.sidebar,
+              );
+              const at = sidebar.findIndex(
+                (entry) =>
+                  entry.kind === "workspace" && entry.id === place.group!.id,
+              );
+              state.placeProjectIn(projectId, {
+                kind: "root",
+                index: at >= 0 ? at + 1 : sidebar.length,
+              });
+            },
+          },
+        ]
+      : []),
     { kind: "separator" },
     {
       kind: "item",
@@ -470,6 +565,68 @@ export function projectMenu(projectId: string): MenuEntry[] {
       confirm:
         count > 0 ? `Close ${plural(count, "terminal")} and remove` : "Click again to remove",
       onSelect: () => state.removeProject(projectId),
+    },
+  ];
+}
+
+export function workspaceMenu(workspaceId: string): MenuEntry[] {
+  const state = useKeel.getState();
+  const workspace = state.workspaces.find((item) => item.id === workspaceId);
+  if (!workspace) return [];
+  const sidebar = repairSidebar(state.projects, state.workspaces, state.sidebar);
+  const index = sidebar.findIndex(
+    (entry) => entry.kind === "workspace" && entry.id === workspaceId,
+  );
+  const count = workspace.projectIds.length;
+
+  return [
+    { kind: "label", label: workspace.name },
+    {
+      kind: "item",
+      label: "Add a folder…",
+      icon: FolderPlus,
+      onSelect: () => void pickProjectFolder(workspaceId),
+    },
+    { kind: "separator" },
+    {
+      kind: "item",
+      label: "Rename",
+      icon: Pencil,
+      shortcut: shortcutKeys("rename"),
+      onSelect: () =>
+        state.startRename({
+          kind: "workspace",
+          id: workspaceId,
+          where: "sidebar",
+        }),
+    },
+    {
+      kind: "item",
+      label: workspace.collapsed ? "Expand" : "Collapse",
+      icon: workspace.collapsed ? ChevronsUpDown : ChevronsDownUp,
+      onSelect: () => state.toggleWorkspaceCollapsed(workspaceId),
+    },
+    {
+      kind: "item",
+      label: "Move up",
+      icon: ArrowUp,
+      disabled: index <= 0,
+      onSelect: () => state.moveWorkspace(workspaceId, -1),
+    },
+    {
+      kind: "item",
+      label: "Move down",
+      icon: ArrowDown,
+      disabled: index < 0 || index >= sidebar.length - 1,
+      onSelect: () => state.moveWorkspace(workspaceId, 1),
+    },
+    { kind: "separator" },
+    {
+      kind: "item",
+      label: "Ungroup workspace",
+      icon: Ungroup,
+      confirm: count > 0 ? `Ungroup ${plural(count, "project")}` : undefined,
+      onSelect: () => state.dissolveWorkspace(workspaceId),
     },
   ];
 }

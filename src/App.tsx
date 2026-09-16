@@ -347,6 +347,7 @@ export default function App() {
 
   const actions: TitlebarActions = {
     addFolder: () => void pickFolder(),
+    addWorkspace: () => useKeel.getState().addWorkspace(),
     addTerminals: () => setLaunching(true),
     removeProject: () => project && useKeel.getState().removeProject(project.id),
     newDeck: () => project && useKeel.getState().addDeck(project.id),

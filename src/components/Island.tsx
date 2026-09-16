@@ -5,7 +5,8 @@
  * an agent finished, terminals are coming back, the tunnel is coming up, the
  * host stopped answering — and it takes you there when you click it. Click it
  * at rest and a switcher drops out of it: every waiting and working agent, every
- * terminal, deck and project, and the app's actions, a few keystrokes away.
+ * terminal, deck, project and workspace, and the app's actions, a few keystrokes
+ * away.
  *
  * Rules that keep it from turning into a notification centre:
  *
@@ -51,6 +52,7 @@ import {
 import { AgentMark } from "@/components/AgentMark";
 import type { TitlebarActions } from "@/components/Titlebar";
 import { StatusLight } from "@/components/VpnDialog";
+import { WorkspaceGlyph, WorkspaceMark } from "@/components/WorkspaceMark";
 import * as backend from "@/lib/backend";
 import {
   lookingAt,
@@ -64,9 +66,11 @@ import {
   type WaitingPane,
 } from "@/lib/island";
 import { shortcutKeys, withShortcut } from "@/lib/keymap";
+import { monogram } from "@/lib/monogram";
 import { agentAccent } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 import type { Agent } from "@/lib/types";
+import { orderedProjects, workspaceOf } from "@/lib/workspaces";
 import { useKeel } from "@/state/store";
 
 /** How long each kind of news keeps the island grown, once you stop hovering. */
@@ -103,6 +107,7 @@ export interface IslandProps {
 
 export function Island({ actions, onNavigate }: IslandProps) {
   const projects = useKeel((state) => state.projects);
+  const workspaces = useKeel((state) => state.workspaces);
   const activeProjectId = useKeel((state) => state.activeProjectId);
   const status = useKeel((state) => state.status);
   const doneAt = useKeel((state) => state.doneAt);
@@ -120,6 +125,7 @@ export function Island({ actions, onNavigate }: IslandProps) {
   const nudge = useKeel((state) => state.islandNudge);
 
   const project = projects.find((item) => item.id === activeProjectId) ?? null;
+  const group = project ? workspaceOf(workspaces, project.id) : null;
   const deck = project
     ? (project.decks.find((item) => item.id === project.activeDeckId) ??
       project.decks[0] ??
@@ -352,7 +358,7 @@ export function Island({ actions, onNavigate }: IslandProps) {
 
     default:
       label = project
-        ? `${project.name}${project.decks.length > 1 && deck ? `, ${deck.name}` : ""}`
+        ? `${group ? `${group.name} / ` : ""}${project.name}${project.decks.length > 1 && deck ? `, ${deck.name}` : ""}`
         : "Go to";
       content = (
         <span className="flex h-full items-center">
@@ -366,8 +372,16 @@ export function Island({ actions, onNavigate }: IslandProps) {
           >
             {project ? (
               <>
-                <span className="max-w-[220px] truncate text-[12px] text-dim transition-colors group-hover/rest:text-foreground">
-                  {project.name}
+                {/* The group is a badge, not a crumb. Two names either side of
+                    a rule read as a trail you are halfway along; the mark says
+                    which workspace you are scoped to and leaves the project as
+                    the place you are. Its name is in the title, one hover
+                    away. */}
+                <span className="flex min-w-0 items-center gap-2">
+                  {group ? <WorkspaceMark name={group.name} size={16} /> : null}
+                  <span className="max-w-[220px] truncate text-[12px] text-dim transition-colors group-hover/rest:text-foreground">
+                    {project.name}
+                  </span>
                 </span>
                 {project.decks.length > 1 && deck ? (
                   <>
@@ -598,6 +612,7 @@ const GROUPS = [
   "Working",
   "Terminals",
   "Decks",
+  "Workspaces",
   "Projects",
   "Actions",
 ] as const;
@@ -621,6 +636,7 @@ const RESTING_LIMIT: Record<Group, number> = {
   Working: 99,
   Terminals: 6,
   Decks: 9,
+  Workspaces: 6,
   Projects: 6,
   Actions: 99,
 };
@@ -647,6 +663,8 @@ function Switcher({
   onNavigate: () => void;
 }) {
   const projects = useKeel((state) => state.projects);
+  const workspaces = useKeel((state) => state.workspaces);
+  const sidebar = useKeel((state) => state.sidebar);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const [now, setNow] = useState(() => Date.now());
@@ -711,14 +729,15 @@ function Switcher({
       ),
     ];
 
+    const listed = orderedProjects(projects, workspaces, sidebar);
     const restingProject = query.trim() ? null : activeProjectId;
-    for (const ref of paneRefs(projects)) {
+    for (const ref of paneRefs(listed)) {
       if (busy.has(ref.paneId)) continue;
       if (restingProject && ref.projectId !== restingProject) continue;
       result.push(paneEntry(ref, "Terminals"));
     }
 
-    for (const project of projects) {
+    for (const project of listed) {
       if (project.decks.length < 2) continue;
       if (restingProject && project.id !== restingProject) continue;
       project.decks.forEach((deck, index) => {
@@ -754,18 +773,56 @@ function Switcher({
       });
     }
 
-    for (const project of projects) {
+    for (const workspace of workspaces) {
+      if (!query.trim() && workspace.projectIds.includes(activeProjectId ?? "")) {
+        continue;
+      }
+      const count = workspace.projectIds.length;
+      result.push({
+        id: `workspace:${workspace.id}`,
+        group: "Workspaces",
+        label: workspace.name,
+        detail: count
+          ? `${count} ${count === 1 ? "project" : "projects"}`
+          : "Empty",
+        search: [
+          workspace.name,
+          ...workspace.projectIds.flatMap((id) => {
+            const project = projects.find((item) => item.id === id);
+            return project ? [project.name, project.path] : [];
+          }),
+        ],
+        leading: <Tile>{monogram(workspace.name)}</Tile>,
+        trailing: (
+          <span className="text-[11px] text-faint">
+            {workspace.projectIds.includes(activeProjectId ?? "")
+              ? "Current"
+              : count
+                ? `${count} ${count === 1 ? "project" : "projects"}`
+                : "Empty"}
+          </span>
+        ),
+        run: () => {
+          useKeel.getState().selectWorkspace(workspace.id);
+          onClose();
+          onNavigate();
+        },
+      });
+    }
+
+    for (const project of listed) {
       if (!query.trim() && project.id === activeProjectId) continue;
       const count = project.decks.reduce(
         (total, deck) => total + Object.keys(deck.panes).length,
         0,
       );
+      const group = workspaceOf(workspaces, project.id);
       result.push({
         id: `project:${project.id}`,
         group: "Projects",
         label: project.name,
-        detail: project.path,
-        search: [project.name, project.path],
+        detail: group ? group.name : project.path,
+        search: [project.name, project.path, group?.name ?? ""],
         leading: (
           <Tile>
             <FolderOpen className="size-3.5" />
@@ -814,6 +871,7 @@ function Switcher({
           ]
         : []),
       action("folder", "Add a folder", <FolderPlus className="size-3.5" />, actions.addFolder),
+      action("workspace", "New workspace", <WorkspaceGlyph className="size-3.5" />, actions.addWorkspace),
       action("agents", "Agents & profiles", <UsersRound className="size-3.5" />, actions.openCatalogue),
       action("vpn", "Private VPN", <ShieldCheck className="size-3.5" />, actions.openVpn),
       action("sidebar", "Collapse or expand the sidebar", <PanelLeft className="size-3.5" />, actions.toggleSidebar, shortcutKeys("toggleSidebar")),
@@ -827,6 +885,8 @@ function Switcher({
     working,
     agentById,
     projects,
+    workspaces,
+    sidebar,
     activeProjectId,
     hasProject,
     actions,
@@ -884,7 +944,7 @@ function Switcher({
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="Go to a terminal, deck, project or action"
+          placeholder="Go to a terminal, deck, project, workspace or action"
           aria-label="Go to"
           aria-controls="island-switcher-list"
           aria-activedescendant={visible[active] ? `island-${visible[active].id}` : undefined}

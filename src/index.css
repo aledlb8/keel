@@ -367,7 +367,7 @@
         height: 2px;
         border-radius: 1px;
         background: var(--keel-text);
-        box-shadow: 0 0 0 2px var(--keel-chrome);
+        box-shadow: 0 0 0 2px var(--k-ground, var(--keel-chrome));
         pointer-events: none;
     }
 
@@ -452,6 +452,20 @@
 
     .k-icon-btn:hover {
         background: var(--keel-veil-2);
+        color: var(--keel-text);
+    }
+
+    /*
+     * The one action in a header you reach for first keeps a ground of its own,
+     * so a pair of icon buttons has an order without needing a label.
+     */
+    .k-icon-btn[data-primary="true"] {
+        background: var(--keel-veil-1);
+        color: var(--keel-text-dim);
+    }
+
+    .k-icon-btn[data-primary="true"]:hover {
+        background: var(--keel-veil-3);
         color: var(--keel-text);
     }
 
@@ -656,6 +670,140 @@
         width: 1px;
         background: var(--keel-line);
         pointer-events: none;
+    }
+
+    /*
+     * A workspace, and everything in it, as one object.
+     *
+     * The group is a shallow well — the same recessed ground a field or a
+     * segmented track sits in — so it reads as a container at a glance instead
+     * of as an indent you have to measure against the row above. That is the
+     * whole reason its members are not indented at all: the well already says
+     * where they are, and the dock keeps three levels in 248px instead of four.
+     *
+     * A well is one step up the veil ladder, so every state inside it steps up
+     * too. Otherwise a hovered member would land on exactly the ground it is
+     * already standing on.
+     */
+    .k-workspace {
+        --k-ground: #1f1f1f;
+        --k-mark-ground: var(--keel-veil-2);
+        margin: 4px var(--keel-inset);
+        padding-block: 3px;
+        border-radius: var(--keel-r-control);
+        background: var(--keel-veil-1);
+        box-shadow: inset 0 0 0 1px var(--keel-line);
+        transition:
+            background-color 120ms ease,
+            box-shadow 120ms ease;
+    }
+
+    /* You are somewhere inside this one: the well catches the light. */
+    .k-workspace[data-current="true"] {
+        box-shadow:
+            inset 0 0 0 1px var(--keel-line-strong),
+            inset 0 1px 0 0 var(--keel-sheen);
+    }
+
+    /*
+     * A project dropped here joins the group, not the header row, so the whole
+     * well answers and the row inside it keeps quiet.
+     */
+    .k-workspace[data-drop="true"] {
+        background: var(--keel-veil-2);
+        box-shadow: inset 0 0 0 1px var(--keel-line-strong);
+    }
+
+    .k-workspace > .k-row[data-drop="inside"] {
+        background: transparent;
+        box-shadow: none;
+    }
+
+    .k-workspace .k-row:hover {
+        background: var(--keel-veil-2);
+    }
+
+    .k-workspace .k-row[data-selected="true"] {
+        background: var(--keel-veil-3);
+    }
+
+    .k-workspace .k-icon-btn:hover {
+        background: var(--keel-veil-3);
+    }
+
+    .k-workspace .k-workspace-mark[data-current="true"] {
+        --k-mark-ground: var(--keel-veil-3);
+    }
+
+    /* A hair of air under the last member, inside the well. */
+    .k-workspace-body {
+        padding-bottom: 2px;
+    }
+
+    /*
+     * A workspace's initials in a box. The box is the mark: a workspace is the
+     * container its projects sit in, so it is drawn as one at every size — 16px
+     * in a sidebar row and in the island, and the rail tile itself at 36px.
+     */
+    .k-workspace-mark {
+        display: grid;
+        flex-shrink: 0;
+        place-items: center;
+        border-radius: var(--keel-r-chip);
+        background: var(--k-mark-ground, var(--keel-veil-1));
+        box-shadow: inset 0 0 0 1px var(--keel-line);
+        color: var(--keel-text-faint);
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+        letter-spacing: 0.01em;
+        line-height: 1;
+        transition:
+            background-color 110ms ease,
+            box-shadow 110ms ease,
+            color 110ms ease;
+    }
+
+    .k-workspace-mark[data-current="true"] {
+        box-shadow:
+            inset 0 0 0 1px var(--keel-line-strong),
+            inset 0 1px 0 0 var(--keel-sheen);
+        color: var(--keel-text);
+    }
+
+    /*
+     * A deck's number. Called out as a class so a deck inside a workspace well
+     * can step its ground up with everything else around it.
+     */
+    .k-deck-no {
+        display: grid;
+        flex-shrink: 0;
+        place-items: center;
+        min-width: 16px;
+        height: 16px;
+        padding-inline: 4px;
+        border-radius: 999px;
+        background: var(--keel-veil-1);
+        color: var(--keel-text-faint);
+        font-size: 10px;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+        line-height: 1;
+        transition:
+            background-color 110ms ease,
+            color 110ms ease;
+    }
+
+    .k-deck-no[data-active="true"] {
+        background: var(--keel-veil-3);
+        color: var(--keel-text);
+    }
+
+    .k-workspace .k-deck-no {
+        background: var(--keel-veil-2);
+    }
+
+    .k-workspace .k-deck-no[data-active="true"] {
+        background: var(--keel-veil-3);
     }
 
     /* The file tree's version: one per ancestor, drawn inside the row. */
@@ -1078,6 +1226,27 @@
         color: var(--keel-text);
     }
 
+    /*
+     * Folded, a workspace is still the box and a project is still bare letters
+     * on the band. One silhouette apart, and not a drop of colour spent.
+     */
+    .k-rail-tile[data-kind="workspace"] {
+        --k-ground: #1f1f1f;
+        background: var(--keel-veil-1);
+        box-shadow: inset 0 0 0 1px var(--keel-line-strong);
+    }
+
+    .k-rail-tile[data-kind="workspace"]:hover {
+        background: var(--keel-veil-2);
+    }
+
+    .k-rail-tile[data-kind="workspace"][data-selected="true"] {
+        background: var(--keel-veil-3);
+        box-shadow:
+            inset 0 0 0 1px var(--keel-line-strong),
+            inset 0 1px 0 0 var(--keel-sheen);
+    }
+
     /* Tiles arrive one after another, top down, as the rail fades in. */
     .k-dock[data-collapsed="false"] .k-rail-tile {
         opacity: 0;
@@ -1102,7 +1271,7 @@
         width: 7px;
         height: 7px;
         border-radius: 999px;
-        box-shadow: 0 0 0 2px var(--keel-chrome);
+        box-shadow: 0 0 0 2px var(--k-ground, var(--keel-chrome));
     }
 
     /* A number in the same corner, for the git tile. */
@@ -1150,6 +1319,14 @@
         transition:
             width 560ms cubic-bezier(0.32, 0.72, 0, 1),
             background-color 220ms ease;
+    }
+
+    /*
+     * The island is one step lighter than the dock, so a mark riding on it
+     * steps up with it and stays a chip rather than a hole cut in the pill.
+     */
+    .k-island .k-workspace-mark {
+        --k-mark-ground: var(--keel-veil-3);
     }
 
     /* What it says comes into focus as the shape arrives. */

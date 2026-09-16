@@ -101,6 +101,10 @@ export interface Deck {
  * Selecting a project is one-way: there is no "no project" state, because a
  * terminal with no folder to start in is not useful. Decks in projects you are
  * not looking at keep running.
+ *
+ * A project may sit on its own in the sidebar, or belong to one workspace. It
+ * never belongs to two: membership is exclusive, and dissolving a workspace
+ * puts its members back on their own.
  */
 export interface Project {
   id: string;
@@ -111,6 +115,36 @@ export interface Project {
   /** Whether its contents are folded away in the sidebar. */
   collapsed: boolean;
 }
+
+/**
+ * A named group of existing projects.
+ *
+ * A workspace is not a folder and does not own terminals, decks, or a file
+ * tree — those stay on the member projects. It is only a way of arranging
+ * related work in the sidebar, the way a deck arranges terminals inside a
+ * project. Dissolving one never deletes a project.
+ *
+ * The file inspector (`useWorkspace`, `src/lib/workspace.ts`) is a different
+ * thing: the files of the folder you are looking at. That name was here first.
+ */
+export interface Workspace {
+  id: string;
+  name: string;
+  /** Whether its member projects are folded away in the sidebar. */
+  collapsed: boolean;
+  /** Member project ids, in the order they appear under this workspace. */
+  projectIds: string[];
+  /** Last member you were in while this workspace was current. */
+  activeProjectId: string | null;
+}
+
+/**
+ * One row at the top of the sidebar: a workspace, or a project that is not
+ * inside any workspace. Nested projects live on `Workspace.projectIds`.
+ */
+export type SidebarRoot =
+  | { kind: "workspace"; id: string }
+  | { kind: "project"; id: string };
 
 /**
  * Extra args (or a subcommand) that reopen a CLI's conversation.
@@ -180,6 +214,11 @@ export interface AgentAccount {
 export interface VpnSettings {
   /** Bring the tunnel up when Keel starts. */
   autoConnect: boolean;
+  /**
+   * Disk-only opt-in. Older documents saved `autoConnect: true` as the default;
+   * launch only connects when this flag is present and true.
+   */
+  connectOnLaunch?: boolean;
   /** OpenVPN Connect profile id (file stem). `null` uses the only/first one. */
   profileId: string | null;
 }
@@ -192,7 +231,7 @@ export interface VpnProfileInfo {
 
 export type VpnPhase = "idle" | "connecting" | "connected" | "error";
 
-/** Live tunnel state. Only `autoConnect` / `profileId` are written to disk. */
+/** Live tunnel state. Only `autoConnect` / `connectOnLaunch` / `profileId` are written to disk. */
 export interface VpnState extends VpnSettings {
   phase: VpnPhase;
   /** Hold new/restarted terminals until the current connection attempt settles. */
@@ -211,8 +250,11 @@ export interface VpnState extends VpnSettings {
 
 /** Everything written to disk. Live PTYs are deliberately not part of it. */
 export interface PersistedState {
-  version: 4;
+  version: 5;
   projects: Project[];
+  workspaces: Workspace[];
+  /** Top-level sidebar order. Missing or stale ids are repaired on load. */
+  sidebar: SidebarRoot[];
   activeProjectId: string | null;
   accounts: AgentAccount[];
   vpn?: VpnSettings;
