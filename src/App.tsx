@@ -18,7 +18,6 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { open as openFolder } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
 import { AgentSettingsDialog } from "@/components/AgentSettingsDialog";
@@ -36,7 +35,7 @@ import { Titlebar, type TitlebarActions } from "@/components/Titlebar";
 import { VpnDialog } from "@/components/VpnDialog";
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
-import { statePath } from "@/lib/backend";
+import { pickProjectFolder, statePath } from "@/lib/backend";
 import { onHostLost } from "@/lib/invoke";
 import {
   bindingFor,
@@ -217,12 +216,8 @@ export default function App() {
   }, []);
 
   const pickFolder = useCallback(async () => {
-    const picked = await openFolder({
-      directory: true,
-      multiple: false,
-      title: "Add a project folder",
-    });
-    if (typeof picked === "string") useKeel.getState().addProject(picked);
+    const picked = await pickProjectFolder();
+    if (picked) useKeel.getState().addProject(picked);
   }, []);
 
   /**

@@ -5,6 +5,7 @@ mod grep;
 mod paths;
 mod procs;
 mod pty;
+mod roots;
 mod sessions;
 mod store;
 mod usage;
@@ -47,7 +48,7 @@ pub fn run() {
             store::state_save,
             store::state_path,
             store::list_subdirectories,
-            store::path_exists,
+            roots::project_pick,
             workspace::workspace_list,
             workspace::workspace_read,
             workspace::workspace_write,

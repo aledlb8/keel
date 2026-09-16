@@ -147,7 +147,7 @@ impl WatchManager {
 pub async fn workspace_watch(manager: State<'_, WatchManager>, root: String) -> Result<(), String> {
     let manager = WatchManager::clone(&manager);
     let original = root.clone();
-    let canon = crate::blocking::run(move || canonicalize_dir(Path::new(&root))).await?;
+    let canon = crate::blocking::run(move || crate::roots::require(&root)).await?;
     manager.watch(canon, original)
 }
 

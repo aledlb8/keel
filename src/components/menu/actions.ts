@@ -6,7 +6,6 @@
  * just another way of reaching the same operations as the keyboard and buttons.
  */
 
-import { open as openFolder } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   ArrowDown,
@@ -52,6 +51,7 @@ import type { MenuEntry } from "@/components/menu/MenuEntries";
 import { terminalCommands } from "@/components/TerminalSurface";
 import type { TitlebarActions } from "@/components/Titlebar";
 import { WorkspaceGlyph } from "@/components/WorkspaceMark";
+import { pickProjectFolder as pickRegisteredFolder } from "@/lib/backend";
 import { lookingAt, waitingPanes } from "@/lib/island";
 import { deckShortcutKeys, shortcutKeys } from "@/lib/keymap";
 import { listPanes } from "@/lib/tree";
@@ -81,12 +81,8 @@ function copyText(text: string) {
 }
 
 export async function pickProjectFolder(workspaceId?: string) {
-  const picked = await openFolder({
-    directory: true,
-    multiple: false,
-    title: workspaceId ? "Add a folder to this workspace" : "Add a project folder",
-  });
-  if (typeof picked === "string") {
+  const picked = await pickRegisteredFolder();
+  if (picked) {
     useKeel.getState().addProject(picked, undefined, workspaceId);
   }
 }

@@ -12,7 +12,7 @@ use std::path::{Component, Path};
 use regex::{Regex, RegexBuilder};
 use serde::Serialize;
 
-use crate::paths::{canonicalize_dir, is_skipped_dir, normalize_rel, strip_verbatim, to_posix};
+use crate::paths::{is_skipped_dir, normalize_rel, strip_verbatim, to_posix};
 
 const MAX_HITS: usize = 500;
 const MAX_FILE: u64 = 1_000_000;
@@ -151,7 +151,7 @@ fn workspace_grep_blocking(
         });
     }
     let re = compile_pattern(needle, case_sensitive, is_regex)?;
-    let root_path = canonicalize_dir(Path::new(&root))?;
+    let root_path = crate::roots::require(&root)?;
     let walker = ignore::WalkBuilder::new(&root_path)
         .hidden(true)
         .git_ignore(true)
@@ -203,10 +203,12 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn repo_root() -> std::path::PathBuf {
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("crate is inside the repo")
-            .to_path_buf()
+            .to_path_buf();
+        crate::roots::register(&root).expect("test project root");
+        root
     }
 
     fn grep(
@@ -215,6 +217,7 @@ mod tests {
         case_sensitive: bool,
         is_regex: bool,
     ) -> Result<GrepResults, String> {
+        crate::roots::register(root).expect("test project root");
         tauri::async_runtime::block_on(workspace_grep(
             root.to_string_lossy().into_owned(),
             query.into(),

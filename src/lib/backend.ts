@@ -40,8 +40,9 @@ export function listSubdirectories(
   return invoke("list_subdirectories", { path });
 }
 
-export function pathExists(path: string): Promise<boolean> {
-  return invoke("path_exists", { path });
+/** Native folder picker. The chosen path is registered as an open project root. */
+export function pickProjectFolder(): Promise<string | null> {
+  return invoke("project_pick");
 }
 
 export interface SessionHit {
