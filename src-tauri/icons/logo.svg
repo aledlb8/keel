@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="none">
+  <!-- Keel: a prompt and a cursor on a graphite slab. One accent, the app's "working" amber. -->
+  <defs>
+    <linearGradient id="slab" x1="0" y1="100" x2="0" y2="924" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1f1f1f"/>
+      <stop offset="1" stop-color="#121212"/>
+    </linearGradient>
+    <linearGradient id="edge" x1="0" y1="100" x2="0" y2="924" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.11"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0.045"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.03"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="100" y="100" width="824" height="824" rx="188" fill="url(#slab)"/>
+  <rect x="104" y="104" width="816" height="816" rx="184" stroke="url(#edge)" stroke-width="8"/>
+
+  <path d="M316 380 L456 512 L316 644" stroke="#ededed" stroke-width="68" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="516" y="610" width="224" height="68" rx="34" fill="#e9a23b"/>
+</svg>
