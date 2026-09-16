@@ -217,10 +217,9 @@ fn builtin_catalogue() -> Vec<AgentSpec> {
     serde_json::from_str(BUILTIN_CATALOGUE).expect("builtin agent catalogue is valid json")
 }
 
-#[tauri::command]
-pub fn detect_agents(app: AppHandle) -> Vec<DetectedAgent> {
+fn detect_agents_blocking(app: &AppHandle) -> Vec<DetectedAgent> {
     let builtin = builtin_catalogue();
-    catalogue(&app)
+    catalogue(app)
         .into_iter()
         .map(|spec| {
             let path = locate(&spec);
@@ -234,19 +233,27 @@ pub fn detect_agents(app: AppHandle) -> Vec<DetectedAgent> {
         .collect()
 }
 
+#[tauri::command]
+pub async fn detect_agents(app: AppHandle) -> Result<Vec<DetectedAgent>, String> {
+    crate::blocking::run(move || Ok(detect_agents_blocking(&app))).await
+}
+
 /// Path to the catalogue the user can edit, created from the builtin on first ask.
 #[tauri::command]
-pub fn agent_catalogue_path(app: AppHandle) -> Result<String, String> {
-    let dir = app
-        .path()
-        .app_config_dir()
-        .map_err(|err| format!("no config directory: {err}"))?;
-    std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
-    let file = dir.join("agents.json");
-    if !file.exists() {
-        std::fs::write(&file, BUILTIN_CATALOGUE).map_err(|err| err.to_string())?;
-    }
-    Ok(file.to_string_lossy().into_owned())
+pub async fn agent_catalogue_path(app: AppHandle) -> Result<String, String> {
+    crate::blocking::run(move || {
+        let dir = app
+            .path()
+            .app_config_dir()
+            .map_err(|err| format!("no config directory: {err}"))?;
+        std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
+        let file = dir.join("agents.json");
+        if !file.exists() {
+            std::fs::write(&file, BUILTIN_CATALOGUE).map_err(|err| err.to_string())?;
+        }
+        Ok(file.to_string_lossy().into_owned())
+    })
+    .await
 }
 
 /// The catalogue as it ships, for "reset to defaults".
@@ -387,29 +394,32 @@ fn overrides(entry: &AgentSpec, builtin: &[AgentSpec]) -> Result<serde_json::Val
 
 /// Replace the user catalogue with `agents`, then detect again.
 #[tauri::command]
-pub fn agent_catalogue_save(
+pub async fn agent_catalogue_save(
     app: AppHandle,
     agents: Vec<AgentSpec>,
 ) -> Result<Vec<DetectedAgent>, String> {
-    let agents: Vec<AgentSpec> = agents.into_iter().map(normalize).collect();
-    validate(&agents)?;
+    crate::blocking::run(move || {
+        let agents: Vec<AgentSpec> = agents.into_iter().map(normalize).collect();
+        validate(&agents)?;
 
-    let builtin = builtin_catalogue();
-    let entries = agents
-        .iter()
-        .map(|entry| overrides(entry, &builtin))
-        .collect::<Result<Vec<_>, _>>()?;
-    let json = serde_json::to_string_pretty(&entries).map_err(|err| err.to_string())?;
+        let builtin = builtin_catalogue();
+        let entries = agents
+            .iter()
+            .map(|entry| overrides(entry, &builtin))
+            .collect::<Result<Vec<_>, _>>()?;
+        let json = serde_json::to_string_pretty(&entries).map_err(|err| err.to_string())?;
 
-    let dir = app
-        .path()
-        .app_config_dir()
-        .map_err(|err| format!("no config directory: {err}"))?;
-    std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
-    // Write, then rename over: a crash mid-save never leaves half a catalogue.
-    let temp = dir.join("agents.json.tmp");
-    std::fs::write(&temp, json).map_err(|err| err.to_string())?;
-    std::fs::rename(&temp, dir.join("agents.json")).map_err(|err| err.to_string())?;
+        let dir = app
+            .path()
+            .app_config_dir()
+            .map_err(|err| format!("no config directory: {err}"))?;
+        std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
+        // Write, then rename over: a crash mid-save never leaves half a catalogue.
+        let temp = dir.join("agents.json.tmp");
+        std::fs::write(&temp, json).map_err(|err| err.to_string())?;
+        std::fs::rename(&temp, dir.join("agents.json")).map_err(|err| err.to_string())?;
 
-    Ok(detect_agents(app))
+        Ok(detect_agents_blocking(&app))
+    })
+    .await
 }
