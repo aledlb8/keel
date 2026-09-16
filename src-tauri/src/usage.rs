@@ -4,6 +4,8 @@
 //! file; we read it and call the same quota endpoint that CLI uses for `/usage`
 //! or `/status`. Agents with no reachable quota API are omitted from the snapshot.
 
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -315,6 +317,166 @@ fn json_access_token(value: &Value) -> Option<String> {
         .map(str::trim)
         .filter(|token| !token.is_empty())
         .map(str::to_string)
+}
+
+struct Refreshed {
+    access: String,
+    refresh: Option<String>,
+}
+
+fn json_refreshed(value: &Value) -> Option<Refreshed> {
+    Some(Refreshed {
+        access: json_access_token(value)?,
+        refresh: value
+            .get("refresh_token")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|token| !token.is_empty())
+            .map(str::to_string),
+    })
+}
+
+fn unique_temp(file: &Path) -> PathBuf {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let name = file
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "creds.json".into());
+    file.with_file_name(format!("{name}.{}.{stamp}.tmp", std::process::id()))
+}
+
+fn write_atomic(file: &Path, text: &str) -> Result<(), String> {
+    let temp = unique_temp(file);
+    {
+        let mut opts = OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut out = opts.open(&temp).map_err(|err| err.to_string())?;
+        out.write_all(text.as_bytes()).map_err(|err| {
+            let _ = fs::remove_file(&temp);
+            err.to_string()
+        })?;
+        out.sync_all().map_err(|err| {
+            let _ = fs::remove_file(&temp);
+            err.to_string()
+        })?;
+    }
+    fs::rename(&temp, file).map_err(|err| {
+        let _ = fs::remove_file(&temp);
+        err.to_string()
+    })
+}
+
+fn persist_updated_json(
+    path: &Path,
+    update: impl FnOnce(&mut Value) -> Option<()>,
+) -> Result<(), String> {
+    let mut root = read_json(path).ok_or_else(|| "credentials file missing".to_string())?;
+    update(&mut root).ok_or_else(|| "could not update token fields".to_string())?;
+    let text = serde_json::to_string_pretty(&root).map_err(|err| err.to_string())?;
+    write_atomic(path, &text)
+}
+
+fn first_present<'a>(object: &Value, keys: &[&'a str]) -> Option<&'a str> {
+    keys.iter().copied().find(|key| object.get(*key).is_some())
+}
+
+fn set_token_fields(
+    object: &mut Value,
+    access_key: &str,
+    refresh_key: &str,
+    access: &str,
+    refresh: Option<&str>,
+) -> Option<()> {
+    let map = object.as_object_mut()?;
+    map.insert(access_key.to_string(), Value::String(access.to_string()));
+    if let Some(refresh) = refresh {
+        map.insert(refresh_key.to_string(), Value::String(refresh.to_string()));
+    }
+    Some(())
+}
+
+/// Persist rotated OAuth tokens. Failure means the new access token must
+/// not be used — otherwise a rotated refresh token is consumed without a
+/// replacement on disk.
+fn persist_refresh(
+    persist: impl FnOnce(&str, Option<&str>) -> Result<(), String>,
+    tokens: Refreshed,
+) -> Option<String> {
+    persist(&tokens.access, tokens.refresh.as_deref()).ok()?;
+    Some(tokens.access)
+}
+
+fn persist_claude(home: &Path, access: &str, refresh: Option<&str>) -> Result<(), String> {
+    persist_updated_json(&home.join(".credentials.json"), |root| {
+        let root_key = first_present(root, &["claudeAiOauth", "claude_ai_oauth"])?;
+        if !root.get(root_key).is_some_and(Value::is_object) {
+            return None;
+        }
+        let oauth = root.get_mut(root_key)?;
+        let access_key =
+            first_present(oauth, &["accessToken", "access_token"]).unwrap_or("accessToken");
+        let refresh_key =
+            first_present(oauth, &["refreshToken", "refresh_token"]).unwrap_or("refreshToken");
+        set_token_fields(oauth, access_key, refresh_key, access, refresh)
+    })
+}
+
+fn persist_codex(home: &Path, access: &str, refresh: Option<&str>) -> Result<(), String> {
+    persist_updated_json(&home.join("auth.json"), |root| {
+        let target = if root.get("tokens").is_some() {
+            root.get_mut("tokens")?
+        } else {
+            root
+        };
+        if !target.is_object() {
+            return None;
+        }
+        set_token_fields(target, "access_token", "refresh_token", access, refresh)
+    })
+}
+
+fn persist_gemini(home: &Path, access: &str, refresh: Option<&str>) -> Result<(), String> {
+    persist_updated_json(&home.join("oauth_creds.json"), |root| {
+        if !root.is_object() {
+            return None;
+        }
+        set_token_fields(root, "access_token", "refresh_token", access, refresh)
+    })
+}
+
+fn persist_grok(home: &Path, access: &str, refresh: Option<&str>) -> Result<(), String> {
+    persist_updated_json(&home.join("auth.json"), |root| {
+        let top_level = root
+            .get("access_token")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|token| !token.is_empty())
+            .is_some();
+        if top_level {
+            return set_token_fields(root, "access_token", "refresh_token", access, refresh);
+        }
+        let map = root.as_object_mut()?;
+        for value in map.values_mut() {
+            let has_key = value
+                .get("key")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|token| !token.is_empty())
+                .is_some();
+            if has_key {
+                return set_token_fields(value, "key", "refresh_token", access, refresh);
+            }
+        }
+        None
+    })
 }
 
 fn failed(query: &UsageAgentQuery, error: impl Into<String>) -> AgentUsage {
@@ -660,7 +822,7 @@ fn claude_last_limits(home: &Path) -> Vec<UsageWindow> {
         .unwrap_or_default()
 }
 
-fn refresh_claude(client: &Client, refresh: &str) -> Option<String> {
+fn refresh_claude(client: &Client, refresh: &str) -> Option<Refreshed> {
     let body = json!({
         "grant_type": "refresh_token",
         "refresh_token": refresh,
@@ -680,7 +842,7 @@ fn refresh_claude(client: &Client, refresh: &str) -> Option<String> {
     if status >= 400 {
         return None;
     }
-    json_access_token(&value)
+    json_refreshed(&value)
 }
 
 fn fetch_claude(client: &Client, home: &Path, query: &UsageAgentQuery) -> Option<AgentUsage> {
@@ -710,7 +872,12 @@ fn fetch_claude(client: &Client, home: &Path, query: &UsageAgentQuery) -> Option
                 }
                 Ok((401, _)) => {
                     if let Some(refresh) = creds.refresh.as_deref() {
-                        if let Some(next) = refresh_claude(client, refresh) {
+                        if let Some(next) = refresh_claude(client, refresh).and_then(|tokens| {
+                            persist_refresh(
+                                |access, rotated| persist_claude(home, access, rotated),
+                                tokens,
+                            )
+                        }) {
                             token = next;
                             continue;
                         }
@@ -757,7 +924,7 @@ fn codex_creds(home: &Path) -> Option<Creds> {
     })
 }
 
-fn refresh_codex(client: &Client, refresh: &str) -> Option<String> {
+fn refresh_codex(client: &Client, refresh: &str) -> Option<Refreshed> {
     let value = post_form(
         client,
         CODEX_REFRESH_URL,
@@ -768,7 +935,7 @@ fn refresh_codex(client: &Client, refresh: &str) -> Option<String> {
         ],
     )
     .ok()?;
-    json_access_token(&value)
+    json_refreshed(&value)
 }
 
 fn fetch_codex(client: &Client, home: &Path, query: &UsageAgentQuery) -> Option<AgentUsage> {
@@ -797,7 +964,12 @@ fn fetch_codex(client: &Client, home: &Path, query: &UsageAgentQuery) -> Option<
             }
             Ok((401, _)) => {
                 if let Some(refresh) = creds.refresh.as_deref() {
-                    if let Some(next) = refresh_codex(client, refresh) {
+                    if let Some(next) = refresh_codex(client, refresh).and_then(|tokens| {
+                        persist_refresh(
+                            |access, rotated| persist_codex(home, access, rotated),
+                            tokens,
+                        )
+                    }) {
                         token = next;
                         continue;
                     }
@@ -835,7 +1007,7 @@ fn gemini_creds(home: &Path) -> Option<Creds> {
     })
 }
 
-fn refresh_gemini(client: &Client, refresh: &str) -> Option<String> {
+fn refresh_gemini(client: &Client, refresh: &str) -> Option<Refreshed> {
     let value = post_form(
         client,
         GEMINI_TOKEN_URL,
@@ -847,7 +1019,7 @@ fn refresh_gemini(client: &Client, refresh: &str) -> Option<String> {
         ],
     )
     .ok()?;
-    json_access_token(&value)
+    json_refreshed(&value)
 }
 
 fn fetch_gemini(client: &Client, home: &Path, query: &UsageAgentQuery) -> Option<AgentUsage> {
@@ -857,7 +1029,12 @@ fn fetch_gemini(client: &Client, home: &Path, query: &UsageAgentQuery) -> Option
         let Some(refresh) = creds.refresh.as_deref() else {
             return Some(failed(query, "Gemini login expired"));
         };
-        match refresh_gemini(client, refresh) {
+        match refresh_gemini(client, refresh).and_then(|tokens| {
+            persist_refresh(
+                |access, rotated| persist_gemini(home, access, rotated),
+                tokens,
+            )
+        }) {
             Some(next) => token = next,
             None => return Some(failed(query, "Gemini login expired")),
         }
@@ -908,7 +1085,14 @@ fn fetch_gemini(client: &Client, home: &Path, query: &UsageAgentQuery) -> Option
                     Ok((401, _)) | Ok((403, _))
                         if creds.refresh.is_some() && token == creds.access =>
                     {
-                        if let Some(next) = refresh_gemini(client, creds.refresh.as_deref()?) {
+                        if let Some(next) = refresh_gemini(client, creds.refresh.as_deref()?)
+                            .and_then(|tokens| {
+                                persist_refresh(
+                                    |access, rotated| persist_gemini(home, access, rotated),
+                                    tokens,
+                                )
+                            })
+                        {
                             token = next;
                             continue;
                         }
@@ -920,7 +1104,14 @@ fn fetch_gemini(client: &Client, home: &Path, query: &UsageAgentQuery) -> Option
                 }
             }
             Ok((401, _)) if creds.refresh.is_some() => {
-                if let Some(next) = refresh_gemini(client, creds.refresh.as_deref()?) {
+                if let Some(next) =
+                    refresh_gemini(client, creds.refresh.as_deref()?).and_then(|tokens| {
+                        persist_refresh(
+                            |access, rotated| persist_gemini(home, access, rotated),
+                            tokens,
+                        )
+                    })
+                {
                     token = next;
                     continue;
                 }
@@ -973,7 +1164,7 @@ fn grok_creds(home: &Path) -> Option<Creds> {
     None
 }
 
-fn refresh_grok(client: &Client, refresh: &str) -> Option<String> {
+fn refresh_grok(client: &Client, refresh: &str) -> Option<Refreshed> {
     let value = post_form(
         client,
         GROK_REFRESH_URL,
@@ -984,7 +1175,7 @@ fn refresh_grok(client: &Client, refresh: &str) -> Option<String> {
         ],
     )
     .ok()?;
-    json_access_token(&value)
+    json_refreshed(&value)
 }
 
 fn grok_headers(token: &str) -> HeaderMap {
@@ -1036,7 +1227,12 @@ fn fetch_grok(client: &Client, home: &Path, query: &UsageAgentQuery) -> Option<A
             }
             Ok((401, _)) | Ok((403, _)) => {
                 if let Some(refresh) = creds.refresh.as_deref() {
-                    if let Some(next) = refresh_grok(client, refresh) {
+                    if let Some(next) = refresh_grok(client, refresh).and_then(|tokens| {
+                        persist_refresh(
+                            |access, rotated| persist_grok(home, access, rotated),
+                            tokens,
+                        )
+                    }) {
                         token = next;
                         continue;
                     }
@@ -1121,8 +1317,7 @@ fn fetch_one(client: &Client, app: &AppHandle, query: &UsageAgentQuery) -> Optio
     }
 }
 
-#[tauri::command]
-pub fn usage_fetch(app: AppHandle, agents: Vec<UsageAgentQuery>) -> UsageSnapshot {
+fn usage_fetch_blocking(app: AppHandle, agents: Vec<UsageAgentQuery>) -> UsageSnapshot {
     let fetched_at = now_ms();
     let proxy = app
         .try_state::<crate::vpn::VpnManager>()
@@ -1161,9 +1356,19 @@ pub fn usage_fetch(app: AppHandle, agents: Vec<UsageAgentQuery>) -> UsageSnapsho
     }
 }
 
+#[tauri::command]
+pub async fn usage_fetch(
+    app: AppHandle,
+    agents: Vec<UsageAgentQuery>,
+) -> Result<UsageSnapshot, String> {
+    let app = app.clone();
+    crate::blocking::run(move || Ok(usage_fetch_blocking(app, agents))).await
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn claude_oauth_windows() {
@@ -1295,6 +1500,224 @@ pub(crate) mod tests {
             accent: String::new(),
             account_id: None,
         }
+    }
+
+    fn scratch_dir(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "keel-usage-{label}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn write_json(path: &Path, value: &Value) {
+        fs::write(path, serde_json::to_string_pretty(value).unwrap()).unwrap();
+    }
+
+    fn assert_no_tmp(dir: &Path) {
+        let leftovers: Vec<_> = fs::read_dir(dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+    }
+
+    #[test]
+    fn json_refreshed_parses_optional_refresh() {
+        let both = json_refreshed(&json!({
+            "access_token": " new-access ",
+            "refresh_token": " new-refresh ",
+            "token_type": "Bearer"
+        }))
+        .unwrap();
+        assert_eq!(both.access, "new-access");
+        assert_eq!(both.refresh.as_deref(), Some("new-refresh"));
+
+        let access_only = json_refreshed(&json!({ "access_token": "kept" })).unwrap();
+        assert_eq!(access_only.access, "kept");
+        assert!(access_only.refresh.is_none());
+
+        assert!(json_refreshed(&json!({ "access_token": "  " })).is_none());
+        assert!(json_refreshed(&json!({ "refresh_token": "only" })).is_none());
+    }
+
+    #[test]
+    fn persist_refresh_drops_token_when_write_fails() {
+        let tokens = Refreshed {
+            access: "new-access".into(),
+            refresh: Some("new-refresh".into()),
+        };
+        assert!(persist_refresh(|_, _| Err("disk full".into()), tokens).is_none());
+
+        let tokens = Refreshed {
+            access: "new-access".into(),
+            refresh: None,
+        };
+        assert_eq!(
+            persist_refresh(|_, _| Ok(()), tokens).as_deref(),
+            Some("new-access")
+        );
+    }
+
+    #[test]
+    fn claude_persist_keeps_camel_case_and_extra_fields() {
+        let dir = scratch_dir("claude-camel");
+        write_json(
+            &dir.join(".credentials.json"),
+            &json!({
+                "claudeAiOauth": {
+                    "accessToken": "old-access",
+                    "refreshToken": "old-refresh",
+                    "expiresAt": "soon",
+                    "scopes": ["user:inference"]
+                },
+                "other": 1
+            }),
+        );
+        persist_claude(&dir, "new-access", Some("new-refresh")).unwrap();
+        let saved = read_json(&dir.join(".credentials.json")).unwrap();
+        assert_eq!(saved["claudeAiOauth"]["accessToken"], "new-access");
+        assert_eq!(saved["claudeAiOauth"]["refreshToken"], "new-refresh");
+        assert_eq!(saved["claudeAiOauth"]["expiresAt"], "soon");
+        assert_eq!(saved["claudeAiOauth"]["scopes"][0], "user:inference");
+        assert_eq!(saved["other"], 1);
+        assert!(saved.get("claude_ai_oauth").is_none());
+        assert_no_tmp(&dir);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn claude_persist_keeps_snake_case_and_old_refresh() {
+        let dir = scratch_dir("claude-snake");
+        write_json(
+            &dir.join(".credentials.json"),
+            &json!({
+                "claude_ai_oauth": {
+                    "access_token": "old-access",
+                    "refresh_token": "old-refresh"
+                }
+            }),
+        );
+        persist_claude(&dir, "new-access", None).unwrap();
+        let saved = read_json(&dir.join(".credentials.json")).unwrap();
+        assert_eq!(saved["claude_ai_oauth"]["access_token"], "new-access");
+        assert_eq!(saved["claude_ai_oauth"]["refresh_token"], "old-refresh");
+        assert!(saved.get("claudeAiOauth").is_none());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn claude_persist_fails_without_file() {
+        let dir = scratch_dir("claude-missing");
+        assert!(persist_claude(&dir, "new-access", Some("new-refresh")).is_err());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn codex_persist_nested_and_top_level() {
+        let nested = scratch_dir("codex-nested");
+        write_json(
+            &nested.join("auth.json"),
+            &json!({
+                "tokens": {
+                    "access_token": "old-access",
+                    "refresh_token": "old-refresh",
+                    "account_id": "acct_1"
+                },
+                "last_refresh": "yesterday"
+            }),
+        );
+        persist_codex(&nested, "new-access", Some("new-refresh")).unwrap();
+        let saved = read_json(&nested.join("auth.json")).unwrap();
+        assert_eq!(saved["tokens"]["access_token"], "new-access");
+        assert_eq!(saved["tokens"]["refresh_token"], "new-refresh");
+        assert_eq!(saved["tokens"]["account_id"], "acct_1");
+        assert_eq!(saved["last_refresh"], "yesterday");
+        fs::remove_dir_all(&nested).ok();
+
+        let top = scratch_dir("codex-top");
+        write_json(
+            &top.join("auth.json"),
+            &json!({
+                "access_token": "old-access",
+                "refresh_token": "old-refresh",
+                "account_id": "acct_2"
+            }),
+        );
+        persist_codex(&top, "new-access", None).unwrap();
+        let saved = read_json(&top.join("auth.json")).unwrap();
+        assert_eq!(saved["access_token"], "new-access");
+        assert_eq!(saved["refresh_token"], "old-refresh");
+        assert_eq!(saved["account_id"], "acct_2");
+        assert!(saved.get("tokens").is_none());
+        fs::remove_dir_all(&top).ok();
+    }
+
+    #[test]
+    fn gemini_persist_rotates_refresh_and_keeps_extra() {
+        let dir = scratch_dir("gemini");
+        write_json(
+            &dir.join("oauth_creds.json"),
+            &json!({
+                "access_token": "old-access",
+                "refresh_token": "old-refresh",
+                "token_type": "Bearer",
+                "expiry_date": 1_700_000_000_000i64
+            }),
+        );
+        persist_gemini(&dir, "new-access", Some("rotated-refresh")).unwrap();
+        let saved = read_json(&dir.join("oauth_creds.json")).unwrap();
+        assert_eq!(saved["access_token"], "new-access");
+        assert_eq!(saved["refresh_token"], "rotated-refresh");
+        assert_eq!(saved["token_type"], "Bearer");
+        assert_eq!(saved["expiry_date"], 1_700_000_000_000i64);
+        assert_no_tmp(&dir);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn grok_persist_top_level_and_nested_key() {
+        let top = scratch_dir("grok-top");
+        write_json(
+            &top.join("auth.json"),
+            &json!({
+                "access_token": "old-access",
+                "refresh_token": "old-refresh",
+                "email": "user@x.ai"
+            }),
+        );
+        persist_grok(&top, "new-access", Some("new-refresh")).unwrap();
+        let saved = read_json(&top.join("auth.json")).unwrap();
+        assert_eq!(saved["access_token"], "new-access");
+        assert_eq!(saved["refresh_token"], "new-refresh");
+        assert_eq!(saved["email"], "user@x.ai");
+        fs::remove_dir_all(&top).ok();
+
+        let nested = scratch_dir("grok-nested");
+        write_json(
+            &nested.join("auth.json"),
+            &json!({
+                "default": {
+                    "key": "old-access",
+                    "refresh_token": "old-refresh",
+                    "label": "work"
+                }
+            }),
+        );
+        persist_grok(&nested, "new-access", None).unwrap();
+        let saved = read_json(&nested.join("auth.json")).unwrap();
+        assert_eq!(saved["default"]["key"], "new-access");
+        assert_eq!(saved["default"]["refresh_token"], "old-refresh");
+        assert_eq!(saved["default"]["label"], "work");
+        assert!(saved.get("access_token").is_none());
+        fs::remove_dir_all(&nested).ok();
     }
 
     #[test]
