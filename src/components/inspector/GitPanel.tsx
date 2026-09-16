@@ -117,6 +117,16 @@ function plural(count: number, word: string): string {
   return `${count} ${word}${count === 1 ? "" : "s"}`;
 }
 
+const IS_WINDOWS = /Windows/i.test(navigator.userAgent);
+
+function discardPrompt(file: GitFile): string {
+  const name = fileName(file.path);
+  if (file.untracked && IS_WINDOWS) {
+    return `Discard ${name}? It will be moved to the Recycle Bin.`;
+  }
+  return `Discard changes to ${name}? This can't be undone.`;
+}
+
 function pathsOf(files: GitFile[]): string[] {
   return files.map((file) => file.path);
 }
@@ -153,7 +163,7 @@ function dropActionFor(
   return null;
 }
 
-type ZoneProps = HTMLAttributes<HTMLElement> & { "data-drop"?: "true" };
+type ZoneProps = HTMLAttributes<HTMLElement> & { "data-drop"?: "true" | undefined };
 
 export function GitPanel() {
   const root = useWorkspace((state) => state.root);
@@ -648,12 +658,12 @@ function Section({
 }: {
   id: SectionId;
   title: string;
-  count?: number;
+  count?: number | undefined;
   open: boolean;
   onToggle: (id: SectionId) => void;
-  actions?: ReactNode;
+  actions?: ReactNode | undefined;
   /** Present while this section would take the change being dragged. */
-  zone?: ZoneProps;
+  zone?: ZoneProps | undefined;
   children: ReactNode;
 }) {
   return (
@@ -703,7 +713,7 @@ function ChangeGroup({
   staged: boolean;
   open: boolean;
   onToggle: (id: SectionId) => void;
-  actions?: ReactNode;
+  actions?: ReactNode | undefined;
 }) {
   const dnd = useContext(ChangeDragContext);
 
@@ -825,7 +835,10 @@ function changeMenu(file: GitFile, staged: boolean): MenuEntry[] {
         label: "Discard changes",
         icon: Undo2,
         destructive: true,
-        confirm: "Discard? This can't be undone",
+        confirm:
+          file.untracked && IS_WINDOWS
+            ? "Discard? It will be moved to the Recycle Bin"
+            : "Discard? This can't be undone",
         onSelect: () => void state.discard([file.path]),
       },
     );
@@ -922,9 +935,7 @@ function ChangeRow({
                 label="Discard changes"
                 danger
                 onClick={() => {
-                  const ok = window.confirm(
-                    `Discard changes to ${name}? This can't be undone.`,
-                  );
+                  const ok = window.confirm(discardPrompt(file));
                   if (ok) void workspace().discard([file.path]);
                 }}
               >

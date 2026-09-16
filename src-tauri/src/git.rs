@@ -2,15 +2,25 @@
 //!
 //! Subcommands are fixed. The frontend never sends a freeform git string.
 
+use std::io::Read;
 use std::path::Path;
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
+use std::sync::OnceLock;
+use std::thread;
+use std::time::{Duration, Instant};
 
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::paths::{canonicalize_dir, normalize_rel, resolve_existing, to_posix};
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+const MAX_DIFF_BYTES: u64 = 1_000_000;
+const MAX_DIFF_LINES: usize = 4000;
+const GIT_TIMEOUT: Duration = Duration::from_secs(30);
+const GIT_REMOTE_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -121,36 +131,118 @@ fn hide_window(cmd: &mut Command) {
     }
 }
 
-fn run_in(root: &Path, program: &str, args: &[&str]) -> Result<Output, String> {
+fn apply_git_env(cmd: &mut Command) {
+    cmd.env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("LC_ALL", "C")
+        .env("GIT_LITERAL_PATHSPECS", "1");
+}
+
+/// Hide `://user:password@` and `://x-access-token:token@` in git/gh output.
+fn redact_git_output(s: &str) -> String {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r"://[^/\s@]+:[^/\s@]+@").expect("redact pattern"));
+    re.replace_all(s, "://***@").into_owned()
+}
+
+fn user_err(bytes: &[u8]) -> String {
+    redact_git_output(String::from_utf8_lossy(bytes).trim())
+}
+
+fn wait_output_timeout(
+    mut child: Child,
+    timeout: Duration,
+    program: &str,
+) -> Result<Output, String> {
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let stdout_h = thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut pipe) = stdout {
+            let _ = pipe.read_to_end(&mut buf);
+        }
+        buf
+    });
+    let stderr_h = thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut pipe) = stderr {
+            let _ = pipe.read_to_end(&mut buf);
+        }
+        buf
+    });
+
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!("{program} timed out"));
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+            Err(err) => return Err(format!("Could not run {program}: {err}")),
+        }
+    };
+
+    Ok(Output {
+        status,
+        stdout: stdout_h.join().unwrap_or_default(),
+        stderr: stderr_h.join().unwrap_or_default(),
+    })
+}
+
+fn run_in_timeout(
+    root: &Path,
+    program: &str,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<Output, String> {
     let mut cmd = Command::new(program);
     cmd.args(args)
         .current_dir(root)
         .stdin(Stdio::null())
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .env("GIT_TERMINAL_PROMPT", "0");
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    apply_git_env(&mut cmd);
     hide_window(&mut cmd);
-    cmd.output()
-        .map_err(|err| format!("Could not run {program}: {err}"))
+    let child = cmd
+        .spawn()
+        .map_err(|err| format!("Could not run {program}: {err}"))?;
+    wait_output_timeout(child, timeout, program)
+}
+
+fn run_in(root: &Path, program: &str, args: &[&str]) -> Result<Output, String> {
+    run_in_timeout(root, program, args, GIT_TIMEOUT)
 }
 
 fn git(root: &Path, args: &[&str]) -> Result<Output, String> {
-    run_in(root, "git", args)
+    git_timeout(root, args, GIT_TIMEOUT)
+}
+
+fn git_timeout(root: &Path, args: &[&str], timeout: Duration) -> Result<Output, String> {
+    run_in_timeout(root, "git", args, timeout)
 }
 
 fn git_ok(root: &Path, args: &[&str]) -> Result<String, String> {
-    let output = git(root, args)?;
+    git_ok_timeout(root, args, GIT_TIMEOUT)
+}
+
+fn git_ok_timeout(root: &Path, args: &[&str], timeout: Duration) -> Result<String, String> {
+    let output = git_timeout(root, args, timeout)?;
     if output.status.success() {
-        return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
+        return Ok(redact_git_output(&String::from_utf8_lossy(&output.stdout)));
     }
-    let err = String::from_utf8_lossy(&output.stderr);
-    let err = err.trim();
+    let err = user_err(&output.stderr);
     if err.is_empty() {
         Err(format!(
             "git {} failed",
             args.first().copied().unwrap_or("")
         ))
     } else {
-        Err(err.to_string())
+        Err(err)
     }
 }
 
@@ -389,6 +481,21 @@ fn parse_hunk_header(header: &str) -> Option<(u32, u32, u32, u32)> {
     Some((old_start, old_lines, new_start, new_lines))
 }
 
+fn push_diff_line(hunk: &mut GitHunk, total: &mut usize, line: DiffLine) -> bool {
+    if *total >= MAX_DIFF_LINES {
+        hunk.lines.push(DiffLine {
+            kind: "meta".into(),
+            text: "diff truncated".into(),
+            old_no: None,
+            new_no: None,
+        });
+        return false;
+    }
+    hunk.lines.push(line);
+    *total += 1;
+    true
+}
+
 pub fn parse_diff(raw: &str, path: &str) -> GitDiff {
     if raw.contains("Binary files ") || raw.contains("GIT binary patch") {
         return GitDiff {
@@ -401,6 +508,7 @@ pub fn parse_diff(raw: &str, path: &str) -> GitDiff {
     let mut current: Option<GitHunk> = None;
     let mut old_no = 0u32;
     let mut new_no = 0u32;
+    let mut total = 0usize;
     for line in raw.lines() {
         if line.starts_with("@@ ") {
             if let Some(hunk) = current.take() {
@@ -422,38 +530,62 @@ pub fn parse_diff(raw: &str, path: &str) -> GitDiff {
         let Some(hunk) = current.as_mut() else {
             continue;
         };
-        if let Some(text) = line.strip_prefix('+') {
-            hunk.lines.push(DiffLine {
-                kind: "add".into(),
-                text: text.to_string(),
-                old_no: None,
-                new_no: Some(new_no),
-            });
+        let keep = if let Some(text) = line.strip_prefix('+') {
+            let ok = push_diff_line(
+                hunk,
+                &mut total,
+                DiffLine {
+                    kind: "add".into(),
+                    text: text.to_string(),
+                    old_no: None,
+                    new_no: Some(new_no),
+                },
+            );
             new_no += 1;
+            ok
         } else if let Some(text) = line.strip_prefix('-') {
-            hunk.lines.push(DiffLine {
-                kind: "del".into(),
-                text: text.to_string(),
-                old_no: Some(old_no),
-                new_no: None,
-            });
+            let ok = push_diff_line(
+                hunk,
+                &mut total,
+                DiffLine {
+                    kind: "del".into(),
+                    text: text.to_string(),
+                    old_no: Some(old_no),
+                    new_no: None,
+                },
+            );
             old_no += 1;
+            ok
         } else if let Some(text) = line.strip_prefix(' ') {
-            hunk.lines.push(DiffLine {
-                kind: "ctx".into(),
-                text: text.to_string(),
-                old_no: Some(old_no),
-                new_no: Some(new_no),
-            });
+            let ok = push_diff_line(
+                hunk,
+                &mut total,
+                DiffLine {
+                    kind: "ctx".into(),
+                    text: text.to_string(),
+                    old_no: Some(old_no),
+                    new_no: Some(new_no),
+                },
+            );
             old_no += 1;
             new_no += 1;
+            ok
         } else if line == "\\ No newline at end of file" {
-            hunk.lines.push(DiffLine {
-                kind: "meta".into(),
-                text: line.to_string(),
-                old_no: None,
-                new_no: None,
-            });
+            push_diff_line(
+                hunk,
+                &mut total,
+                DiffLine {
+                    kind: "meta".into(),
+                    text: line.to_string(),
+                    old_no: None,
+                    new_no: None,
+                },
+            )
+        } else {
+            true
+        };
+        if !keep {
+            break;
         }
     }
     if let Some(hunk) = current {
@@ -497,7 +629,7 @@ fn git_status_blocking(root: String) -> Result<GitStatus, String> {
     if !git_installed() {
         return Ok(empty_status(false, false));
     }
-    let root = canonicalize_dir(Path::new(&root))?;
+    let root = crate::roots::require(&root)?;
     let output = git(
         &root,
         &[
@@ -509,13 +641,24 @@ fn git_status_blocking(root: String) -> Result<GitStatus, String> {
         ],
     )?;
     if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr);
-        if err.contains("not a git repository") {
+        if not_a_git_repository(&output) {
             return Ok(empty_status(true, false));
         }
-        return Err(err.trim().to_string());
+        let err = user_err(&output.stderr);
+        if err.is_empty() {
+            return Err("git status failed".into());
+        }
+        return Err(err);
     }
     Ok(parse_status(&output.stdout))
+}
+
+fn not_a_git_repository(output: &Output) -> bool {
+    if output.status.code() != Some(128) {
+        return false;
+    }
+    let err = String::from_utf8_lossy(&output.stderr);
+    err.contains("not a git repository") || err.contains("Not a git repository")
 }
 
 #[tauri::command]
@@ -524,7 +667,7 @@ pub async fn git_diff(root: String, path: String, staged: bool) -> Result<GitDif
 }
 
 fn git_diff_blocking(root: String, path: String, staged: bool) -> Result<GitDiff, String> {
-    let root = canonicalize_dir(Path::new(&root))?;
+    let root = crate::roots::require(&root)?;
     let rel = rel_arg(&root, &path)?;
     let mut args = vec!["diff", "--no-color", "--unified=3"];
     if staged {
@@ -534,45 +677,69 @@ fn git_diff_blocking(root: String, path: String, staged: bool) -> Result<GitDiff
     args.push(&rel);
     let raw = git_ok(&root, &args)?;
     if raw.trim().is_empty() && !staged {
-        // Untracked: show the whole file as added.
+        // Untracked: show the whole file as added, with size/line caps.
         if let Ok(path) = resolve_existing(&root, &rel) {
             if path.is_file() {
-                let bytes = std::fs::read(&path).unwrap_or_default();
-                if bytes.contains(&0) {
-                    return Ok(GitDiff {
-                        path: rel,
-                        binary: true,
-                        hunks: Vec::new(),
-                    });
-                }
-                let text = String::from_utf8_lossy(&bytes);
-                let lines: Vec<DiffLine> = text
-                    .lines()
-                    .enumerate()
-                    .map(|(i, line)| DiffLine {
-                        kind: "add".into(),
-                        text: line.to_string(),
-                        old_no: None,
-                        new_no: Some((i as u32) + 1),
-                    })
-                    .collect();
-                let count = lines.len() as u32;
-                return Ok(GitDiff {
-                    path: rel,
-                    binary: false,
-                    hunks: vec![GitHunk {
-                        header: format!("@@ -0,0 +1,{count} @@"),
-                        old_start: 0,
-                        old_lines: 0,
-                        new_start: 1,
-                        new_lines: count,
-                        lines,
-                    }],
-                });
+                return Ok(untracked_file_diff(rel, &path));
             }
         }
     }
     Ok(parse_diff(&raw, &rel))
+}
+
+fn untracked_file_diff(rel: String, path: &Path) -> GitDiff {
+    let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    if size > MAX_DIFF_BYTES {
+        return GitDiff {
+            path: rel,
+            binary: true,
+            hunks: Vec::new(),
+        };
+    }
+    let bytes = std::fs::read(path).unwrap_or_default();
+    if bytes.len() as u64 > MAX_DIFF_BYTES || bytes.contains(&0) {
+        return GitDiff {
+            path: rel,
+            binary: true,
+            hunks: Vec::new(),
+        };
+    }
+    let text = String::from_utf8_lossy(&bytes);
+    let mut lines = Vec::new();
+    let mut truncated = false;
+    for (i, line) in text.lines().enumerate() {
+        if lines.len() >= MAX_DIFF_LINES {
+            truncated = true;
+            break;
+        }
+        lines.push(DiffLine {
+            kind: "add".into(),
+            text: line.to_string(),
+            old_no: None,
+            new_no: Some((i as u32) + 1),
+        });
+    }
+    if truncated {
+        lines.push(DiffLine {
+            kind: "meta".into(),
+            text: "diff truncated".into(),
+            old_no: None,
+            new_no: None,
+        });
+    }
+    let count = lines.iter().filter(|line| line.kind == "add").count() as u32;
+    GitDiff {
+        path: rel,
+        binary: false,
+        hunks: vec![GitHunk {
+            header: format!("@@ -0,0 +1,{count} @@"),
+            old_start: 0,
+            old_lines: 0,
+            new_start: 1,
+            new_lines: count,
+            lines,
+        }],
+    }
 }
 
 #[tauri::command]
@@ -581,7 +748,7 @@ pub async fn git_stage(root: String, paths: Vec<String>) -> Result<(), String> {
 }
 
 fn git_stage_blocking(root: String, paths: Vec<String>) -> Result<(), String> {
-    let root = canonicalize_dir(Path::new(&root))?;
+    let root = crate::roots::require(&root)?;
     let rels = rels(&root, &paths)?;
     if rels.is_empty() {
         return Ok(());
@@ -598,7 +765,7 @@ pub async fn git_unstage(root: String, paths: Vec<String>) -> Result<(), String>
 }
 
 fn git_unstage_blocking(root: String, paths: Vec<String>) -> Result<(), String> {
-    let root = canonicalize_dir(Path::new(&root))?;
+    let root = crate::roots::require(&root)?;
     let rels = rels(&root, &paths)?;
     if rels.is_empty() {
         return Ok(());
@@ -615,7 +782,7 @@ pub async fn git_discard(root: String, paths: Vec<String>) -> Result<(), String>
 }
 
 fn git_discard_blocking(root: String, paths: Vec<String>) -> Result<(), String> {
-    let root = canonicalize_dir(Path::new(&root))?;
+    let root = crate::roots::require(&root)?;
     let status = git_status_blocking(root.to_string_lossy().into_owned())?;
     let mut tracked = Vec::new();
     let mut untracked = Vec::new();
@@ -635,14 +802,87 @@ fn git_discard_blocking(root: String, paths: Vec<String>) -> Result<(), String> 
         git_ok(&root, &args)?;
     }
     for rel in untracked {
-        let path = resolve_existing(&root, &rel)?;
-        if path.is_dir() {
-            std::fs::remove_dir_all(&path).map_err(|err| err.to_string())?;
-        } else {
-            std::fs::remove_file(&path).map_err(|err| err.to_string())?;
-        }
+        delete_untracked(&root, &rel)?;
     }
     Ok(())
+}
+
+fn is_link(meta: &std::fs::Metadata) -> bool {
+    if meta.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        (meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) != 0
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+/// Untracked path, already `rel_arg`-normalized. Deletes the link itself when
+/// `rel` is a symlink so we never follow it out of the project.
+fn delete_untracked(root: &Path, rel: &str) -> Result<(), String> {
+    let joined = root.join(normalize_rel(rel)?);
+    let meta = std::fs::symlink_metadata(&joined).map_err(|err| err.to_string())?;
+    if is_link(&meta) {
+        return delete_untracked_path(&joined, true);
+    }
+    let path = resolve_existing(root, rel)?;
+    delete_untracked_path(&path, false)
+}
+
+#[cfg(windows)]
+fn delete_untracked_path(path: &Path, _link: bool) -> Result<(), String> {
+    recycle_delete(path)
+}
+
+#[cfg(not(windows))]
+fn delete_untracked_path(path: &Path, link: bool) -> Result<(), String> {
+    if link || !path.is_dir() {
+        std::fs::remove_file(path).map_err(|err| err.to_string())
+    } else {
+        std::fs::remove_dir_all(path).map_err(|err| err.to_string())
+    }
+}
+
+#[cfg(windows)]
+fn recycle_delete(path: &Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use std::ptr;
+    use winapi::um::shellapi::{
+        SHFileOperationW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_SILENT, FO_DELETE, SHFILEOPSTRUCTW,
+    };
+
+    let mut from: Vec<u16> = path.as_os_str().encode_wide().collect();
+    if from.contains(&0) {
+        return Err("That path is not valid.".into());
+    }
+    from.push(0);
+    from.push(0);
+
+    let mut op = SHFILEOPSTRUCTW {
+        hwnd: ptr::null_mut(),
+        wFunc: FO_DELETE as u32,
+        pFrom: from.as_ptr(),
+        pTo: ptr::null(),
+        fFlags: FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT,
+        fAnyOperationsAborted: 0,
+        hNameMappings: ptr::null_mut(),
+        lpszProgressTitle: ptr::null(),
+    };
+    let rc = unsafe { SHFileOperationW(&mut op) };
+    if rc != 0 || op.fAnyOperationsAborted != 0 {
+        Err(format!(
+            "Could not move {} to the Recycle Bin.",
+            path.display()
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 #[tauri::command]
@@ -655,15 +895,14 @@ fn git_commit_blocking(root: String, message: String) -> Result<String, String> 
     if message.is_empty() {
         return Err("Write a commit message first.".into());
     }
-    let root = canonicalize_dir(Path::new(&root))?;
+    let root = crate::roots::require(&root)?;
     let mut cmd = Command::new("git");
     cmd.args(["commit", "-F", "-"])
         .current_dir(&root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .env("GIT_TERMINAL_PROMPT", "0");
+        .stderr(Stdio::piped());
+    apply_git_env(&mut cmd);
     hide_window(&mut cmd);
     let mut child = cmd
         .spawn()
@@ -678,26 +917,43 @@ fn git_commit_blocking(root: String, message: String) -> Result<String, String> 
             .write_all(message.as_bytes())
             .map_err(|err| err.to_string())?;
     }
-    let output = child.wait_with_output().map_err(|err| err.to_string())?;
+    let output = wait_output_timeout(child, GIT_TIMEOUT, "git")?;
     if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr);
-        return Err(err.trim().to_string());
+        let err = user_err(&output.stderr);
+        if err.is_empty() {
+            return Err("git commit failed".into());
+        }
+        return Err(err);
     }
     git_ok(&root, &["rev-parse", "--short", "HEAD"]).map(|s| s.trim().to_string())
+}
+
+fn valid_remote_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('-')
+        && name
+            .bytes()
+            .all(|b| matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'-'))
+}
+
+fn pick_remote(listing: &str) -> Option<String> {
+    let names: Vec<&str> = listing
+        .lines()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    let chosen = if names.iter().copied().any(|n| n == "origin") {
+        "origin"
+    } else {
+        names.first().copied()?
+    };
+    valid_remote_name(chosen).then(|| chosen.to_string())
 }
 
 fn default_remote(root: &Path) -> String {
     git_ok(root, &["remote"])
         .ok()
-        .and_then(|out| {
-            let mut lines = out.lines();
-            let first = lines.next().map(str::trim).filter(|s| !s.is_empty());
-            if lines.any(|l| l.trim() == "origin") || first == Some("origin") {
-                Some("origin".into())
-            } else {
-                first.map(str::to_string)
-            }
-        })
+        .and_then(|out| pick_remote(&out))
         .unwrap_or_else(|| "origin".into())
 }
 
@@ -707,23 +963,23 @@ pub async fn git_push(root: String, set_upstream: bool) -> Result<String, String
 }
 
 fn git_push_blocking(root: String, set_upstream: bool) -> Result<String, String> {
-    let root = canonicalize_dir(Path::new(&root))?;
+    let root = crate::roots::require(&root)?;
     let has_upstream = git_ok(
         &root,
         &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
     )
     .is_ok();
     let output = if has_upstream && !set_upstream {
-        git(&root, &["push"])?
+        git_timeout(&root, &["push"], GIT_REMOTE_TIMEOUT)?
     } else {
         let remote = default_remote(&root);
-        git(&root, &["push", "-u", &remote, "HEAD"])?
+        git_timeout(&root, &["push", "-u", &remote, "HEAD"], GIT_REMOTE_TIMEOUT)?
     };
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = redact_git_output(&String::from_utf8_lossy(&output.stdout));
+    let stderr = user_err(&output.stderr);
     if output.status.success() {
         let msg = if stdout.trim().is_empty() {
-            stderr.trim().to_string()
+            stderr
         } else {
             stdout.trim().to_string()
         };
@@ -733,7 +989,11 @@ fn git_push_blocking(root: String, set_upstream: bool) -> Result<String, String>
             msg
         })
     } else {
-        Err(stderr.trim().to_string())
+        Err(if stderr.is_empty() {
+            "git push failed".into()
+        } else {
+            stderr
+        })
     }
 }
 
@@ -743,8 +1003,8 @@ pub async fn git_pull(root: String) -> Result<String, String> {
 }
 
 fn git_pull_blocking(root: String) -> Result<String, String> {
-    let root = canonicalize_dir(Path::new(&root))?;
-    git_ok(&root, &["pull", "--ff-only"]).map(|s| {
+    let root = crate::roots::require(&root)?;
+    git_ok_timeout(&root, &["pull", "--ff-only"], GIT_REMOTE_TIMEOUT).map(|s| {
         let t = s.trim();
         if t.is_empty() {
             "Already up to date.".into()
@@ -760,8 +1020,8 @@ pub async fn git_fetch(root: String) -> Result<String, String> {
 }
 
 fn git_fetch_blocking(root: String) -> Result<String, String> {
-    let root = canonicalize_dir(Path::new(&root))?;
-    git_ok(&root, &["fetch", "--all", "--prune"]).map(|s| {
+    let root = crate::roots::require(&root)?;
+    git_ok_timeout(&root, &["fetch", "--all", "--prune"], GIT_REMOTE_TIMEOUT).map(|s| {
         let t = s.trim();
         if t.is_empty() {
             "Fetched.".into()
@@ -777,7 +1037,7 @@ pub async fn git_branches(root: String) -> Result<GitBranches, String> {
 }
 
 fn git_branches_blocking(root: String) -> Result<GitBranches, String> {
-    let root = canonicalize_dir(Path::new(&root))?;
+    let root = crate::roots::require(&root)?;
     let detached = git_ok(&root, &["symbolic-ref", "-q", "HEAD"]).is_err();
     let current = git_ok(&root, &["rev-parse", "--abbrev-ref", "HEAD"])
         .ok()
@@ -834,7 +1094,7 @@ fn git_checkout_blocking(root: String, name: String) -> Result<(), String> {
     if name.is_empty() || name.contains("..") || name.starts_with('-') {
         return Err("That is not a branch name.".into());
     }
-    let root = canonicalize_dir(Path::new(&root))?;
+    let root = crate::roots::require(&root)?;
     git_ok(&root, &["checkout", name]).map(|_| ())
 }
 
@@ -852,7 +1112,7 @@ fn git_branch_create_blocking(root: String, name: String, checkout: bool) -> Res
     {
         return Err("Pick a branch name without spaces.".into());
     }
-    let root = canonicalize_dir(Path::new(&root))?;
+    let root = crate::roots::require(&root)?;
     if checkout {
         git_ok(&root, &["checkout", "-b", name]).map(|_| ())
     } else {
@@ -870,7 +1130,7 @@ fn git_branch_delete_blocking(root: String, name: String) -> Result<(), String> 
     if name.is_empty() || name.contains("..") || name.starts_with('-') {
         return Err("That is not a branch name.".into());
     }
-    let root = canonicalize_dir(Path::new(&root))?;
+    let root = crate::roots::require(&root)?;
     git_ok(&root, &["branch", "-d", name]).map(|_| ())
 }
 
@@ -880,7 +1140,7 @@ pub async fn git_log(root: String, limit: u32) -> Result<Vec<GitCommit>, String>
 }
 
 fn git_log_blocking(root: String, limit: u32) -> Result<Vec<GitCommit>, String> {
-    let root = canonicalize_dir(Path::new(&root))?;
+    let root = crate::roots::require(&root)?;
     let n = limit.clamp(1, 100).to_string();
     let raw = git_ok(
         &root,
@@ -951,7 +1211,7 @@ fn pr_list_blocking(root: String) -> Result<PrList, String> {
             error: Some("Install GitHub CLI (gh) to manage pull requests.".into()),
         });
     }
-    let root = canonicalize_dir(Path::new(&root))?;
+    let root = crate::roots::require(&root)?;
     let output = run_in(
         &root,
         "gh",
@@ -965,11 +1225,15 @@ fn pr_list_blocking(root: String) -> Result<PrList, String> {
         ],
     )?;
     if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr);
+        let err = user_err(&output.stderr);
         return Ok(PrList {
             available: true,
             items: Vec::new(),
-            error: Some(err.trim().to_string()),
+            error: Some(if err.is_empty() {
+                "gh pr list failed".into()
+            } else {
+                err
+            }),
         });
     }
     let parsed: Vec<GhPr> = serde_json::from_slice(&output.stdout)
@@ -1018,7 +1282,7 @@ fn pr_create_blocking(
     if title.is_empty() {
         return Err("Give the pull request a title.".into());
     }
-    let root = canonicalize_dir(Path::new(&root))?;
+    let root = crate::roots::require(&root)?;
     let mut args = vec![
         "pr".into(),
         "create".into(),
@@ -1039,8 +1303,12 @@ fn pr_create_blocking(
     let owned: Vec<&str> = args.iter().map(String::as_str).collect();
     let output = run_in(&root, "gh", &owned)?;
     if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr);
-        return Err(err.trim().to_string());
+        let err = user_err(&output.stderr);
+        return Err(if err.is_empty() {
+            "gh pr create failed".into()
+        } else {
+            err
+        });
     }
     let pr: GhPr = serde_json::from_slice(&output.stdout)
         .map_err(|err| format!("Opened the pull request, but could not read it back: {err}"))?;
@@ -1065,13 +1333,18 @@ fn pr_checkout_blocking(root: String, number: u32) -> Result<(), String> {
     if !gh_installed() {
         return Err("Install GitHub CLI (gh) to check out a pull request.".into());
     }
-    let root = canonicalize_dir(Path::new(&root))?;
+    let root = crate::roots::require(&root)?;
     let n = number.to_string();
     let output = run_in(&root, "gh", &["pr", "checkout", &n])?;
     if output.status.success() {
         Ok(())
     } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        let err = user_err(&output.stderr);
+        Err(if err.is_empty() {
+            "gh pr checkout failed".into()
+        } else {
+            err
+        })
     }
 }
 
@@ -1147,5 +1420,109 @@ mod tests {
         assert_eq!(diff.hunks[0].lines.len(), 5);
         assert_eq!(diff.hunks[0].lines[1].kind, "del");
         assert_eq!(diff.hunks[0].lines[2].kind, "add");
+    }
+
+    #[test]
+    fn redact_git_output_hides_passwords_in_urls() {
+        assert_eq!(
+            redact_git_output(
+                "fatal: could not read from 'https://user:s3cret@github.com/org/repo.git'"
+            ),
+            "fatal: could not read from 'https://***@github.com/org/repo.git'"
+        );
+        assert_eq!(
+            redact_git_output("https://x-access-token:ghs_abc@github.com/org/repo"),
+            "https://***@github.com/org/repo"
+        );
+        assert_eq!(
+            redact_git_output("https://github.com/org/repo.git"),
+            "https://github.com/org/repo.git"
+        );
+        assert_eq!(
+            redact_git_output("from https://alice:one@host/a and https://bob:two@host/b"),
+            "from https://***@host/a and https://***@host/b"
+        );
+    }
+
+    #[test]
+    fn remote_names_reject_leading_dash() {
+        assert!(valid_remote_name("origin"));
+        assert!(valid_remote_name("my_remote.1"));
+        assert!(valid_remote_name("upstream-1"));
+        assert!(!valid_remote_name(""));
+        assert!(!valid_remote_name("-u"));
+        assert!(!valid_remote_name("-origin"));
+        assert!(!valid_remote_name("origin/main"));
+        assert!(!valid_remote_name("foo bar"));
+        assert_eq!(pick_remote("-u\n").as_deref(), None);
+        assert_eq!(pick_remote("-u\norigin\n").as_deref(), Some("origin"));
+        assert_eq!(pick_remote("upstream\n").as_deref(), Some("upstream"));
+        assert_eq!(pick_remote("").as_deref(), None);
+    }
+
+    struct Scratch(std::path::PathBuf);
+
+    impl Scratch {
+        fn new(label: &str) -> Self {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let dir = std::env::temp_dir()
+                .join(format!("keel-git-{label}-{}-{nanos}", std::process::id()));
+            std::fs::create_dir_all(&dir).expect("temp project");
+            Self(dir)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn untracked_diff_caps_huge_files() {
+        let scratch = Scratch::new("diff-size");
+        crate::roots::register(&scratch.0).expect("register");
+        let path = scratch.0.join("huge.txt");
+        std::fs::write(&path, vec![b'a'; (MAX_DIFF_BYTES as usize) + 1]).unwrap();
+        let diff = untracked_file_diff("huge.txt".into(), &path);
+        assert!(diff.binary);
+        assert!(diff.hunks.is_empty());
+
+        git(&scratch.0, &["init", "--quiet"]).expect("git init");
+        let via_cmd = git_diff_blocking(
+            scratch.0.to_string_lossy().into_owned(),
+            "huge.txt".into(),
+            false,
+        )
+        .expect("diff");
+        assert!(via_cmd.binary);
+        assert!(via_cmd.hunks.is_empty());
+    }
+
+    #[test]
+    fn untracked_diff_caps_line_count() {
+        let scratch = Scratch::new("diff-lines");
+        let path = scratch.0.join("many.txt");
+        let mut text = String::new();
+        for i in 0..(MAX_DIFF_LINES + 80) {
+            text.push_str("line ");
+            text.push_str(&i.to_string());
+            text.push('\n');
+        }
+        std::fs::write(&path, text).unwrap();
+        let diff = untracked_file_diff("many.txt".into(), &path);
+        assert!(!diff.binary);
+        assert_eq!(diff.hunks.len(), 1);
+        let lines = &diff.hunks[0].lines;
+        assert_eq!(lines.len(), MAX_DIFF_LINES + 1);
+        assert_eq!(lines[MAX_DIFF_LINES].kind, "meta");
+        assert_eq!(lines[MAX_DIFF_LINES].text, "diff truncated");
+        assert_eq!(
+            lines.iter().filter(|line| line.kind == "add").count(),
+            MAX_DIFF_LINES
+        );
     }
 }
