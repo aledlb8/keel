@@ -16,7 +16,7 @@
   "packageManager": "pnpm@11.25.0",
   "engines": {
     "pnpm": ">=11",
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "dev": "tauri dev",
@@ -26,11 +26,12 @@
     "build": "tauri build --no-bundle && node scripts/artifacts.mjs --binary-only",
     "build:web": "vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit",
-    "test": "tsc --noEmit -p tsconfig.test.json && node --test \"src/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json",
+    "test": "tsc --noEmit -p tsconfig.test.json && node scripts/test.mjs",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml --all-targets",
     "rust:fmt": "cargo fmt --manifest-path src-tauri/Cargo.toml",
     "rust:lint": "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings",
-    "check": "pnpm run typecheck && pnpm run test && cargo fmt --manifest-path src-tauri/Cargo.toml -- --check && pnpm run rust:lint",
+    "check": "pnpm run typecheck && pnpm run test && cargo fmt --manifest-path src-tauri/Cargo.toml -- --check && pnpm run rust:lint && pnpm run test:rust",
     "doctor": "node scripts/doctor.mjs",
     "artifacts": "node scripts/artifacts.mjs",
     "clean": "node scripts/clean.mjs",

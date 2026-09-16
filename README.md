@@ -30,7 +30,7 @@ Built with Tauri 2, React 19, TypeScript, Rust, Vite, CodeMirror, and xterm.js.
 
 ## Requirements
 
-- Node.js 20 or newer
+- Node.js 22 or newer
 - pnpm 11 or newer
 - A Rust toolchain with `rustfmt` and `clippy`
 - The native prerequisites required by Tauri for your operating system
@@ -64,7 +64,7 @@ Build outputs collected for distribution are copied to `release/`. Release binar
 pnpm check
 ```
 
-The check runs TypeScript type checking, frontend tests, Rust formatting verification, and Clippy with warnings denied. CI runs the same command on Windows.
+The check runs TypeScript type checking, frontend tests, Rust formatting verification, Clippy with warnings denied, and `cargo test`. CI runs the same command on Windows.
 
 Useful individual commands:
 
@@ -73,6 +73,7 @@ pnpm typecheck
 pnpm test
 pnpm rust:fmt
 pnpm rust:lint
+pnpm test:rust
 ```
 
 ## Using Keel

@@ -33,7 +33,7 @@ Do not commit `release/`, `dist/`, `src-tauri/target/`, TypeScript build-info fi
 ## Project conventions
 
 - Keep TypeScript and React code consistent with the surrounding files.
-- Run `pnpm rust:fmt` after changing Rust code.
+- Run `pnpm rust:fmt` after changing Rust code. `pnpm check` also runs `cargo test`.
 - Add focused tests for pure logic and regressions where a test meaningfully protects behavior.
 - Keep platform-specific behavior behind the appropriate runtime or compile-time checks.
 - Update documentation when commands, configuration, setup requirements, or user-visible behavior change.
