@@ -28,7 +28,7 @@ import { Overview } from "@/components/Overview";
 import { RestoreChrome } from "@/components/RestoreChrome";
 import { ShortcutsDialog } from "@/components/ShortcutsDialog";
 import { Inspector } from "@/components/inspector/Inspector";
-import { Sidebar } from "@/components/Sidebar";
+import { Sidebar } from "@/components/sidebar";
 import { StatusBar } from "@/components/StatusBar";
 import { TitleTips } from "@/components/TitleTips";
 import { Titlebar, type TitlebarActions } from "@/components/Titlebar";
@@ -354,6 +354,17 @@ export default function App() {
           claim();
           setInspector((previous) => !previous);
           return;
+        case "filterSidebar":
+          claim();
+          setSidebar(true);
+          requestAnimationFrame(() => {
+            const field = document.querySelector<HTMLInputElement>(
+              "[data-sidebar-filter]",
+            );
+            field?.focus();
+            field?.select();
+          });
+          return;
         case "findInFiles":
           claim();
           setInspector(true);
@@ -458,6 +469,16 @@ export default function App() {
     nextPane: () => project && useKeel.getState().cyclePane(project.id, 1),
     prevPane: () => project && useKeel.getState().cyclePane(project.id, -1),
     toggleSidebar: () => setSidebar((previous) => !previous),
+    filterSidebar: () => {
+      setSidebar(true);
+      requestAnimationFrame(() => {
+        const field = document.querySelector<HTMLInputElement>(
+          "[data-sidebar-filter]",
+        );
+        field?.focus();
+        field?.select();
+      });
+    },
     toggleInspector: () => setInspector((previous) => !previous),
     showShortcuts: () => setShortcuts(true),
     openCatalogue: () => useKeel.getState().openAgentSettings(null),

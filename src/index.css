@@ -320,6 +320,7 @@
      * the whole panel.
      */
     .k-row {
+        --row-indent: 0px;
         position: relative;
         display: flex;
         align-items: center;
@@ -330,7 +331,7 @@
         margin-block: 1px;
         height: 30px;
         gap: 7px;
-        padding-inline: 8px 5px;
+        padding-inline: calc(8px + var(--row-indent)) 5px;
         border-radius: var(--keel-r-control);
         font-size: 13px;
         text-align: left;
@@ -338,6 +339,58 @@
         transition:
             background-color 110ms ease,
             color 110ms ease;
+    }
+
+    /*
+     * Three levels and it stops there. The steps are wide enough to read at a
+     * glance without a second cue, and the guide line in `.k-tree-group` lands
+     * in the gutter each one opens up.
+     */
+    .k-row[data-depth="1"] {
+        --row-indent: 14px;
+    }
+
+    .k-row[data-depth="2"] {
+        --row-indent: 28px;
+    }
+
+    /* Deeper rows are quieter: a project is a place, a terminal is a thing in it. */
+    .k-row-sub {
+        font-size: 12.5px;
+    }
+
+    /* Two lines of text — a name and where it lives — need the extra height. */
+    .k-row-tall {
+        height: 40px;
+    }
+
+    /*
+     * The name in a row. Dim by default, bright when you are in it or on it, so
+     * the path from the dock's top to where you are actually working reads
+     * without a single fill.
+     */
+    .k-row-name {
+        min-width: 0;
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--keel-text-dim);
+        transition: color 110ms ease;
+    }
+
+    .k-row:hover .k-row-name,
+    .k-row[data-inside="true"] .k-row-name {
+        color: var(--keel-text);
+    }
+
+    .k-row[data-inside="true"] .k-row-name {
+        font-weight: 500;
+    }
+
+    .k-row[data-selected="true"] .k-row-name {
+        color: var(--keel-text);
+        font-weight: 500;
     }
 
     .k-row:hover {
@@ -362,7 +415,7 @@
     .k-row[data-drop="after"]::after {
         content: "";
         position: absolute;
-        left: var(--drop-indent, 8px);
+        left: calc(8px + var(--row-indent, 0px));
         right: 6px;
         height: 2px;
         border-radius: 1px;
@@ -673,71 +726,248 @@
     }
 
     /*
-     * A workspace, and everything in it, as one object.
-     *
-     * The group is a shallow well — the same recessed ground a field or a
-     * segmented track sits in — so it reads as a container at a glance instead
-     * of as an indent you have to measure against the row above. That is the
-     * whole reason its members are not indented at all: the well already says
-     * where they are, and the dock keeps three levels in 248px instead of four.
-     *
-     * A well is one step up the veil ladder, so every state inside it steps up
-     * too. Otherwise a hovered member would land on exactly the ground it is
-     * already standing on.
+     * The scope button: the name of the slice of work on screen, and the way to
+     * swap it. It is the only thing in the dock's header, so it takes the full
+     * width and reads as a control you press rather than as a title you look
+     * past.
      */
-    .k-workspace {
-        --k-ground: #1f1f1f;
-        --k-mark-ground: var(--keel-veil-2);
-        margin: 4px var(--keel-inset);
-        padding-block: 3px;
+    .k-scope {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        height: 32px;
+        padding-inline: 7px 6px;
         border-radius: var(--keel-r-control);
+        cursor: default;
+        transition:
+            background-color 110ms ease,
+            box-shadow 110ms ease;
+    }
+
+    .k-scope:hover,
+    .k-scope[data-state="open"] {
         background: var(--keel-veil-1);
-        box-shadow: inset 0 0 0 1px var(--keel-line);
+    }
+
+    .k-scope[data-state="open"] {
+        box-shadow: inset 0 0 0 1px var(--keel-line-strong);
+    }
+
+    /*
+     * The filter. A recessed field rather than a raised one — it is a hole you
+     * type into, not an object resting on the panel — and it keeps the row
+     * height of a deck badge so the header stays two tidy bands.
+     */
+    .k-filter {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        height: 28px;
+        padding-inline: 8px 4px;
+        border-radius: var(--keel-r-chip);
+        background: var(--keel-veil-1);
+        box-shadow: inset 0 0 0 1px transparent;
+        transition: box-shadow 110ms ease;
+    }
+
+    .k-filter:focus-within {
+        box-shadow: inset 0 0 0 1px var(--keel-line-strong);
+    }
+
+    /*
+     * Agents waiting on you, at the top of the dock and outside the scope.
+     *
+     * It is the one section allowed a colour of its own, because it is the one
+     * section that is asking for something. The green is the status green, at
+     * the alpha the chrome can afford: a tint on the ground and a brighter
+     * count, never a filled banner.
+     */
+    .k-attn {
+        margin: 2px var(--keel-inset) 6px;
+        padding-bottom: 3px;
+        border-radius: var(--keel-r-control);
+        background: color-mix(in srgb, var(--keel-done) 7%, transparent);
+        box-shadow: inset 0 0 0 1px
+            color-mix(in srgb, var(--keel-done) 16%, transparent);
+    }
+
+    /* Rows inside it are already inset by the section; do not inset them twice. */
+    .k-attn .k-row {
+        width: calc(100% - 6px);
+        margin-inline: 3px;
+    }
+
+    .k-attn .k-row:hover {
+        background: color-mix(in srgb, var(--keel-done) 10%, transparent);
+    }
+
+    .k-attn-head {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        width: 100%;
+        height: 26px;
+        padding-inline: 6px 7px;
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--keel-text-dim);
+        cursor: default;
+    }
+
+    .k-attn-more {
+        display: block;
+        width: 100%;
+        padding: 3px 10px 5px;
+        text-align: left;
+        font-size: 11px;
+        color: var(--keel-text-faint);
+        cursor: default;
+        transition: color 110ms ease;
+    }
+
+    .k-attn-more:hover {
+        color: var(--keel-text);
+    }
+
+    .k-count-done {
+        background: color-mix(in srgb, var(--keel-done) 22%, transparent);
+        color: var(--keel-done);
+    }
+
+    /*
+     * Which group a run of projects belongs to. Only "All projects" draws these:
+     * inside one workspace it would name the thing the switcher already names.
+     * A caption, not a row — no fill, no hover, nothing to click — so the eye
+     * files it as a divider and keeps going.
+     */
+    .k-group-head {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        height: 24px;
+        margin: 8px var(--keel-inset) 1px;
+        padding-inline: 4px;
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--keel-text-faint);
+        border-radius: var(--keel-r-chip);
         transition:
             background-color 120ms ease,
             box-shadow 120ms ease;
     }
 
-    /* You are somewhere inside this one: the well catches the light. */
-    .k-workspace[data-current="true"] {
-        box-shadow:
-            inset 0 0 0 1px var(--keel-line-strong),
-            inset 0 1px 0 0 var(--keel-sheen);
+    .k-group-head:first-child {
+        margin-top: 2px;
+    }
+
+    .k-group-head-loose {
+        padding-left: 5px;
+    }
+
+    /* A project dropped on the caption joins that group. */
+    .k-group-head[data-drop] {
+        background: var(--keel-veil-2);
+        box-shadow: inset 0 0 0 1px var(--keel-line-strong);
+        color: var(--keel-text);
+    }
+
+    /* A project and everything under it, with a little air above the name. */
+    .k-project {
+        padding-top: 1px;
+    }
+
+    /* The chevron that opens a project. */
+    .k-twisty {
+        display: grid;
+        flex-shrink: 0;
+        place-items: center;
+        width: 16px;
+        height: 16px;
+        margin-left: -3px;
+        border-radius: 3px;
+        color: var(--keel-text-faint);
+        transition: color 110ms ease;
+    }
+
+    .k-twisty:hover:not(:disabled) {
+        color: var(--keel-text);
+    }
+
+    .k-twisty:disabled {
+        opacity: 0.4;
+    }
+
+    /* Where a terminal would be, in a deck that has none. */
+    .k-add-glyph {
+        display: grid;
+        flex-shrink: 0;
+        place-items: center;
+        width: 16px;
+        height: 16px;
+        border-radius: 5px;
+        border: 1px dashed var(--keel-line-strong);
+        transition: border-color 120ms ease;
+    }
+
+    .k-row:hover .k-add-glyph {
+        border-color: color-mix(in srgb, var(--keel-text) 30%, transparent);
+    }
+
+    /* The first screen in an empty dock: one target, not a paragraph. */
+    .k-empty-target {
+        display: flex;
+        width: 100%;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 4px;
+        padding: 12px;
+        border: 1px dashed var(--keel-line-strong);
+        border-radius: var(--keel-r-control);
+        text-align: left;
+        transition:
+            background-color 120ms ease,
+            border-color 120ms ease;
+    }
+
+    .k-empty-target:hover {
+        border-color: color-mix(in srgb, var(--keel-text) 25%, transparent);
+        background: var(--keel-veil-1);
     }
 
     /*
-     * A project dropped here joins the group, not the header row, so the whole
-     * well answers and the row inside it keeps quiet.
+     * The filter found things here, and more somewhere else. Said once, at the
+     * bottom, in the quietest voice the panel has.
      */
-    .k-workspace[data-drop="true"] {
-        background: var(--keel-veil-2);
-        box-shadow: inset 0 0 0 1px var(--keel-line-strong);
+    .k-elsewhere {
+        display: block;
+        width: calc(100% - var(--keel-inset) * 2);
+        margin: 6px var(--keel-inset) 0;
+        padding: 6px 8px;
+        border-top: 1px solid var(--keel-line);
+        text-align: left;
+        font-size: 11px;
+        color: var(--keel-text-faint);
+        cursor: default;
+        transition: color 110ms ease;
     }
 
-    .k-workspace > .k-row[data-drop="inside"] {
-        background: transparent;
-        box-shadow: none;
+    .k-elsewhere:hover {
+        color: var(--keel-text);
     }
 
-    .k-workspace .k-row:hover {
-        background: var(--keel-veil-2);
+    .k-link {
+        font-size: 12px;
+        color: var(--keel-text-dim);
+        text-decoration: underline;
+        text-decoration-color: var(--keel-line-strong);
+        text-underline-offset: 3px;
+        cursor: default;
+        transition: color 110ms ease;
     }
 
-    .k-workspace .k-row[data-selected="true"] {
-        background: var(--keel-veil-3);
-    }
-
-    .k-workspace .k-icon-btn:hover {
-        background: var(--keel-veil-3);
-    }
-
-    .k-workspace .k-workspace-mark[data-current="true"] {
-        --k-mark-ground: var(--keel-veil-3);
-    }
-
-    /* A hair of air under the last member, inside the well. */
-    .k-workspace-body {
-        padding-bottom: 2px;
+    .k-link:hover {
+        color: var(--keel-text);
     }
 
     /*
@@ -796,14 +1026,6 @@
     .k-deck-no[data-active="true"] {
         background: var(--keel-veil-3);
         color: var(--keel-text);
-    }
-
-    .k-workspace .k-deck-no {
-        background: var(--keel-veil-2);
-    }
-
-    .k-workspace .k-deck-no[data-active="true"] {
-        background: var(--keel-veil-3);
     }
 
     /* The file tree's version: one per ancestor, drawn inside the row. */
@@ -1227,24 +1449,30 @@
     }
 
     /*
-     * Folded, a workspace is still the box and a project is still bare letters
-     * on the band. One silhouette apart, and not a drop of colour spent.
+     * The scope, at the top of the rail: the box, because that is how a
+     * workspace is drawn at every size. A project below it is bare letters on
+     * the band, so the two stay one silhouette apart without a drop of colour.
      */
-    .k-rail-tile[data-kind="workspace"] {
+    .k-rail-scope {
         --k-ground: #1f1f1f;
         background: var(--keel-veil-1);
         box-shadow: inset 0 0 0 1px var(--keel-line-strong);
+        color: var(--keel-text);
+        font-weight: 600;
     }
 
-    .k-rail-tile[data-kind="workspace"]:hover {
-        background: var(--keel-veil-2);
-    }
-
-    .k-rail-tile[data-kind="workspace"][data-selected="true"] {
+    .k-rail-scope:hover,
+    .k-rail-scope[data-state="open"] {
         background: var(--keel-veil-3);
-        box-shadow:
-            inset 0 0 0 1px var(--keel-line-strong),
-            inset 0 1px 0 0 var(--keel-sheen);
+    }
+
+    /* Under the scope, before the projects it holds. */
+    .k-rail-rule {
+        flex-shrink: 0;
+        width: 16px;
+        height: 1px;
+        margin: 7px auto;
+        background: var(--keel-line-strong);
     }
 
     /* Tiles arrive one after another, top down, as the rail fades in. */

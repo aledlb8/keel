@@ -33,6 +33,7 @@ import type { MoveDirection } from "./tree";
 
 export type ShortcutId =
   | "goTo"
+  | "filterSidebar"
   | "findInFiles"
   | "nextWaiting"
   | "nextPane"
@@ -106,6 +107,13 @@ export const SHORTCUTS: Shortcut[] = [
     group: "Jump",
     family: "single",
     defaults: bind("KeyP", { ctrl: true }),
+  },
+  {
+    id: "filterSidebar",
+    label: "Filter the sidebar",
+    group: "Jump",
+    family: "single",
+    defaults: bind("KeyP", { ctrl: true, shift: true }),
   },
   {
     id: "findInFiles",
@@ -464,6 +472,7 @@ export function deckShortcutKeys(index: number): string {
 
 export type ShortcutMatch =
   | { action: "goTo" }
+  | { action: "filterSidebar" }
   | { action: "findInFiles" }
   | { action: "nextWaiting" }
   | { action: "nextPane" }

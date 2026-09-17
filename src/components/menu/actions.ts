@@ -29,6 +29,7 @@ import {
   Keyboard,
   Layers,
   LayoutGrid,
+  ListFilter,
   Maximize2,
   Minimize2,
   Pencil,
@@ -216,6 +217,13 @@ export function goBarMenu(actions: TitlebarActions): MenuEntry[] {
       icon: Search,
       shortcut: shortcutKeys("goTo"),
       onSelect: actions.goTo,
+    },
+    {
+      kind: "item",
+      label: "Filter the sidebar",
+      icon: ListFilter,
+      shortcut: shortcutKeys("filterSidebar"),
+      onSelect: actions.filterSidebar,
     },
     {
       kind: "item",

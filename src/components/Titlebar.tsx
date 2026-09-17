@@ -61,6 +61,7 @@ export interface TitlebarActions {
   openVpn: () => void;
   openConfig: () => void;
   goTo: () => void;
+  filterSidebar: () => void;
   findInFiles: () => void;
   jumpToWaiting: () => void;
 }
