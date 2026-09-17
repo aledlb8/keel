@@ -49,14 +49,57 @@ fn percent_encode(input: &str) -> String {
     out
 }
 
-fn dash_encode(input: &str) -> String {
-    input
-        .chars()
-        .map(|ch| match ch {
-            ':' | '/' | '\\' => '-',
-            other => other,
-        })
-        .collect()
+/// How claude names a project folder for a conversation's cwd.
+///
+/// Every character outside `[A-Za-z0-9]` becomes `-`, one dash per UTF-16 code
+/// unit, so spaces, dots, underscores, parentheses and non-ASCII characters all
+/// count. A slug longer than 200 units is truncated and suffixed with a base-36
+/// hash of the whole path, so two long folders cannot share one directory.
+/// Mirrors claude 2.1.x `~/.claude/projects/<slug>/<session>.jsonl`.
+const CLAUDE_SLUG_LIMIT: usize = 200;
+
+fn claude_slug(cwd: &str) -> String {
+    let mut slug = String::with_capacity(cwd.len());
+    for unit in cwd.encode_utf16() {
+        match char::from_u32(u32::from(unit)) {
+            Some(ch) if ch.is_ascii_alphanumeric() => slug.push(ch),
+            _ => slug.push('-'),
+        }
+    }
+    if slug.len() <= CLAUDE_SLUG_LIMIT {
+        return slug;
+    }
+    format!(
+        "{}-{}",
+        &slug[..CLAUDE_SLUG_LIMIT],
+        base36(claude_hash(cwd).unsigned_abs())
+    )
+}
+
+/// Java's `String.hashCode` over UTF-16 code units — the digest in the suffix.
+fn claude_hash(value: &str) -> i32 {
+    let mut hash: i32 = 0;
+    for unit in value.encode_utf16() {
+        hash = hash
+            .wrapping_shl(5)
+            .wrapping_sub(hash)
+            .wrapping_add(i32::from(unit));
+    }
+    hash
+}
+
+fn base36(mut value: u32) -> String {
+    const DIGITS: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let mut out = Vec::new();
+    loop {
+        out.push(DIGITS[(value % 36) as usize]);
+        value /= 36;
+        if value == 0 {
+            break;
+        }
+    }
+    out.reverse();
+    out.into_iter().map(char::from).collect()
 }
 
 /// opencode's data home on every platform, the way its `xdg-basedir`
@@ -318,7 +361,7 @@ fn session_recent_inner(app: &AppHandle, probe: &SessionProbe) -> Result<Vec<Ses
             list_dir_ids(&root.join("sessions").join(encoded))
         }
         "claude" => {
-            let encoded = dash_encode(&probe.cwd);
+            let encoded = claude_slug(&probe.cwd);
             if !is_encoded_segment(&encoded) {
                 return Ok(Vec::new());
             }
@@ -342,7 +385,7 @@ pub async fn session_recent(
 #[cfg(test)]
 mod tests {
     use super::{
-        cwd_is_listable, dash_encode, is_encoded_segment, is_session_id, list_jsonl_ids,
+        claude_slug, cwd_is_listable, is_encoded_segment, is_session_id, list_jsonl_ids,
         list_opencode_ids, opencode_db, percent_encode, to_hits,
     };
     use std::fs;
@@ -399,9 +442,45 @@ mod tests {
     #[test]
     fn claude_dashes_a_windows_path() {
         assert_eq!(
-            dash_encode(r"C:\Users\developer\Documents\code\keel"),
+            claude_slug(r"C:\Users\developer\Documents\code\keel"),
             "C--Users-developer-Documents-code-keel"
         );
+    }
+
+    #[test]
+    fn claude_slug_replaces_every_non_alphanumeric() {
+        // Verified against claude 2.1.274: the folder it created for this cwd.
+        assert_eq!(
+            claude_slug(r"C:\Users\alede\AppData\Local\Temp\opencode\keel test.folder"),
+            "C--Users-alede-AppData-Local-Temp-opencode-keel-test-folder"
+        );
+        assert_eq!(
+            claude_slug("/Users/developer/code/my_app (v2)"),
+            "-Users-developer-code-my-app--v2-"
+        );
+    }
+
+    #[test]
+    fn claude_slug_counts_utf16_units() {
+        // One dash for `é`; the rocket is a surrogate pair, so two.
+        assert_eq!(
+            claude_slug("C:\\Users\\alede\\AppData\\Local\\Temp\\opencode\\probe-émoji-🚀"),
+            "C--Users-alede-AppData-Local-Temp-opencode-probe--moji---"
+        );
+    }
+
+    #[test]
+    fn claude_slug_truncates_long_paths_with_the_java_hash() {
+        // Verified against claude 2.1.274: the folder it created for this path.
+        let long = format!(
+            "{}{}",
+            r"C:\Users\alede\AppData\Local\Temp\opencode\probe-",
+            "b".repeat(160)
+        );
+        assert_eq!(long.len(), 209);
+        let slug = claude_slug(&long);
+        assert_eq!(slug.len(), 207);
+        assert!(slug.ends_with("-8q2m4q"), "slug was {slug}");
     }
 
     #[test]
