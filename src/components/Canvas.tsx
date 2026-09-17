@@ -213,8 +213,8 @@ export function Canvas({
     [],
   );
   const noteActivity = useCallback(
-    (paneId: string, kind: PaneActivity) =>
-      useKeel.getState().noteActivity(paneId, kind),
+    (paneId: string, kind: PaneActivity, data?: string) =>
+      useKeel.getState().noteActivity(paneId, kind, data),
     [],
   );
   const titlePane = useCallback(
