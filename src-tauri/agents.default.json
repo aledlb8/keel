@@ -65,7 +65,8 @@
     "name": "opencode",
     "command": "opencode",
     "session": {
-      "resume": "--session {id}"
+      "resume": "--session {id}",
+      "store": "opencode"
     },
     "accountEnv": "XDG_DATA_HOME",
     "short": "OC",

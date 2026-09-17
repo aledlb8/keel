@@ -343,6 +343,16 @@ describe("agent turn lifecycle", () => {
     assert.equal(activity.status("idle", 10_011, false), "working");
   });
 
+  it("reports the submit that the turn hangs off, but not a paste newline", () => {
+    const activity = new AgentActivity(0);
+    assert.equal(activity.input("fix it", 0), "input");
+    assert.equal(activity.input("\r", 1), "submit");
+    activity.input("\x1b[200~pasted\r\nlines", 2);
+    assert.equal(activity.input("\r", 3), "input");
+    activity.input("\x1b[201~", 4);
+    assert.equal(activity.input("\n", 5), "input");
+  });
+
   it("does not manufacture completions for empty submissions, slash menus or unknown layouts", () => {
     for (const signal of ["ready", "unknown"] as const) {
       const activity = new AgentActivity(0);

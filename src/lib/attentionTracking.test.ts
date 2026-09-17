@@ -207,6 +207,36 @@ it("a session capture completed after restart cannot bind the old conversation",
   assert.equal(state().projects[0]?.decks[0]?.panes.agent?.sessionId, null);
 });
 
+it("binds an opencode conversation only from the submitted prompt, never at spawn", async () => {
+  useKeel.setState({
+    agents: [{
+      id: "opencode", name: "opencode", command: "opencode", short: "OC", accent: "",
+      bins: [], paths: [], path: "opencode", installed: true, builtin: true,
+      session: { resume: "--session {id}", store: "opencode" },
+    }],
+    projects: [project("agent", "opencode")],
+  });
+  const probes: { store: string }[] = [];
+  mockIPC((command, payload) => {
+    if (command !== "session_recent") return null;
+    probes.push((payload as { probe: { store: string } }).probe);
+    return [{ id: "ses_new", mtimeMs: Date.now() }];
+  });
+
+  state().noteActivity("agent", "spawn");
+  await state().captureSession("agent", 0);
+  assert.equal(probes.length, 0, "a spawn-armed opencode capture has nothing to find");
+
+  state().noteActivity("agent", "input", "restore the terminals");
+  state().noteActivity("agent", "input", "\r");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(probes.length, 1);
+  assert.equal(probes[0]?.store, "opencode");
+  assert.equal(state().projects[0]?.decks[0]?.panes.agent?.sessionId, "ses_new");
+  assert.equal(state().projects[0]?.decks[0]?.panes.agent?.sessionReady, true);
+});
+
 function alertFor(paneId: string, kind: "done" | "exited") {
   const project = state().projects[0];
   const pane = project?.decks[0]?.panes[paneId];

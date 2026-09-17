@@ -194,8 +194,12 @@ export interface KeelState {
   markSessionReady: (paneId: string) => void;
   /** Bind this pane to the conversation that actually started in it. */
   bindSession: (paneId: string, sessionId: string) => void;
-  /** After the agent process appears, record its real conversation id. */
-  captureSession: (paneId: string, generation?: number) => Promise<void>;
+  /**
+   * After the agent process appears, record its real conversation id. CLIs
+   * that mint the conversation on the first prompt (opencode) pass `since` —
+   * the wall-clock moment of that submission — instead of relying on spawn.
+   */
+  captureSession: (paneId: string, generation?: number, since?: number) => Promise<void>;
 
   /** The agents & profiles dialog; `agentId` preselects an agent. */
   agentSettings: { open: boolean; agentId: string | null };
@@ -1242,7 +1246,7 @@ export const useKeel = create<KeelState>((set, get) => {
       );
     },
 
-    async captureSession(paneId, generation) {
+    async captureSession(paneId, generation, since) {
       if (generation !== undefined && (get().generations[paneId] ?? 0) !== generation) return;
       const pane = findPane(paneId);
       if (!pane?.agentId || !pane.resumeAgent) return;
@@ -1253,10 +1257,14 @@ export const useKeel = create<KeelState>((set, get) => {
       if (!project) return;
       const agent = get().agents.find((entry) => entry.id === pane.agentId);
       const store = agent?.session?.store;
-      if (store !== "grok" && store !== "claude") return;
+      if (store !== "grok" && store !== "claude" && store !== "opencode") return;
+      // opencode creates its conversation when the first prompt is submitted,
+      // so a capture armed at spawn would have nothing to find — and could
+      // bind a neighbour's chat. Only the submit path arms it.
+      if (store === "opencode" && since === undefined) return;
 
       const capturedActivity = activity.get(paneId);
-      const spawnedAt = capturedActivity?.spawnedAt ?? Date.now();
+      const spawnedAt = since ?? capturedActivity?.spawnedAt ?? Date.now();
 
       for (let attempt = 0; attempt < 6; attempt += 1) {
         if (attempt > 0) {
@@ -2321,7 +2329,18 @@ export const useKeel = create<KeelState>((set, get) => {
         return;
       }
 
-      if (activity.get(paneId)?.input(data ?? "", performance.now()) === "report") return;
+      const signal = activity.get(paneId)?.input(data ?? "", performance.now());
+      if (signal === "report") return;
+      if (signal === "submit") {
+        // A submitted prompt is when a CLI that mints its conversation on the
+        // first message creates it. Floor the capture at this keystroke so an
+        // older, still-unclaimed conversation in the same folder cannot win.
+        void get().captureSession(
+          paneId,
+          get().generations[paneId],
+          Date.now(),
+        );
+      }
       acknowledge(paneId);
     },
 

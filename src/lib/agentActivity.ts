@@ -133,7 +133,7 @@ export class AgentActivity {
     this.spawnedAt = spawnedAt;
   }
 
-  input(data: string, now: number): "input" | "report" {
+  input(data: string, now: number): "submit" | "input" | "report" {
     // xterm also sends focus, mouse and terminal-query replies through onData.
     // They must neither acknowledge a notification nor submit/cancel a turn.
     if (data.startsWith("\x1b[200~")) this.pasting = true;
@@ -161,6 +161,7 @@ export class AgentActivity {
       this.signal = "unknown";
       this.readySince = null;
       this.lastSubmit = now;
+      return "submit";
     }
     return "input";
   }

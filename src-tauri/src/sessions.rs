@@ -1,9 +1,15 @@
-//! Where coding CLIs keep conversation files, so a pane can reopen *its* chat
+//! Where coding CLIs keep their conversations, so a pane can reopen *its* chat
 //! rather than whatever happened to run last in this folder.
+//!
+//! `grok` and `claude` write one file per conversation. `opencode` writes rows
+//! into a single SQLite database, which is opened read-only — Keel never writes
+//! another tool's storage.
 
+use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
+use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
@@ -12,7 +18,7 @@ use crate::pty::home_dir;
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionProbe {
-    /// `grok` or `claude` — each CLI lays its transcripts out differently.
+    /// `grok`, `claude` or `opencode` — each CLI lays its work out differently.
     pub store: String,
     pub cwd: String,
     #[serde(default)]
@@ -53,27 +59,145 @@ fn dash_encode(input: &str) -> String {
         .collect()
 }
 
+/// opencode's data home on every platform, the way its `xdg-basedir`
+/// dependency computes it: `XDG_DATA_HOME`, else `~/.local/share`. It does not
+/// follow `%APPDATA%` on Windows.
+fn opencode_data_home() -> Option<PathBuf> {
+    if let Some(xdg) = std::env::var_os("XDG_DATA_HOME").filter(|value| !value.is_empty()) {
+        return Some(PathBuf::from(xdg));
+    }
+    home_dir().map(|home| home.join(".local").join("share"))
+}
+
 fn session_root(app: &AppHandle, probe: &SessionProbe) -> Option<PathBuf> {
     if let (Some(_), Some(account_id)) = (&probe.account_env, &probe.account_id) {
         let valid = account_id
             .chars()
             .all(|ch| ch == '_' || ch == '-' || ch.is_ascii_alphanumeric());
         if valid {
-            return Some(
-                app.path()
-                    .app_config_dir()
-                    .ok()?
-                    .join("accounts")
-                    .join(account_id),
-            );
+            let dir = app
+                .path()
+                .app_config_dir()
+                .ok()?
+                .join("accounts")
+                .join(account_id);
+            // opencode treats `XDG_DATA_HOME` as a home and appends its own
+            // directory, so an account's files sit one level below it.
+            return Some(if probe.store == "opencode" {
+                dir.join("opencode")
+            } else {
+                dir
+            });
         }
     }
     let home = home_dir()?;
     match probe.store.as_str() {
         "grok" => Some(home.join(".grok")),
         "claude" => Some(home.join(".claude")),
+        "opencode" => Some(opencode_data_home()?.join("opencode")),
         _ => None,
     }
+}
+
+/// Where opencode keeps its SQLite database inside one data directory.
+///
+/// `OPENCODE_DB` is the CLI's own override: `:memory:` means nothing on disk,
+/// an absolute path is used as-is, and a bare name is relative to the data
+/// directory. Without it the official builds name the file `opencode.db`;
+/// developer channels name it `opencode-<channel>.db`.
+fn opencode_db(data_dir: &Path, forced: Option<&OsStr>) -> Option<PathBuf> {
+    if let Some(forced) = forced {
+        if forced == ":memory:" {
+            return None;
+        }
+        let forced = PathBuf::from(forced);
+        return Some(if forced.is_absolute() {
+            forced
+        } else {
+            data_dir.join(forced)
+        });
+    }
+    let standard = data_dir.join("opencode.db");
+    if standard.is_file() {
+        return Some(standard);
+    }
+    let mut channels: Vec<PathBuf> = std::fs::read_dir(data_dir)
+        .ok()?
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name();
+            let name = name.to_str()?;
+            (name.starts_with("opencode-") && name.ends_with(".db")).then(|| entry.path())
+        })
+        .collect();
+    channels.sort_by_key(|path| {
+        path.metadata()
+            .and_then(|meta| meta.modified())
+            .unwrap_or(SystemTime::UNIX_EPOCH)
+    });
+    channels.pop()
+}
+
+/// A conversation is minted when the CLI creates it, which for opencode means
+/// the first submitted prompt. `time_created` is that moment, in milliseconds.
+/// Only top-level sessions count: a subagent's session is not the chat a pane
+/// owns and would restore the wrong conversation.
+#[cfg(windows)]
+const OPENCODE_SESSIONS: &str = "
+    SELECT id, time_created FROM session
+    WHERE parent_id IS NULL AND REPLACE(directory, '\\', '/') = ?1 COLLATE NOCASE
+    ORDER BY time_created DESC
+    LIMIT 64";
+
+#[cfg(not(windows))]
+const OPENCODE_SESSIONS: &str = "
+    SELECT id, time_created FROM session
+    WHERE parent_id IS NULL AND directory = ?1
+    ORDER BY time_created DESC
+    LIMIT 64";
+
+fn list_opencode_ids(data_dir: &Path, cwd: &str) -> Vec<(String, SystemTime)> {
+    let Some(db) = opencode_db(data_dir, std::env::var_os("OPENCODE_DB").as_deref()) else {
+        return Vec::new();
+    };
+    if !db.is_file() {
+        return Vec::new();
+    }
+    let Ok(connection) = Connection::open_with_flags(
+        &db,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) else {
+        return Vec::new();
+    };
+    // The database is in WAL mode and a live pane is writing to it. Readers do
+    // not block writers, but a checkpoint can still make one wait briefly.
+    let _ = connection.busy_timeout(Duration::from_millis(1_000));
+    let Ok(mut statement) = connection.prepare(OPENCODE_SESSIONS) else {
+        return Vec::new();
+    };
+
+    let directory = if cfg!(windows) {
+        cwd.replace('\\', "/")
+    } else {
+        cwd.to_string()
+    };
+    let Ok(rows) = statement.query_map([directory], |row| {
+        let id: String = row.get(0)?;
+        let created: i64 = row.get(1)?;
+        Ok((id, created))
+    }) else {
+        return Vec::new();
+    };
+
+    rows.flatten()
+        .filter(|(id, _)| is_session_id(id))
+        .map(|(id, created)| {
+            (
+                id,
+                SystemTime::UNIX_EPOCH + Duration::from_millis(created.max(0) as u64),
+            )
+        })
+        .collect()
 }
 
 fn is_session_id(id: &str) -> bool {
@@ -200,6 +324,7 @@ fn session_recent_inner(app: &AppHandle, probe: &SessionProbe) -> Result<Vec<Ses
             }
             list_jsonl_ids(&root.join("projects").join(encoded))
         }
+        "opencode" => list_opencode_ids(&root, &probe.cwd),
         _ => Vec::new(),
     };
     Ok(to_hits(ids))
@@ -218,10 +343,10 @@ pub async fn session_recent(
 mod tests {
     use super::{
         cwd_is_listable, dash_encode, is_encoded_segment, is_session_id, list_jsonl_ids,
-        percent_encode,
+        list_opencode_ids, opencode_db, percent_encode, to_hits,
     };
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_dir() -> PathBuf {
@@ -235,6 +360,32 @@ mod tests {
         ));
         fs::create_dir_all(&dir).expect("temp dir");
         dir
+    }
+
+    /// A SQLite file shaped like the `session` table opencode writes.
+    fn opencode_db_with(dir: &Path, rows: &[(&str, Option<&str>, &str, i64)]) -> PathBuf {
+        let db = dir.join("opencode.db");
+        let connection = rusqlite::Connection::open(&db).expect("open db");
+        connection
+            .execute_batch(
+                "CREATE TABLE session (
+                    id TEXT PRIMARY KEY,
+                    parent_id TEXT,
+                    directory TEXT NOT NULL,
+                    time_created INTEGER NOT NULL
+                );",
+            )
+            .expect("schema");
+        for (id, parent, directory, created) in rows {
+            connection
+                .execute(
+                    "INSERT INTO session (id, parent_id, directory, time_created)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    rusqlite::params![id, parent, directory, created],
+                )
+                .expect("insert");
+        }
+        db
     }
 
     #[test]
@@ -294,5 +445,79 @@ mod tests {
         assert!(is_encoded_segment(
             "C%3A%5CUsers%5Cdeveloper%5CDocuments%5Ccode%5Ckeel"
         ));
+    }
+
+    #[test]
+    fn opencode_lists_only_this_folder_top_level_newest_first() {
+        let dir = temp_dir();
+        opencode_db_with(
+            &dir,
+            &[
+                ("ses_old", None, "C:/code/keel", 1_000),
+                ("ses_new", None, "C:/code/keel", 3_000),
+                ("ses_other", None, "C:/code/other", 4_000),
+                ("ses_child", Some("ses_old"), "C:/code/keel", 5_000),
+                ("x & calc", None, "C:/code/keel", 6_000),
+            ],
+        );
+        let hits = to_hits(list_opencode_ids(&dir, "C:/code/keel"));
+        let ids: Vec<_> = hits.iter().map(|hit| hit.id.as_str()).collect();
+        fs::remove_dir_all(&dir).ok();
+
+        assert_eq!(ids, vec!["ses_new", "ses_old"]);
+        assert_eq!(hits[0].id, "ses_new");
+        assert_eq!(hits[0].mtime_ms, 3_000);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn opencode_matches_a_windows_cwd_across_separators_and_case() {
+        let dir = temp_dir();
+        opencode_db_with(
+            &dir,
+            &[("ses_a", None, "c:/users/developer/code/keel", 1_000)],
+        );
+        let ids: Vec<_> = list_opencode_ids(&dir, r"C:\Users\Developer\Code\Keel")
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        fs::remove_dir_all(&dir).ok();
+        assert_eq!(ids, vec!["ses_a".to_string()]);
+    }
+
+    #[test]
+    fn opencode_without_a_database_is_empty() {
+        let dir = temp_dir();
+        let ids = list_opencode_ids(&dir, "C:/code/keel");
+        fs::remove_dir_all(&dir).ok();
+        assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn opencode_db_follows_the_cli_overrides() {
+        let dir = temp_dir();
+        let standard = dir.join("opencode.db");
+        fs::write(&standard, b"").unwrap();
+        assert_eq!(opencode_db(&dir, None), Some(standard.clone()));
+
+        let absolute = dir.join("elsewhere.db");
+        assert_eq!(
+            opencode_db(&dir, Some(absolute.as_os_str())),
+            Some(absolute.clone())
+        );
+        assert_eq!(
+            opencode_db(&dir, Some(std::ffi::OsStr::new("custom.db"))),
+            Some(dir.join("custom.db"))
+        );
+        assert_eq!(
+            opencode_db(&dir, Some(std::ffi::OsStr::new(":memory:"))),
+            None
+        );
+
+        fs::remove_file(&standard).unwrap();
+        let channel = dir.join("opencode-local.db");
+        fs::write(&channel, b"").unwrap();
+        assert_eq!(opencode_db(&dir, None), Some(channel));
+        fs::remove_dir_all(&dir).ok();
     }
 }

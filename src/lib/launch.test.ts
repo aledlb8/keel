@@ -40,6 +40,11 @@ const gemini: SessionSpec = {
   resume: "--resume {id}",
 };
 
+const opencode: SessionSpec = {
+  resume: "--session {id}",
+  store: "opencode",
+};
+
 const aider: SessionSpec = {
   resume: "--restore-chat-history",
 };
@@ -174,6 +179,23 @@ describe("applySession", () => {
         sessionReady: true,
       }),
       "aider --restore-chat-history",
+    );
+  });
+
+  it("resumes opencode by session id, and stays a new chat without one", () => {
+    assert.equal(
+      applySession("opencode", opencode, {
+        sessionId: null,
+        sessionReady: false,
+      }),
+      "opencode",
+    );
+    assert.equal(
+      applySession("opencode", opencode, {
+        sessionId: "ses_f506e4379ffez6jmEhXHbGESCo",
+        sessionReady: true,
+      }),
+      'opencode --session "ses_f506e4379ffez6jmEhXHbGESCo"',
     );
   });
 

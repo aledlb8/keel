@@ -34,6 +34,8 @@ notify-debouncer-mini = "0.7"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls-native-roots"] }
 socket2 = "0.5"
 time = { version = "0.3", default-features = false, features = ["parsing"] }
+# opencode keeps conversations in one SQLite database; read-only, for capture.
+rusqlite = { version = "0.40", features = ["bundled"] }
 
 [target.'cfg(windows)'.dependencies]
 # Same version tauri/wry already selected; needed for ICoreWebView2Settings3.
