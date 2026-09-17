@@ -3,7 +3,7 @@ import { afterEach, beforeEach, it, mock } from "node:test";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { startAttentionTracking, useKeel } from "../state/store.ts";
 import type { AgentScreen } from "./agentActivity.ts";
-import { shouldAlert } from "./agentNotify.ts";
+import { forgetPaneAlerts, shouldAlert } from "./agentNotify.ts";
 import type { Project } from "./types.ts";
 
 const state = useKeel.getState;
@@ -45,6 +45,7 @@ function startTurn() {
 }
 
 beforeEach(() => {
+  forgetPaneAlerts("agent");
   now = 0;
   focused = false;
   Object.assign(globalThis, { window: {}, document: { hasFocus: () => focused } });
@@ -241,3 +242,42 @@ it("an agent process death is eligible for an OS toast, and mute strips from the
   state().setPaneMuted("agent", false);
   assert.equal("muted" in (state().projects[0]?.decks[0]?.panes.agent ?? {}), false);
 });
+
+function captureNotifications(): string[] {
+  const notifications: string[] = [];
+  Object.assign(window, { Notification: class {
+    static permission = "granted";
+    constructor(title: string) { notifications.push(title); }
+  } });
+  return notifications;
+}
+
+it("notifies when the agent exits while its shell stays alive, only once", async () => {
+  const notifications = captureNotifications();
+  startTurn();
+  state().releaseAgent("agent", 0);
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(notifications, ["Agent exited"]);
+  assert.equal(state().exited.agent, undefined);
+  tick(3_000);
+  state().releaseAgent("agent", 0);
+  state().notePaneExit("agent", 0);
+  await Promise.resolve();
+  assert.deepEqual(notifications, ["Agent exited"]);
+});
+
+for (const suppressor of ["muted", "focused", "restoring", "closing", "hostLost"] as const) {
+  it(`suppresses agent exit alerts while ${suppressor}`, async () => {
+    const notifications = captureNotifications();
+    if (suppressor === "muted") state().setPaneMuted("agent", true);
+    if (suppressor === "focused") focused = true;
+    if (suppressor === "restoring") useKeel.setState({ restoreStatus: "restoring" });
+    if (suppressor === "closing") useKeel.setState({ closing: { agent: true } });
+    if (suppressor === "hostLost") useKeel.setState({ hostLost: true });
+    state().releaseAgent("agent", 0);
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.deepEqual(notifications, []);
+  });
+}

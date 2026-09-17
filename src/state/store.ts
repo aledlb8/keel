@@ -1213,6 +1213,11 @@ export const useKeel = create<KeelState>((set, get) => {
       if (generation !== undefined && (get().generations[paneId] ?? 0) !== generation) return;
       const pane = findPane(paneId);
       if (!pane?.agentId || !pane.resumeAgent) return;
+      const state = get();
+      if (!(paneId in state.closing) && !(paneId in state.exited) && !state.hostLost) {
+        const project = state.projects.find((item) => deckOfPane(item, paneId));
+        notifyAgent(paneAlert(pane, project?.name ?? "", "exited", state.restoreStatus === "restoring"));
+      }
       activity.delete(paneId);
       acknowledge(paneId);
       set((state) => ({ status: { ...state.status, [paneId]: "idle" } }));
@@ -2323,7 +2328,7 @@ export const useKeel = create<KeelState>((set, get) => {
     notePaneExit(paneId, generation) {
       const pane = findPane(paneId);
       if (!pane || (generation !== undefined &&
-        (get().generations[paneId] ?? 0) !== generation)) return;
+        (get().generations[paneId] ?? 0) !== generation) || paneId in get().exited) return;
       const project = get().projects.find((item) => deckOfPane(item, paneId));
       activity.delete(paneId);
       acknowledge(paneId);
@@ -2332,7 +2337,8 @@ export const useKeel = create<KeelState>((set, get) => {
         status: { ...state.status, [paneId]: "idle" },
       }));
       // Process death is not `done`. Tell you only if this was an agent's shell.
-      if (pane.agentId && !pane.editor) {
+      if (pane.agentId && pane.resumeAgent && !pane.editor &&
+        !(paneId in get().closing) && !get().hostLost) {
         notifyAgent(
           paneAlert(
             pane,
