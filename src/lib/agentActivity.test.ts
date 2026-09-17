@@ -45,7 +45,9 @@ describe("parsed agent screen", () => {
     }, 4);
     assert.equal(screen.cursorLine, 1);
     assert.equal(agentSignal("codex", screen), "busy");
-    assert.equal(agentSignal("claude", { ...claude, truncated: true }), "unknown");
+    // The reader always keeps the bottom 120 rows, so a tall pane still
+    // includes the live composer. truncated must not hide it.
+    assert.equal(agentSignal("claude", { ...claude, truncated: true }), "ready");
   });
 
   it("handles Claude custom footers and spinners without the interrupt hint", () => {
@@ -69,10 +71,14 @@ describe("parsed agent screen", () => {
   }
 
   it("does not confuse response prose, historical prompts, or a shell with readiness", () => {
-    assert.equal(agentSignal("claude", { ...claude, cursorLine: 0 }), "unknown");
+    // Full-width box rows wrap-join onto ❯, so the hardware cursor may sit
+    // on the answer line while the live composer is still in the footer.
+    assert.equal(agentSignal("claude", { ...claude, cursorLine: 0 }), "ready");
     assert.equal(agentSignal("claude", { lines: ["PS C:\\code> ", "finished thinking"], cursorLine: 0 }), "unknown");
     assert.equal(agentSignal("custom", claude), "unknown");
     assert.equal(agentSignal("claude", { lines: ["❯ quoted answer"], cursorLine: 0 }), "unknown");
+    assert.equal(agentSignal("claude", { ...claude, lines: ["* a markdown bullet", ...claude.lines] }), "ready");
+    assert.equal(agentSignal("claude", { ...claude, lines: ["I am still thinking about the approach.", ...claude.lines] }), "ready");
   });
 
   it("does not finish at an approval dialog over a stale composer", () => {
@@ -171,7 +177,7 @@ describe("parsed agent screen", () => {
       lines: ["  $ pwd".repeat(20), "  C:\\code"],
       cursorLine: 1,
     }), "unknown");
-    assert.equal(agentSignal("opencode", { ...opencodeReady, truncated: true }), "unknown");
+    assert.equal(agentSignal("opencode", { ...opencodeReady, truncated: true }), "ready");
   });
 
   // Real `readAgentScreen` output from grok 1.0.34, joined the same way.
@@ -219,7 +225,103 @@ describe("parsed agent screen", () => {
       cursorLine: 1,
     }), "unknown");
     assert.equal(agentSignal("grok", { lines: ["PS C:\\code> "], cursorLine: 0 }), "unknown");
-    assert.equal(agentSignal("grok", { ...grokReady, truncated: true }), "unknown");
+    assert.equal(agentSignal("grok", { ...grokReady, truncated: true }), "ready");
+  });
+
+  it("recognises Claude 2.1 fullscreen with a custom status line and wrap-joined box", () => {
+    // statusLine hides "? for shortcuts" / "esc to interrupt"; mode badges stay.
+    // Full-width ─ rows are wrap-joined onto the prompt, so ❯ is mid-line.
+    const screen: AgentScreen = {
+      lines: [
+        "opus · main · ~/code/keel",
+        "────────────────────────❯ ",
+        "────────────────────────⏵⏵ auto mode on",
+      ],
+      cursorLine: 0,
+      truncated: true,
+    };
+    assert.equal(agentSignal("claude", screen), "ready");
+    assert.equal(agentSignal("claude", {
+      ...screen,
+      lines: ["✻ Cogitating… (14s · ↓ 800 tokens · thinking)", ...screen.lines],
+    }), "busy");
+    assert.equal(agentSignal("claude", {
+      ...screen,
+      lines: ["deep in thought", ...screen.lines],
+    }), "busy");
+    assert.equal(agentSignal("claude", {
+      lines: [...screen.lines, "Do you want to proceed?", "1. Yes", "2. Yes, and don't ask again for this command"],
+      cursorLine: 0,
+    }), "blocked");
+  });
+
+  it("recognises an opencode composer without the ╹ edge or a nearby cursor", () => {
+    const screen: AgentScreen = {
+      lines: [
+        "  Build · DeepSeek V4.1 Flash",
+        "C:\\code\\keel                    tab agents  ctrl+p commands",
+      ],
+      cursorLine: 0,
+      truncated: true,
+    };
+    assert.equal(agentSignal("opencode", screen), "ready");
+    assert.equal(agentSignal("opencode", {
+      ...screen,
+      lines: [...screen.lines, "  ⬝⬝⬝⬝⬝⬝⬝⬝  esc interrupt"],
+    }), "busy");
+    assert.equal(agentSignal("opencode", {
+      lines: ["  △ Permission required        Allow once   Allow always   Reject     enter confirm"],
+      cursorLine: 0,
+    }), "blocked");
+  });
+
+  it("recognises Codex 0.154, Gemini 0.38, and the remaining catalogue agents", () => {
+    assert.equal(agentSignal("codex", {
+      lines: ["Would you like to run the following command?", "git status", "Yes, proceed"],
+      cursorLine: 0,
+    }), "blocked");
+    assert.equal(agentSignal("codex", {
+      lines: ["Working (18s • esc to interrupt)", "› ", "92% context left"],
+      cursorLine: 1,
+    }), "busy");
+
+    const gemini: AgentScreen = {
+      lines: ["╭──────────────╮", "│ > Type your message │", "╰──────────────╯"],
+      cursorLine: 0,
+    };
+    assert.equal(agentSignal("gemini", gemini), "ready");
+    assert.equal(agentSignal("gemini", {
+      ...gemini,
+      lines: [...gemini.lines, "Allow once", "Allow for this session"],
+    }), "blocked");
+
+    assert.equal(agentSignal("cursor-agent", {
+      lines: ["Plan, search, build anything", "Composer 1.5"],
+      cursorLine: 0,
+    }), "ready");
+    assert.equal(agentSignal("cursor-agent", {
+      lines: ["Plan, search, build anything", "ctrl+c to stop"],
+      cursorLine: 0,
+    }), "busy");
+
+    assert.equal(agentSignal("crush", {
+      lines: ["Ready!", "enter send  ctrl+p commands"],
+      cursorLine: 0,
+    }), "ready");
+    assert.equal(agentSignal("crush", {
+      lines: ["Working...", "esc cancel"],
+      cursorLine: 0,
+    }), "busy");
+
+    assert.equal(agentSignal("aider", { lines: ["code> "], cursorLine: 0 }), "ready");
+    assert.equal(agentSignal("aider", { lines: ["diff multi> "], cursorLine: 0 }), "ready");
+    assert.equal(agentSignal("aider", { lines: ["PS C:\\code> "], cursorLine: 0 }), "unknown");
+
+    assert.equal(agentSignal("goose", {
+      lines: ["Enter to send · Ctrl+J newline"],
+      cursorLine: 0,
+    }), "ready");
+    assert.equal(agentSignal("goose", { lines: ["Honking thoughtfully"], cursorLine: 0 }), "unknown");
   });
 });
 
@@ -278,6 +380,17 @@ describe("agent turn lifecycle", () => {
     const activity = live();
     activity.screen("blocked", 100, "approval");
     assert.equal(activity.status("working", 3_600_000, false), "working");
+  });
+
+  it("announces a Claude turn that used a custom status line and no interrupt hint", () => {
+    const activity = new AgentActivity(0);
+    activity.input("fix it", 0);
+    activity.input("\r", 1);
+    activity.screen("busy", 50, "✻ Cogitating… (14s · ↓ 800 tokens)");
+    assert.equal(activity.status("idle", 100, false), "working");
+    activity.screen("ready", 2_000, "────────❯ \n⏵⏵ auto mode on");
+    assert.equal(activity.status("working", 2_500, false), "working");
+    assert.equal(activity.status("working", 4_001, false), "done");
   });
 
   it("announces an opencode turn once its composer settles", () => {

@@ -35,76 +35,100 @@ export function readAgentScreen(buffer: {
 
 export type AgentSignal = "busy" | "ready" | "blocked" | "unknown";
 
+const INTERRUPT =
+  /\b(?:esc|escape|ctrl\s*\+\s*c)\s+(?:again\s+)?(?:to\s+)?(?:interrupt|cancel|stop)\b/i;
+const RETRY =
+  /\b(?:reconnecting|retrying|waiting for (?:connection|response|api))\b/i;
+const APPROVAL =
+  /\b(?:do you want to (?:proceed|allow)|would you like to run|allow (?:once|always|for this)|approve (?:this|once|network)|waiting for (?:approval|permission)|yes, (?:allow|proceed|and don't ask again)|no, keep planning)\b/i;
+
+/** Claude 2.1 spinner byline: glyph + verb, or the elapsed/token clock. */
+const CLAUDE_SPINNER =
+  /(?:^|\n|[─│]\s*)[✻✽✶✳✢◐◓◑◒]\s+\S/u;
+const CLAUDE_SPINNER_CLOCK = /\(\d+\s*s\s*[·•]\s*↓/u;
+const CLAUDE_SPINNER_STATUS =
+  /(?:^|\n)(?:deep in thought|picking the thought back up|almost done thinking|thinking some more|still thinking|compacting conversation|running precompact hooks|running postcompact hooks)\b/i;
+const CLAUDE_MODE =
+  /\b(?:(?:manual|plan|auto)\s+mode on|accept edits on|don't ask on|bypass permissions on)\b/i;
+const CLAUDE_PROMPT = /❯(?:\s|$)/u;
+
+/** OpenCode 1.18 composer chrome. The ╹▀ edge is painted while busy too. */
+const OPENCODE_EDGE = /╹(?:▀{3,}| {3,})/u;
+const OPENCODE_HINTS = /\b(?:tab\s+agents|ctrl\+\S+\s+commands)\b/i;
+const OPENCODE_SPINNER = /(?:[■⬝]{4,}|\[⋯\])/u;
+
+const CODEX_PROMPT = /(?:^|\n|[│╰╭])\s*[›▌](?:\s|$)/u;
+const GEMINI_PROMPT = /│\s*>\s.*│/u;
+const GEMINI_BOX = /╰─+╯/u;
+const GROK_SHORTCUTS = /\bctrl\+x\s*:\s*shortcuts\b/i;
+const GROK_BUSY = /\bctrl\+c\s*:\s*cancel\b/i;
+const GROK_BLOCKED = /(?:\btab:next option\b|\b[1-9]\/\d+:select\b)/i;
+
 /**
  * Keep these deliberately narrow. A new/unrecognised CLI layout must not turn
  * silence into a successful completion. Ordinary prose saying "thinking" or
  * "finished" is not a lifecycle event.
+ *
+ * `truncated` only means the reader skipped rows above the last 120 — the live
+ * composer is at the bottom, so it is still in `lines`. Full-width TUI borders
+ * are wrap-joined onto the prompt row; never require the hardware cursor to
+ * sit on a `^❯` line of its own.
  */
 export function agentSignal(agentId: string, screen: AgentScreen): AgentSignal {
   const lines = screen.lines.map((line) => line.trim());
   while (lines.length && !lines[lines.length - 1]) lines.pop();
+  const body = lines.join("\n");
   const footer = lines.slice(-12).join("\n");
-  if (/\b(?:esc|escape|ctrl\+c)\s+(?:again\s+)?(?:to\s+)?(?:interrupt|cancel|stop)\b/i.test(lines.join("\n"))) {
-    return "busy";
-  }
-  if (agentId === "claude" && lines.some((line) => /^[✻✽✶✳✢·*]\s+\S.*(?:…|\.{3})/u.test(line))) {
-    return "busy";
-  }
-  if (/\b(?:reconnecting|retrying|waiting for (?:connection|response))\b/i.test(footer)) {
-    return "busy";
-  }
-  if (/\b(?:do you want to (?:proceed|allow)|allow (?:once|always)|approve (?:this|once)|waiting for (?:approval|permission)|yes, (?:allow|proceed))\b/i.test(footer)) {
-    return "blocked";
-  }
-  // opencode's own dialogs: a tool approval, or the question tool waiting
-  // for an answer. Both sit above the composer, where the cursor rule below
-  // cannot reach them.
-  if (agentId === "opencode" && /\b(?:permission required|esc dismiss)\b/i.test(footer)) {
-    return "blocked";
-  }
-  // grok's permission dialogs also sit where the cursor rule cannot reach
-  // them. Its cancel hint uses a colon, so the generic busy rule above never
-  // mistakes a waiting dialog for a running turn — check the dialog first.
-  if (agentId === "grok") {
-    if (/(?:\btab:next option\b|\b[1-9]\/\d+:select\b)/i.test(footer)) {
-      return "blocked";
-    }
-    if (/\bctrl\+c\s*:\s*cancel\b/i.test(footer) || /\[stop\]/i.test(footer)) {
-      return "busy";
-    }
-    // The composer's shortcut bar is what a turn running and a turn finished
-    // share; the cancel hint above is what separates them. Dialogs replace
-    // this bar with their own option hints.
-    if (!screen.truncated && /\bctrl\+x\s*:\s*shortcuts\b/i.test(footer)) {
-      return "ready";
-    }
-  }
   const cursor = lines[screen.cursorLine] ?? "";
-  if (screen.truncated || screen.cursorLine < lines.length - 12) return "unknown";
+
+  if (INTERRUPT.test(body)) return "busy";
+  if (RETRY.test(footer)) return "busy";
+  if (APPROVAL.test(footer)) return "blocked";
+
   switch (agentId) {
     case "claude":
-      // Claude leaves the composer visible during thinking. The interrupt
-      // footer above must always win, even when the cursor is in the composer.
-      return /^❯(?:\s|$)/u.test(cursor) &&
-        (/\?\s+for shortcuts|shift\+tab to cycle/i.test(footer) ||
-          (/^─{3,}/u.test(lines[screen.cursorLine - 1] ?? "") &&
-            /^─{3,}/u.test(lines[screen.cursorLine + 1] ?? "")))
-        ? "ready" : "unknown";
+      if (
+        CLAUDE_SPINNER.test(body) ||
+        CLAUDE_SPINNER_CLOCK.test(body) ||
+        CLAUDE_SPINNER_STATUS.test(body) ||
+        lines.some((line) => /^[✻✽✶✳✢·*◐◓◑◒]\s+\S.*(?:…|\.{3})/u.test(line))
+      ) return "busy";
+      // Composer stays on screen while thinking. Custom statusLine hides
+      // "? for shortcuts" and "esc to interrupt"; mode badges do not.
+      return CLAUDE_PROMPT.test(footer) || CLAUDE_PROMPT.test(cursor)
+        ? (/\?\s+for shortcuts|shift\+tab to cycle/i.test(footer) ||
+            CLAUDE_MODE.test(footer) ||
+            /─{3,}/u.test(footer) ? "ready" : "unknown")
+        : "unknown";
     case "codex":
-      return /^[›▌](?:\s|$)/u.test(cursor) &&
-        /(?:\?\s+for shortcuts|\d+%\s+(?:context\s+)?left)/i.test(footer)
-        ? "ready" : "unknown";
+      return CODEX_PROMPT.test(footer) || /^[›▌](?:\s|$)/u.test(cursor)
+        ? (/\?\s+for shortcuts|\d+%\s+(?:context\s+)?left/i.test(footer) ? "ready" : "unknown")
+        : "unknown";
     case "gemini":
-      return /^│\s*>\s.*│$/u.test(cursor) && /╰─+╯/u.test(footer)
+      return (GEMINI_PROMPT.test(footer) || GEMINI_PROMPT.test(cursor)) && GEMINI_BOX.test(footer)
         ? "ready" : "unknown";
     case "opencode":
-      // The composer's bottom edge (`╹▀▀▀…`) stays on screen whenever the TUI
-      // is back at the prompt. A running turn shows the interrupt hint instead
-      // (handled above), and both dialogs replace the composer entirely.
-      // Anchoring on the cursor is not possible: the reader joins soft-wrapped
-      // rows, so the cursor's line is many rows of text in one string.
-      return lines.some((line) => /╹(?:▀{3,}| {3,})/u.test(line))
+      if (/\b(?:permission required|esc dismiss|enter\s+confirm)\b/i.test(footer)) return "blocked";
+      if (OPENCODE_SPINNER.test(body) || /\b\[retrying\b/i.test(body)) return "busy";
+      // Dialogs replace the composer. Idle and busy share ╹▀ / ctrl+p; the
+      // interrupt hint above is what separates them. Transparent themes paint
+      // the edge as spaces, so the shortcut labels are the fallback.
+      return OPENCODE_EDGE.test(body) || OPENCODE_HINTS.test(footer) ? "ready" : "unknown";
+    case "grok":
+      if (GROK_BLOCKED.test(footer)) return "blocked";
+      if (GROK_BUSY.test(footer) || /\[stop\]/i.test(footer)) return "busy";
+      return GROK_SHORTCUTS.test(footer) ? "ready" : "unknown";
+    case "cursor-agent":
+      // Ink TUI (2026): placeholder stays while working; ctrl+c to stop does not.
+      return /plan, search, build anything|add a follow-up/i.test(footer) ? "ready" : "unknown";
+    case "crush":
+      return /\benter\s+send\b/i.test(footer) ? "ready" : "unknown";
+    case "aider":
+      return /(?:^|\n)(?:code|diff|ask|architect)(?:\s+multi)?\s*>/i.test(footer) ||
+        /^(?:code|diff|ask|architect)(?:\s+multi)?\s*>/i.test(cursor)
         ? "ready" : "unknown";
+    case "goose":
+      return /\benter to send\b/i.test(footer) ? "ready" : "unknown";
     default:
       return "unknown";
   }

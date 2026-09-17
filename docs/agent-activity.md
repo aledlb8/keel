@@ -21,21 +21,32 @@ conversation capture.
 
 The screen reader uses the active buffer's `baseY`, never `viewportY`, so user
 scrolling cannot turn historical output into current state. Sampling is bounded
-to 120 rows, coalesced with a 50 ms timer, and works on hidden decks. Raw PTY
-bytes still go directly to xterm, which handles ANSI escapes, wrapping, cursor
-movement, alternate buffers, and fragmented UTF-8 before detection.
+to 120 rows from the bottom of the live buffer, coalesced with a 50 ms timer,
+and works on hidden decks. A tall pane sets `truncated` because rows above that
+window were skipped; the live composer is still in the sample, so adapters must
+not treat truncated as "prompt missing". Raw PTY bytes still go directly to
+xterm, which handles ANSI escapes, wrapping, cursor movement, alternate
+buffers, and fragmented UTF-8 before detection. Full-width TUI borders occupy
+an entire row and xterm marks them wrapped, so the reader joins them onto the
+prompt line — a `❯` may sit in the middle of a joined string, not at column 0.
 
-Current prompt adapters cover Claude Code, Codex, Gemini CLI, opencode, and
-grok. These are conservative UI heuristics, not an agent lifecycle protocol.
-Changed layouts, localised/custom interfaces, clipped prompts, very fast turns
-with no observed busy frame, and other agents may not produce a finished alert.
-Unknown layouts never fall back to silence-based completion. An unconfirmed
-submission settles to idle; an observed running turn remains working until
-there is enough evidence to finish or the user cancels/the process exits.
-Auto-started work with no local submission does not produce completion
-notifications. Add captured screen fixtures and lifecycle tests when extending
-an adapter. Structured provider lifecycle events would be a stronger future
-signal than terminal UI parsing.
+Current prompt adapters cover Claude Code, Codex, Gemini CLI, opencode, grok,
+Cursor Agent, Crush, Aider, and Goose. These are conservative UI heuristics,
+not an agent lifecycle protocol. Claude Code 2.1 keeps the composer visible
+while thinking; a custom `statusLine` hides `? for shortcuts` and
+`esc to interrupt`, so busy is the spinner/token clock and ready is the
+prompt plus a mode badge or box. opencode 1.18 also keeps the composer (and
+its `╹▀` edge, or `tab agents` / `ctrl+p commands` when the theme paints that
+edge as spaces) while running; `esc interrupt` is what separates busy from
+ready, and permission/question dialogs replace the composer. Changed layouts,
+localised/custom interfaces, very fast turns with no observed busy frame, and
+other agents may not produce a finished alert. Unknown layouts never fall back
+to silence-based completion. An unconfirmed submission settles to idle; an
+observed running turn remains working until there is enough evidence to finish
+or the user cancels/the process exits. Auto-started work with no local
+submission does not produce completion notifications. Add captured screen
+fixtures and lifecycle tests when extending an adapter. Structured provider
+lifecycle events would be a stronger future signal than terminal UI parsing.
 
 The store consumes completion once: it records `doneAt` only for an unwatched
 pane and clears the timestamp on acknowledgement, restart, or process exit.
