@@ -25,16 +25,17 @@ to 120 rows, coalesced with a 50 ms timer, and works on hidden decks. Raw PTY
 bytes still go directly to xterm, which handles ANSI escapes, wrapping, cursor
 movement, alternate buffers, and fragmented UTF-8 before detection.
 
-Current prompt adapters cover Claude Code, Codex, and Gemini CLI. These are
-conservative UI heuristics, not an agent lifecycle protocol. Changed layouts,
-localised/custom interfaces, clipped prompts, very fast turns with no observed
-busy frame, and other agents may not produce a finished alert. Unknown layouts
-never fall back to silence-based completion. An unconfirmed submission settles
-to idle; an observed running turn remains working until there is enough evidence
-to finish or the user cancels/the process exits. Auto-started work with no local
-submission does not produce completion notifications. Add captured screen
-fixtures and lifecycle tests when extending an adapter. Structured provider
-lifecycle events would be a stronger future signal than terminal UI parsing.
+Current prompt adapters cover Claude Code, Codex, Gemini CLI, opencode, and
+grok. These are conservative UI heuristics, not an agent lifecycle protocol.
+Changed layouts, localised/custom interfaces, clipped prompts, very fast turns
+with no observed busy frame, and other agents may not produce a finished alert.
+Unknown layouts never fall back to silence-based completion. An unconfirmed
+submission settles to idle; an observed running turn remains working until
+there is enough evidence to finish or the user cancels/the process exits.
+Auto-started work with no local submission does not produce completion
+notifications. Add captured screen fixtures and lifecycle tests when extending
+an adapter. Structured provider lifecycle events would be a stronger future
+signal than terminal UI parsing.
 
 The store consumes completion once: it records `doneAt` only for an unwatched
 pane and clears the timestamp on acknowledgement, restart, or process exit.

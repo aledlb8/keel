@@ -92,6 +92,135 @@ describe("parsed agent screen", () => {
     assert.equal(agentSignal("gemini", screen), "ready");
     assert.equal(agentSignal("gemini", { ...screen, lines: [...screen.lines, "⠇ Addressing query (esc to cancel, 15s)"] }), "busy");
   });
+
+  // Real `readAgentScreen` output from opencode 1.18.31. The reader joins the
+  // rows xterm soft-wrapped, so one string can hold many terminal rows and a
+  // prompt cannot be anchored with `^` or found through `cursorLine`.
+  const opencodeBusy: AgentScreen = {
+    lines: [
+      "                                                          ┃",
+      "  ┃  List the files in this folder.                       ┃                         ▣  Build · DeepSeek V4.1 Flash",
+      "",
+      "",
+      "",
+      "  ┃  Build · DeepSeek V4.1 Flash OpenCode Go · max   ╹▀▀▀▀▀▀▀▀▀▀▀▀   ⬝⬝⬝⬝⬝⬝⬝⬝  esc interrupt                                                                 tab agents  ctrl+p commands",
+    ],
+    cursorLine: 5,
+  };
+  const opencodeReady: AgentScreen = {
+    lines: [
+      "                                                          ┃",
+      "  ┃  List the files in this folder.                       ┃     → Read .        The folder is empty.      ▣  Build · DeepSeek V4.1 Flash · 4.4s",
+      "",
+      "",
+      "",
+      "  ┃  Build · DeepSeek V4.1 Flash OpenCode Go · max   ╹▀▀▀▀▀▀▀▀▀▀▀▀   C:\\code\\keel                          9.2K (1%) · $0.00  ctrl+p commands",
+    ],
+    cursorLine: 5,
+  };
+
+  it("recognises the opencode composer, its running footer, and both dialogs", () => {
+    assert.equal(agentSignal("opencode", opencodeReady), "ready");
+    assert.equal(agentSignal("opencode", opencodeBusy), "busy");
+    assert.equal(agentSignal("opencode", {
+      ...opencodeBusy,
+      lines: [...opencodeBusy.lines.slice(0, 5), "  ⬝⬝⬝⬝⬝⬝⬝⬝  esc again to interrupt"],
+    }), "busy");
+
+    const permission: AgentScreen = {
+      lines: [
+        "                                                          ┃",
+        "  ┃  Run the shell command pwd and show its output.       ┃     + Thought: 255ms       $ pwd      ▣  Build · DeepSeek V4.1 Flash",
+        "",
+        "",
+        "",
+        "  ┃  △ Permission required        ┃    # Shell command        ┃  $ pwd        ┃   Allow once   Allow always   Reject                          ctrl+f fullscreen  ⇆ select  enter confirm",
+      ],
+      cursorLine: 5,
+    };
+    assert.equal(agentSignal("opencode", permission), "blocked");
+
+    const question: AgentScreen = {
+      lines: [
+        "                                                          ┃",
+        "  ┃  Use the question tool to ask me whether I prefer tabs or spaces.   + Thought: 191ms   → Asked 1 question   ▣  Build · DeepSeek V4.1 Flash",
+        "",
+        "",
+        "",
+        "  ┃  Do you prefer tabs or spaces for indentation?   ┃  1. Tabs   ┃     Use tab characters for indentation   ┃  2. Spaces   ┃  3. Type your own answer   ┃  ↑↓ select  enter submit  esc dismiss",
+      ],
+      cursorLine: 1,
+    };
+    assert.equal(agentSignal("opencode", question), "blocked");
+  });
+
+  it("treats an opencode turn that ended in an error panel as finished", () => {
+    assert.equal(agentSignal("opencode", {
+      ...opencodeReady,
+      lines: [
+        ...opencodeReady.lines.slice(0, 5),
+        "  ┃  No endpoints found that support tool use.        ╹▀▀▀▀▀▀▀▀▀▀▀▀   C:\\code\\keel      tab agents  ctrl+p commands",
+      ],
+    }), "ready");
+  });
+
+  it("does not call an opencode conversation or a dialog a finished prompt", () => {
+    // No composer on screen: command output, a plain shell, or a clipped read.
+    assert.equal(agentSignal("opencode", { lines: ["PS C:\\code> "], cursorLine: 0 }), "unknown");
+    assert.equal(agentSignal("opencode", {
+      lines: ["  $ pwd".repeat(20), "  C:\\code"],
+      cursorLine: 1,
+    }), "unknown");
+    assert.equal(agentSignal("opencode", { ...opencodeReady, truncated: true }), "unknown");
+  });
+
+  // Real `readAgentScreen` output from grok 1.0.34, joined the same way.
+  const grokBusy: AgentScreen = {
+    lines: [
+      "  ~/A/L/T/o/grok-capture/project   18K / 500K │ [Dashboard]",
+      "     > List the files in this folder.   1:29 PM   ♦ Listing 1 dir   | Run List `.` 0.2s   6.0s ↓18.0k [stop]   ╭────────────────────────────╮  │ >  │  ╰─ Grok 4.6 (low) · always-approve ─╯   Shift+Tab:mode  │  Ctrl+c:cancel  │  Ctrl+x:shortcuts",
+    ],
+    cursorLine: 1,
+  };
+  const grokReady: AgentScreen = {
+    lines: [
+      "  ~/A/L/T/o/grok-capture/project   18K / 500K │ [Dashboard]",
+      "     > List the files in this folder.   1:29 PM   ♦ Listed 1 dir   ♦ Thought for 0.2s   The workspace folder is empty.   Worked for 16s   ╭────────────────────────────╮  │ >  │  ╰─ Grok 4.6 (low) · always-approve ─╯   Shift+Tab:mode  │  Ctrl+x:shortcuts",
+    ],
+    cursorLine: 1,
+  };
+
+  it("recognises the grok composer, its running footer, and both permission dialogs", () => {
+    assert.equal(agentSignal("grok", grokReady), "ready");
+    assert.equal(agentSignal("grok", grokBusy), "busy");
+
+    const editApproval: AgentScreen = {
+      lines: [
+        "  ~/A/L/T/o/grok-capture/project   18K / 500K │ [Dashboard]",
+        "     > Create a file called proof.txt containing the word hello.   1:31 PM   ♦ Creating proof.txt   ♦ Run Write `C:\\...\\proof.txt` 0.4s   6.0s ↓18.0k [stop]   │  Allow Edit to C:\\...\\proof.txt?   │  1 (•) Yes, and don't ask again for anything (always-approve mode)   │  2 (○) Yes, allow all edits during this session   │  3 (○) Yes   │  4 (○) No, reject (type to add feedback)   1/4:select  │  Tab:next option  │  Ctrl+o:always-approve  │  Ctrl+c:cancel  │  Esc:scrollback",
+      ],
+      cursorLine: 1,
+    };
+    assert.equal(agentSignal("grok", editApproval), "blocked");
+
+    const bashApproval: AgentScreen = {
+      lines: [
+        "  ~/A/L/T/o/grok-capture/project   18K / 500K │ [Dashboard]",
+        "     > Check the Node version with a shell command.   1:32 PM   ♦ Check installed Node.js version… 0.1s   5.9s ↓18.0k [↓][stop]   │  Check installed Node.js version   │  node --version   │  1 (•) Yes, and don't ask again for anything (always-approve mode)   │  2 (○) Always allow: node --version   │  3 (○) Yes, proceed   │  4 (○) No, reject (type to add feedback)   │  5 (○) Never allow: node --version   1/5:select  │  Tab:next option  │  ←/→:scope  │  e:edit pattern  │  Ctrl+o:always-approve  │  Ctrl+c:cancel  │  Esc:scrollback",
+      ],
+      cursorLine: 1,
+    };
+    assert.equal(agentSignal("grok", bashApproval), "blocked");
+  });
+
+  it("does not call a grok screen without its shortcut bar a finished prompt", () => {
+    assert.equal(agentSignal("grok", {
+      lines: ["  ~/project   [Dashboard]", "     > done!   ╰─ Grok 4.6 (low) ─╯"],
+      cursorLine: 1,
+    }), "unknown");
+    assert.equal(agentSignal("grok", { lines: ["PS C:\\code> "], cursorLine: 0 }), "unknown");
+    assert.equal(agentSignal("grok", { ...grokReady, truncated: true }), "unknown");
+  });
 });
 
 describe("agent turn lifecycle", () => {
@@ -149,6 +278,26 @@ describe("agent turn lifecycle", () => {
     const activity = live();
     activity.screen("blocked", 100, "approval");
     assert.equal(activity.status("working", 3_600_000, false), "working");
+  });
+
+  it("announces an opencode turn once its composer settles", () => {
+    const activity = new AgentActivity(0);
+    assert.equal(activity.input("list the files", 0), "input");
+    assert.equal(activity.input("\r", 1), "submit");
+    activity.screen("busy", 50, "running");
+    assert.equal(activity.status("idle", 100, false), "working");
+    activity.output(2_000);
+    activity.screen("ready", 2_000, "composer");
+    assert.equal(activity.status("working", 2_500, false), "working");
+    assert.equal(activity.status("working", 4_001, false), "done");
+    assert.equal(activity.status("done", 60_000, false), "done");
+  });
+
+  it("keeps an opencode permission or question wait working, never done", () => {
+    const activity = new AgentActivity(0);
+    activity.input("\r", 1);
+    activity.screen("blocked", 100, "permission");
+    assert.equal(activity.status("idle", 3_600_000, false), "working");
   });
 
   it("suppresses notifications for watched panes", () => {

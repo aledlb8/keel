@@ -44,7 +44,7 @@ export function agentSignal(agentId: string, screen: AgentScreen): AgentSignal {
   const lines = screen.lines.map((line) => line.trim());
   while (lines.length && !lines[lines.length - 1]) lines.pop();
   const footer = lines.slice(-12).join("\n");
-  if (/\b(?:esc|escape|ctrl\+c)\s+(?:to\s+)?(?:interrupt|cancel|stop)\b/i.test(lines.join("\n"))) {
+  if (/\b(?:esc|escape|ctrl\+c)\s+(?:again\s+)?(?:to\s+)?(?:interrupt|cancel|stop)\b/i.test(lines.join("\n"))) {
     return "busy";
   }
   if (agentId === "claude" && lines.some((line) => /^[✻✽✶✳✢·*]\s+\S.*(?:…|\.{3})/u.test(line))) {
@@ -55,6 +55,29 @@ export function agentSignal(agentId: string, screen: AgentScreen): AgentSignal {
   }
   if (/\b(?:do you want to (?:proceed|allow)|allow (?:once|always)|approve (?:this|once)|waiting for (?:approval|permission)|yes, (?:allow|proceed))\b/i.test(footer)) {
     return "blocked";
+  }
+  // opencode's own dialogs: a tool approval, or the question tool waiting
+  // for an answer. Both sit above the composer, where the cursor rule below
+  // cannot reach them.
+  if (agentId === "opencode" && /\b(?:permission required|esc dismiss)\b/i.test(footer)) {
+    return "blocked";
+  }
+  // grok's permission dialogs also sit where the cursor rule cannot reach
+  // them. Its cancel hint uses a colon, so the generic busy rule above never
+  // mistakes a waiting dialog for a running turn — check the dialog first.
+  if (agentId === "grok") {
+    if (/(?:\btab:next option\b|\b[1-9]\/\d+:select\b)/i.test(footer)) {
+      return "blocked";
+    }
+    if (/\bctrl\+c\s*:\s*cancel\b/i.test(footer) || /\[stop\]/i.test(footer)) {
+      return "busy";
+    }
+    // The composer's shortcut bar is what a turn running and a turn finished
+    // share; the cancel hint above is what separates them. Dialogs replace
+    // this bar with their own option hints.
+    if (!screen.truncated && /\bctrl\+x\s*:\s*shortcuts\b/i.test(footer)) {
+      return "ready";
+    }
   }
   const cursor = lines[screen.cursorLine] ?? "";
   if (screen.truncated || screen.cursorLine < lines.length - 12) return "unknown";
@@ -73,6 +96,14 @@ export function agentSignal(agentId: string, screen: AgentScreen): AgentSignal {
         ? "ready" : "unknown";
     case "gemini":
       return /^│\s*>\s.*│$/u.test(cursor) && /╰─+╯/u.test(footer)
+        ? "ready" : "unknown";
+    case "opencode":
+      // The composer's bottom edge (`╹▀▀▀…`) stays on screen whenever the TUI
+      // is back at the prompt. A running turn shows the interrupt hint instead
+      // (handled above), and both dialogs replace the composer entirely.
+      // Anchoring on the cursor is not possible: the reader joins soft-wrapped
+      // rows, so the cursor's line is many rows of text in one string.
+      return lines.some((line) => /╹(?:▀{3,}| {3,})/u.test(line))
         ? "ready" : "unknown";
     default:
       return "unknown";
