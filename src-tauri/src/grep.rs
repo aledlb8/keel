@@ -115,7 +115,7 @@ fn grep_file(path: &Path, rel: &str, re: &Regex, hits: &mut Vec<GrepHit>) -> boo
         if hits.len() >= MAX_HITS {
             return true;
         }
-        let column = line[..m.start()].chars().count() as u32 + 1;
+        let column = line[..m.start()].encode_utf16().count() as u32 + 1;
         hits.push(GrepHit {
             rel: rel.to_string(),
             line: (index + 1) as u32,
@@ -150,7 +150,7 @@ fn workspace_grep_blocking(
             truncated: false,
         });
     }
-    let re = compile_pattern(needle, case_sensitive, is_regex)?;
+    let re = compile_pattern(&query, case_sensitive, is_regex)?;
     let root_path = crate::roots::require(&root)?;
     let walker = ignore::WalkBuilder::new(&root_path)
         .hidden(true)
@@ -245,6 +245,25 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn columns_use_codemirror_utf16_offsets() {
+        let dir = Scratch::new("unicode");
+        fs::write(dir.0.join("unicode.txt"), "😀needle\n日本語needle\n").unwrap();
+        let results = grep(&dir.0, "needle", true, false).unwrap();
+        assert_eq!(results.hits.len(), 2);
+        assert_eq!(results.hits[0].column, 3);
+        assert_eq!(results.hits[1].column, 4);
+    }
+
+    #[test]
+    fn preserves_literal_search_whitespace() {
+        let dir = Scratch::new("whitespace");
+        fs::write(dir.0.join("text.txt"), "needle\n needle \nneedles\n").unwrap();
+        let results = grep(&dir.0, " needle ", true, false).unwrap();
+        assert_eq!(results.hits.len(), 1);
+        assert_eq!(results.hits[0].line, 2);
     }
 
     #[test]

@@ -87,6 +87,10 @@ export function SearchPanel() {
         </button>
       </div>
 
+      <p className="px-[var(--keel-inset)] pb-2 text-[11px] text-faint">
+        Text files up to 1 MB. Hidden and ignored files excluded.
+      </p>
+
       <div className="min-h-0 flex-1 overflow-y-auto pb-2">
         {!searching ? (
           <DockNotice
@@ -102,7 +106,7 @@ export function SearchPanel() {
             ))}
             {grepTruncated ? (
               <p className="px-[var(--keel-inset)] py-2 text-[11px] text-faint">
-                Showing the first 500 matches
+                Showing the first 500 matching lines
               </p>
             ) : null}
           </>
