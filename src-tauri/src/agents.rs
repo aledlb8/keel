@@ -174,6 +174,23 @@ fn merged_catalogue(user_source: &str) -> Option<Vec<AgentSpec>> {
         };
 
         for (key, value) in builtin_object {
+            // `session` is a record of its own: a user who edited `resume` must
+            // still inherit a `store` or `kind` added in a later release.
+            if key == "session" {
+                if let Some(fields) = value.as_object() {
+                    if let Some(user_fields) = user_object
+                        .get_mut(key)
+                        .and_then(|entry| entry.as_object_mut())
+                    {
+                        for (field, default) in fields {
+                            user_fields
+                                .entry(field.clone())
+                                .or_insert_with(|| default.clone());
+                        }
+                        continue;
+                    }
+                }
+            }
             user_object
                 .entry(key.clone())
                 .or_insert_with(|| value.clone());
@@ -422,4 +439,39 @@ pub async fn agent_catalogue_save(
         Ok(detect_agents_blocking(&app))
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::merged_catalogue;
+
+    fn opencode(source: &str) -> super::AgentSpec {
+        merged_catalogue(source)
+            .expect("catalogue")
+            .into_iter()
+            .find(|agent| agent.id == "opencode")
+            .expect("opencode")
+    }
+
+    #[test]
+    fn a_user_session_change_still_inherits_new_builtin_fields() {
+        let agent = opencode(r#"[{"id":"opencode","session":{"resume":"--session {id} --fork"}}]"#);
+        let session = agent.session.expect("session");
+        assert_eq!(session.resume, "--session {id} --fork");
+        assert_eq!(session.store.as_deref(), Some("opencode"));
+    }
+
+    #[test]
+    fn a_user_session_field_wins_over_the_builtin_one() {
+        let agent =
+            opencode(r#"[{"id":"opencode","session":{"resume":"resume {id}","store":"claude"}}]"#);
+        let session = agent.session.expect("session");
+        assert_eq!(session.store.as_deref(), Some("claude"));
+    }
+
+    #[test]
+    fn an_explicitly_disabled_session_is_not_resurrected() {
+        let agent = opencode(r#"[{"id":"opencode","session":null}]"#);
+        assert!(agent.session.is_none());
+    }
 }
