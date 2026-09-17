@@ -12,6 +12,11 @@ import { EditorView } from "@codemirror/view";
 const views = new Map<string, EditorView[]>();
 const pending = new Map<string, { line: number; column?: number }>();
 
+/** A newer navigation or project switch invalidates reveals that have not mounted. */
+export function clearEditorReveals(): void {
+  pending.clear();
+}
+
 function applyReveal(
   view: EditorView,
   line: number,
@@ -61,8 +66,8 @@ export function registerEditorView(id: string, view: EditorView): () => void {
 
 export function revealInEditor(id: string, line: number, column?: number): boolean {
   // Keep a pending jump so a pane that is still mounting (openFile then reveal)
-  // lands on the same line once its view registers. Drop it shortly after so a
-  // later remount of the same tab does not replay the jump.
+  // lands on the same line once its view registers. If a view already exists,
+  // only retain the jump briefly for other panes mounting the same file.
   pending.set(id, column === undefined ? { line } : { line, column });
   const list = views.get(id);
   if (list?.length) {
@@ -71,8 +76,10 @@ export function revealInEditor(id: string, line: number, column?: number): boole
     focused?.focus();
   }
   const expire = pending.get(id);
-  setTimeout(() => {
-    if (pending.get(id) === expire) pending.delete(id);
-  }, 500);
+  if (list?.length) {
+    setTimeout(() => {
+      if (pending.get(id) === expire) pending.delete(id);
+    }, 500);
+  }
   return Boolean(list?.length);
 }

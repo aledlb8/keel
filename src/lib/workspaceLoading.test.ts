@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { beforeEach, it } from "node:test";
 import { mockIPC } from "@tauri-apps/api/mocks";
+import { EditorState, type TransactionSpec } from "@codemirror/state";
+import type { EditorView } from "@codemirror/view";
+import { registerEditorView } from "./editorViews.ts";
 import { diffTabId, fileTabId, unsavedFiles, unsavedFilesAll, useWorkspace } from "../state/workspace.ts";
 import type { GitDiff, GitStatus, PrList } from "./workspace.ts";
 
@@ -275,4 +278,167 @@ it("lists unsaved files in this project and in stashed ones", async () => {
   state().setRoot("project-b");
   assert.deepEqual(unsavedFiles(), []);
   assert.deepEqual(unsavedFilesAll(), [{ name: "a.ts" }]);
+});
+
+it("queues one fresh git read for changes received during an older read", async () => {
+  const pending = deferred<GitStatus>();
+  let calls = 0;
+  ipc({ git_status: () => ++calls === 1 ? pending.promise : { ...status, branch: "fresh" } });
+  const first = state().refreshGit();
+  await tick();
+  for (let i = 0; i < 5; i++) state().applyFsChange("project-a", [], true);
+  pending.resolve({ ...status, branch: "stale" });
+  await first;
+  await tick();
+  assert.equal(calls, 2);
+  assert.equal(state().git?.branch, "fresh");
+});
+
+it("queues a final editor reload for changes arriving during the first reload", async () => {
+  ipc({ workspace_read: () => contents });
+  await state().openFile("a.ts");
+  const pending = deferred<typeof contents>();
+  let calls = 0;
+  ipc({ workspace_read: () => ++calls === 1 ? pending.promise : { ...contents, text: "latest", mtimeMs: 3 } });
+  state().applyFsChange("project-a", ["a.ts"], false);
+  await tick();
+  state().applyFsChange("project-a", ["a.ts"], false);
+  pending.resolve({ ...contents, text: "older", mtimeMs: 2 });
+  await tick();
+  await tick();
+  assert.equal(calls, 2);
+  assert.equal(state().buffers[fileTabId("a.ts")], "latest");
+});
+
+it("reloads a file changed while its initial load was still pending", async () => {
+  const pending = deferred<typeof contents>();
+  let calls = 0;
+  ipc({ workspace_read: () => ++calls === 1 ? pending.promise : { ...contents, text: "latest" } });
+  const loading = state().openFile("a.ts");
+  await tick();
+  state().applyFsChange("project-a", ["a.ts"], false);
+  pending.resolve(contents);
+  await loading;
+  await tick();
+  assert.equal(calls, 2);
+  assert.equal(state().buffers[fileTabId("a.ts")], "latest");
+});
+
+it("refreshes the root tree again if an event arrives during its first listing", async () => {
+  const pending = deferred<[]>();
+  let calls = 0;
+  ipc({ workspace_list: () => ++calls === 1 ? pending.promise : [{ name: "new.ts", rel: "new.ts", kind: "file", size: 0 }] });
+  state().setRoot("new-project");
+  await tick();
+  state().applyFsChange("new-project", ["new.ts"], false);
+  pending.resolve([]);
+  await tick();
+  await tick();
+  assert.equal(calls, 2);
+  assert.equal(state().tree[""]?.[0]?.rel, "new.ts");
+});
+
+it("reloads a stashed clean document changed by an agent in a background project", async () => {
+  ipc({ workspace_read: () => contents });
+  await state().openFile("a.ts");
+  state().setRoot("project-b");
+  state().applyFsChange("project-a", ["a.ts"], false);
+  let calls = 0;
+  ipc({ workspace_read: () => { calls++; return { ...contents, text: "fresh" }; } });
+  state().setRoot("project-a");
+  await state().ensureDocument({ kind: "file", rel: "a.ts", staged: false });
+  assert.equal(calls, 1);
+  assert.equal(state().buffers[fileTabId("a.ts")], "fresh");
+});
+
+it("preserves dirty background documents and marks their external changes", async () => {
+  ipc({ workspace_read: () => contents });
+  await state().openFile("a.ts");
+  state().setBuffer(fileTabId("a.ts"), "my unsaved edits");
+  state().setRoot("project-b");
+  state().applyFsChange("project-a", ["a.ts"], false);
+  state().setRoot("project-a");
+  assert.equal(state().buffers[fileTabId("a.ts")], "my unsaved edits");
+  assert.equal(state().externalChange[fileTabId("a.ts")], true);
+});
+
+it("does not stash a stale clean buffer when leaving during its reload", async () => {
+  ipc({ workspace_read: () => contents });
+  await state().openFile("a.ts");
+  const pending = deferred<typeof contents>();
+  ipc({ workspace_read: () => pending.promise });
+  state().applyFsChange("project-a", ["a.ts"], false);
+  await tick();
+  state().setRoot("project-b");
+  pending.resolve({ ...contents, text: "fresh" });
+  await tick();
+  ipc({ workspace_read: () => ({ ...contents, text: "fresh" }) });
+  state().setRoot("project-a");
+  await state().ensureDocument({ kind: "file", rel: "a.ts", staged: false });
+  assert.equal(state().buffers[fileTabId("a.ts")], "fresh");
+});
+
+function fakeEditor(text: string) {
+  return {
+    state: EditorState.create({ doc: text }),
+    focused: false,
+    hasFocus: false,
+    dispatch(spec: TransactionSpec) { this.state = this.state.update(spec).state; },
+    focus() { this.focused = true; },
+  };
+}
+
+it("the latest search click wins even when the file has not loaded yet", async () => {
+  const pending = deferred<typeof contents>();
+  ipc({ workspace_read: () => pending.promise });
+  const first = state().openFileAt("a.ts", 2, 1);
+  const latest = state().openFileAt("a.ts", 4, 1);
+  const text = "one\ntwo\nthree\nfour";
+  pending.resolve({ ...contents, text });
+  await Promise.all([first, latest]);
+  const view = fakeEditor(text);
+  const unregister = registerEditorView(fileTabId("a.ts"), view as unknown as EditorView);
+  try {
+    assert.equal(view.state.doc.lineAt(view.state.selection.main.head).number, 4);
+  } finally { unregister(); }
+});
+
+it("a late search navigation cannot focus the same filename in another project", async () => {
+  const pending = deferred<typeof contents>();
+  ipc({ workspace_read: () => pending.promise });
+  const navigating = state().openFileAt("a.ts", 2, 1);
+  await tick();
+  state().setRoot("project-b");
+  const view = fakeEditor("one\ntwo");
+  const unregister = registerEditorView(fileTabId("a.ts"), view as unknown as EditorView);
+  try {
+    pending.resolve(contents);
+    await navigating;
+    assert.equal(view.focused, false);
+    assert.equal(view.state.selection.main.head, 0);
+  } finally { unregister(); }
+});
+
+it("clears old search hits when a new query fails", async () => {
+  ipc({ workspace_grep: () => ({ hits: [{ rel: "a.ts", line: 1, column: 1, text: "old" }], truncated: false }) });
+  await state().grep("old");
+  ipc({ workspace_grep: () => Promise.reject("Invalid search pattern") });
+  state().setGrepRegex(true);
+  await state().grep("[broken");
+  assert.equal(state().grepHits, null);
+  assert.equal(state().grepError, "Invalid search pattern");
+});
+
+it("invalidates a pending search immediately when the query or regex mode changes", async () => {
+  for (const change of [() => state().setGrepQuery("new"), () => state().setGrepRegex(!state().grepRegex)]) {
+    const pending = deferred<{ hits: []; truncated: boolean }>();
+    ipc({ workspace_grep: () => pending.promise });
+    const search = state().grep("old");
+    await tick();
+    change();
+    pending.resolve({ hits: [], truncated: false });
+    await search;
+    assert.equal(state().grepHits, null);
+    assert.equal(state().grepLoading, false);
+  }
 });

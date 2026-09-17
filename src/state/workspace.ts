@@ -9,7 +9,7 @@ import { create } from "zustand";
 import { toast } from "sonner";
 
 import { diffTabId, editorRefId, fileTabId } from "../lib/editorRefs.ts";
-import { revealInEditor } from "../lib/editorViews.ts";
+import { clearEditorReveals, revealInEditor } from "../lib/editorViews.ts";
 import { fileName, joinRel, parentRel } from "../lib/git.ts";
 import { noteRecent, pruneRecent } from "../lib/recentFiles.ts";
 import type { EditorRef } from "../lib/types.ts";
@@ -178,6 +178,9 @@ const reads = new WorkspaceReads();
 let projectVersion = 0;
 let grepGeneration = 0;
 let searchGeneration = 0;
+let editorNavigation = 0;
+const editorLoads = new WeakMap<EditorTab, Promise<void>>();
+const editorReloads = new WeakMap<EditorTab, Promise<void>>();
 
 type EditorDocs = Pick<
   WorkspaceState,
@@ -216,7 +219,8 @@ function emptyDocs(): EditorDocs {
 /** What to keep when leaving a folder. Reads still in flight are abandoned, so those load again. */
 function settledDocs(state: WorkspaceState): EditorDocs {
   const pending = new Set(
-    state.editors.filter((tab) => state.editorLoading[tab.id]).map((tab) => tab.id),
+    state.editors.filter((tab) => state.editorLoading[tab.id] ||
+      (editorReloads.has(tab) && !isDirty(state, tab.id))).map((tab) => tab.id),
   );
   const keep = <T>(record: Record<string, T>): Record<string, T> =>
     Object.fromEntries(Object.entries(record).filter(([id]) => !pending.has(id)));
@@ -230,7 +234,12 @@ function settledDocs(state: WorkspaceState): EditorDocs {
     diffs: keep(state.diffs),
     editorLoading: keep(state.editorLoading),
     editorErrors: keep(state.editorErrors),
-    externalChange: keep(state.externalChange),
+    externalChange: keep({
+      ...state.externalChange,
+      ...Object.fromEntries(state.editors
+        .filter((tab) => editorReloads.has(tab) && isDirty(state, tab.id))
+        .map((tab) => [tab.id, true])),
+    }),
   };
 }
 
@@ -261,6 +270,8 @@ function dropDocument(
   set: (partial: Partial<WorkspaceState>) => void,
   get: () => WorkspaceState,
 ) {
+  editorNavigation += 1;
+  clearEditorReveals();
   const state = get();
   const editors = state.editors.filter((tab) => tab.id !== id);
   const { [id]: _b, ...buffers } = state.buffers;
@@ -314,7 +325,11 @@ function openEditor(
   const root = get().root;
   if (!root) return Promise.resolve();
   const { id, rel } = tab;
-  if (reveal) revealInLayout(root, tab);
+  if (reveal) {
+    editorNavigation += 1;
+    clearEditorReveals();
+    revealInLayout(root, tab);
+  }
   const existing = get().editors.find((item) => item.id === id);
   const focus = reveal
     ? {
@@ -338,7 +353,7 @@ function openEditor(
     editorLoading: { ...get().editorLoading, [id]: true },
     editorErrors: { ...get().editorErrors, [id]: null },
   });
-  return reads.run(`editor:${++editorReadId}`, async (isCurrent) => {
+  const request = reads.run(`editor:${++editorReadId}`, async (isCurrent) => {
     // Identity also rejects reads for a tab that was closed and reopened.
     const isOpen = () => isCurrent() && get().editors.includes(tab);
     try {
@@ -363,6 +378,8 @@ function openEditor(
       if (isOpen()) set({ editorLoading: { ...get().editorLoading, [id]: false } });
     }
   });
+  editorLoads.set(tab, request);
+  return request;
 }
 
 function fileRelAffected(tabRel: string, rels: string[]): boolean {
@@ -380,17 +397,23 @@ function reloadTab(
   id: string,
   set: (partial: Partial<WorkspaceState>) => void,
   get: () => WorkspaceState,
-) {
+): Promise<void> {
   const state = get();
   const root = state.root;
   const tab = state.editors.find((item) => item.id === id);
   if (!root || !tab || tab.kind !== "file") return Promise.resolve();
-  if (state.editorLoading[id]) return Promise.resolve();
-  return reads.run(`reload:${id}`, async (isCurrent) => {
+  if (state.editorLoading[id]) {
+    const loading = editorLoads.get(tab);
+    if (!loading) return Promise.resolve();
+    return loading.then(() => {
+      if (get().root === root && get().editors.includes(tab)) return reloadTab(id, set, get);
+    });
+  }
+  const request = reads.run(`reload:${id}`, async (isCurrent) => {
     try {
       const contents = await api.workspaceRead(root, tab.rel);
       if (!isCurrent() || get().root !== root) return;
-      if (!get().editors.some((item) => item.id === id)) return;
+      if (!get().editors.includes(tab)) return;
       const now = get();
       if ((now.buffers[id] ?? "") !== (now.originals[id] ?? "")) {
         if (!now.externalChange[id]) {
@@ -408,11 +431,17 @@ function reloadTab(
         externalChange,
       });
     } catch (error) {
-      if (isCurrent() && get().editors.some((item) => item.id === id)) {
+      if (isCurrent() && get().editors.includes(tab)) {
         set({ editorErrors: { ...get().editorErrors, [id]: errorMessage(error) } });
       }
     }
-  });
+  }, true);
+  editorReloads.set(tab, request);
+  const settled = () => {
+    if (editorReloads.get(tab) === request) editorReloads.delete(tab);
+  };
+  void request.then(settled, settled);
+  return request;
 }
 
 /** How long rows keep their enter or leave marker. Matches `k-row-in` / `k-row-out`. */
@@ -625,6 +654,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const previous = get().root;
     if (previous === root) return;
     projectVersion += 1;
+    editorNavigation += 1;
+    clearEditorReveals();
     grepGeneration += 1;
     searchGeneration += 1;
     reads.reset();
@@ -675,10 +706,35 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     pruneRecent();
     noteRecent(root, rels);
     set({ recentEpoch: get().recentEpoch + 1 });
-    if (!sameWatchRoot(get().root, root)) return;
+    if (!sameWatchRoot(get().root, root)) {
+      for (const [path, docs] of stashedDocs) {
+        if (!sameWatchRoot(path, root)) continue;
+        const invalid = new Set<string>();
+        const externalChange = { ...docs.externalChange };
+        for (const tab of docs.editors) {
+          if (!fileRelAffected(tab.rel, rels)) continue;
+          if (tab.kind === "file" && (docs.buffers[tab.id] ?? "") !== (docs.originals[tab.id] ?? "")) {
+            externalChange[tab.id] = true;
+          } else {
+            invalid.add(tab.id);
+          }
+        }
+        const keep = <T,>(record: Record<string, T>): Record<string, T> =>
+          Object.fromEntries(Object.entries(record).filter(([id]) => !invalid.has(id)));
+        stashedDocs.set(path, {
+          ...docs,
+          editors: docs.editors.filter((tab) => !invalid.has(tab.id)),
+          buffers: keep(docs.buffers), originals: keep(docs.originals),
+          snapshots: keep(docs.snapshots), diffs: keep(docs.diffs),
+          editorLoading: keep(docs.editorLoading), editorErrors: keep(docs.editorErrors),
+          externalChange: keep(externalChange),
+        });
+      }
+      return;
+    }
     const full = rels.some((rel) => rel === "");
     if (full || rels.length > 0) void get().refreshTree();
-    if (git || full) void get().refreshGit();
+    if (git || full) void get().refreshGit(true);
     const open = get();
     for (const tab of open.editors) {
       if (tab.kind !== "file") continue;
@@ -766,19 +822,22 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     if (!root) return;
     const version = projectVersion;
     const showHidden = get().showHidden;
-    try {
-      const entries = await api.workspaceList(root, rel, showHidden);
-      if (version !== projectVersion || showHidden !== get().showHidden) return;
-      set({ tree: { ...get().tree, [rel]: entries } });
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
-    }
+    await reads.run(`tree:${showHidden}:${rel}`, async (isCurrent) => {
+      try {
+        const entries = await api.workspaceList(root, rel, showHidden);
+        if (!isCurrent() || version !== projectVersion || showHidden !== get().showHidden) return;
+        set({ tree: { ...get().tree, [rel]: entries } });
+      } catch (error) {
+        if (isCurrent()) toast.error(error instanceof Error ? error.message : String(error));
+      }
+    }, true);
   },
 
   refreshTree: async () => {
     const { root, tree } = get();
     if (!root) return;
     const dirs = Object.keys(tree);
+    if (dirs.length === 0) dirs.push("");
     await Promise.all(dirs.map((rel) => get().loadDir(rel)));
   },
 
@@ -838,18 +897,19 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   },
 
   setGrepQuery: (query) => {
-    set({ grepQuery: query });
-    if (query.trim().length < 2) {
-      grepGeneration += 1;
-      set({
-        grepHits: null,
-        grepTruncated: false,
-        grepLoading: false,
-        grepError: null,
-      });
-    }
+    grepGeneration += 1;
+    set({
+      grepQuery: query,
+      grepHits: null,
+      grepTruncated: false,
+      grepLoading: false,
+      grepError: null,
+    });
   },
-  setGrepRegex: (grepRegex) => set({ grepRegex }),
+  setGrepRegex: (grepRegex) => {
+    grepGeneration += 1;
+    set({ grepRegex, grepHits: null, grepTruncated: false, grepLoading: false, grepError: null });
+  },
   grep: async (query) => {
     const root = get().root;
     const needle = query.trim();
@@ -867,9 +927,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const generation = ++grepGeneration;
     const version = projectVersion;
     const isRegex = get().grepRegex;
-    set({ grepLoading: true, grepError: null });
+    set({ grepLoading: true, grepError: null, grepHits: null, grepTruncated: false });
     try {
-      const results = await api.workspaceGrep(root, needle, { regex: isRegex });
+      const results = await api.workspaceGrep(root, query, { regex: isRegex });
       if (generation !== grepGeneration || version !== projectVersion) return;
       set({
         grepHits: results.hits,
@@ -886,7 +946,13 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   },
 
   openFileAt: async (rel, line, column) => {
-    await get().openFile(rel);
+    const version = projectVersion;
+    const loading = get().openFile(rel);
+    const navigation = editorNavigation;
+    const tab = get().editors.find((item) => item.id === fileTabId(rel));
+    await (tab ? editorLoads.get(tab) ?? loading : loading);
+    if (version !== projectVersion || navigation !== editorNavigation ||
+      get().activeEditor !== fileTabId(rel) || get().editorErrors[fileTabId(rel)]) return;
     revealInEditor(fileTabId(rel), line, column);
   },
 
@@ -1034,7 +1100,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     keel.removeDeck(projectId, deckId);
   },
 
-  setActiveEditor: (id) => set({ activeEditor: id }),
+  setActiveEditor: (id) => {
+    editorNavigation += 1;
+    clearEditorReveals();
+    set({ activeEditor: id });
+  },
   setBuffer: (id, value) =>
     set({ buffers: { ...get().buffers, [id]: value } }),
 
