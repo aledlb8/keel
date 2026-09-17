@@ -45,6 +45,33 @@ export async function workspaceUnwatch(root: string): Promise<void> {
   live.delete(root);
 }
 
+let desired = new Set<string>();
+let reconciliation = Promise.resolve();
+
+/** Keep unchanged roots alive and serialize teardown against new registrations. */
+export function reconcileWorkspaceWatches(roots: readonly string[]): Promise<void> {
+  desired = new Set(roots);
+  reconciliation = reconciliation.then(async () => {
+    for (const root of live) {
+      if (desired.has(root)) continue;
+      try {
+        await workspaceUnwatch(root);
+      } catch {
+        // Retain it so the next reconciliation can retry the teardown.
+      }
+    }
+    for (const root of desired) {
+      if (live.has(root)) continue;
+      try {
+        await workspaceWatch(root);
+      } catch {
+        // An uncovered root keeps the inspector's polling fallback.
+      }
+    }
+  });
+  return reconciliation;
+}
+
 export function onWorkspaceChanged(
   handler: (event: { root: string; rels: string[]; git: boolean }) => void,
 ): Promise<() => void> {

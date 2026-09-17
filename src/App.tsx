@@ -55,8 +55,7 @@ import { pruneRecent } from "@/lib/recentFiles";
 import {
   isWatching,
   onWorkspaceChanged,
-  workspaceUnwatch,
-  workspaceWatch,
+  reconcileWorkspaceWatches,
 } from "@/lib/workspaceWatch";
 import {
   activeDeck,
@@ -143,32 +142,20 @@ export default function App() {
   useEffect(() => {
     const paths = projectPaths ? projectPaths.split("\n") : [];
     let cancelled = false;
-    const started: string[] = [];
-
-    void (async () => {
-      for (const path of paths) {
-        try {
-          await workspaceWatch(path);
-          if (cancelled) {
-            void workspaceUnwatch(path).catch(() => {});
-            continue;
-          }
-          started.push(path);
-        } catch {
-          /* Inspector keeps the 4s poll for a folder the watcher could not cover. */
-        }
-      }
+    void reconcileWorkspaceWatches(paths).then(() => {
       if (!cancelled) {
         useWorkspace.getState().setFsWatch(isWatching(useWorkspace.getState().root));
       }
-    })();
+    });
 
     return () => {
       cancelled = true;
-      useWorkspace.getState().setFsWatch(false);
-      for (const path of started) void workspaceUnwatch(path).catch(() => {});
     };
   }, [projectPaths]);
+
+  useEffect(() => () => {
+    void reconcileWorkspaceWatches([]);
+  }, []);
 
   useEffect(() => {
     const project = useKeel
