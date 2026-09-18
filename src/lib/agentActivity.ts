@@ -101,8 +101,15 @@ export function agentSignal(agentId: string, screen: AgentScreen): AgentSignal {
             /─{3,}/u.test(footer) ? "ready" : "unknown")
         : "unknown";
     case "codex":
+      // Current Codex defaults to a model/directory status line. Both the
+      // shortcuts hint and context percentage are optional footer items.
+      // The live cursor or an empty composer also identifies that prompt.
       return CODEX_PROMPT.test(footer) || /^[›▌](?:\s|$)/u.test(cursor)
-        ? (/\?\s+for shortcuts|\d+%\s+(?:context\s+)?left/i.test(footer) ? "ready" : "unknown")
+        ? (/\?\s+for shortcuts|\d+%\s+(?:context\s+)?left/i.test(footer) ||
+            /^[›▌](?:\s|$)/u.test(cursor) ||
+            /(?:^|\n)[›▌]\s*(?:\n|$)/u.test(footer) ||
+            /(?:^|\n)(?:gpt-|o\d)[\w.-]+\b.*[·•]/i.test(footer)
+            ? "ready" : "unknown")
         : "unknown";
     case "gemini":
       return (GEMINI_PROMPT.test(footer) || GEMINI_PROMPT.test(cursor)) && GEMINI_BOX.test(footer)

@@ -93,6 +93,22 @@ describe("parsed agent screen", () => {
     }
   });
 
+  it("recognises the installed Codex model/directory footer and custom or hidden footers", () => {
+    for (const footer of ["gpt-6-astra high · ~\\Documents\\code\\keel", "my custom status", ""]) {
+      const screen = { lines: ["› Ask Codex to do anything", "", footer], cursorLine: 0 };
+      assert.equal(agentSignal("codex", screen), "ready");
+      assert.equal(agentSignal("codex", {
+        ...screen, lines: ["• Working (18s • esc to interrupt)", ...screen.lines], cursorLine: 1,
+      }), "busy");
+    }
+    assert.equal(agentSignal("codex", {
+      lines: ["Answer", "› ", "gpt-6-astra high · ~\\code"], cursorLine: 0,
+    }), "ready");
+    assert.equal(agentSignal("codex", {
+      lines: ["› previous question", "An answer with no live composer"], cursorLine: 1,
+    }), "unknown");
+  });
+
   it("recognises the Gemini composer without treating its busy placeholder as idle", () => {
     const screen = { lines: ["╭──────────────╮", "│ > Type your message │", "╰──────────────╯"], cursorLine: 1 };
     assert.equal(agentSignal("gemini", screen), "ready");

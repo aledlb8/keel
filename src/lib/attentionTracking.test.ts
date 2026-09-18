@@ -355,6 +355,17 @@ it("stops idle OpenCode capture polling and discards a read completed after rest
   assert.equal(state().projects[0]?.decks[0]?.panes.agent?.sessionId, null);
 });
 
+it("finishes a Codex turn with the model/directory footer", () => {
+  useKeel.setState({ projects: [project("agent", "codex")] });
+  state().noteActivity("agent", "input", "\r");
+  render({ lines: ["• Working (18s • esc to interrupt)", "› ", "gpt-6-astra high · ~\\code"], cursorLine: 1 });
+  tick();
+  assert.equal(state().status.agent, "working");
+  render({ lines: ["Finished the changes.", "› ", "gpt-6-astra high · ~\\code"], cursorLine: 1 });
+  tick(2_450);
+  assert.equal(state().status.agent, "done");
+});
+
 function alertFor(paneId: string, kind: "done" | "exited") {
   const project = state().projects[0];
   const pane = project?.decks[0]?.panes[paneId];
