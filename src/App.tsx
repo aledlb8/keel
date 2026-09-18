@@ -19,6 +19,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { startChimeAudio } from "@/lib/chime";
 
 import { AgentSettingsDialog } from "@/components/AgentSettingsDialog";
 import { Canvas } from "@/components/Canvas";
@@ -187,6 +188,7 @@ export default function App() {
   useEffect(() => {
     void useKeel.getState().init();
     const stopTracking = startAttentionTracking();
+    const stopAudio = startChimeAudio();
     const unlisten = onPtyExit((paneId, generation) => {
       useKeel.getState().notePaneExit(paneId, generation);
     });
@@ -204,6 +206,7 @@ export default function App() {
     window.addEventListener("contextmenu", blockNativeMenu);
     return () => {
       stopTracking();
+      stopAudio();
       stopHost();
       stopClose();
       window.removeEventListener("contextmenu", blockNativeMenu);
@@ -625,4 +628,3 @@ export default function App() {
     </div>
   );
 }
-
