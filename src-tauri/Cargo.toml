@@ -40,7 +40,7 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 [target.'cfg(windows)'.dependencies]
 # Same version tauri/wry already selected; needed for ICoreWebView2Settings3.
 webview2-com = "0.38.2"
-windows-core = "0.61"
+windows-core = "0.62"
 winapi = { version = "0.3", features = [
     "tlhelp32",
     "handleapi",
