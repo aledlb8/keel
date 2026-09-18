@@ -61,7 +61,8 @@ export interface Pane {
    */
   editor?: PaneEditor | undefined;
   /**
-   * When true, this pane does not chime or raise an OS toast. Omitted when
+   * When true, this pane does not raise an OS toast. Sounds still play when
+   * another terminal or surface has focus. Omitted when
    * false so the saved layout stays clean.
    */
   muted?: boolean | undefined;

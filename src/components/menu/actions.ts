@@ -817,7 +817,7 @@ export function paneMenu(
             ? [
                 {
                   kind: "check" as const,
-                  label: "Mute notifications",
+                  label: "Mute desktop notifications",
                   checked: pane.muted === true,
                   onChange: (checked: boolean) =>
                     state.setPaneMuted(paneId, checked),

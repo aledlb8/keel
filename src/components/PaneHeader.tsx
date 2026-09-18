@@ -254,7 +254,7 @@ export function PaneHeader({
       ) : null}
 
       {pane.muted && !pane.editor ? (
-        <HeaderButton label="Unmute notifications" onClick={() => onMute(false)}>
+        <HeaderButton label="Unmute desktop notifications" onClick={() => onMute(false)}>
           <BellOff className="size-3.5" />
         </HeaderButton>
       ) : null}

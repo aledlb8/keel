@@ -17,6 +17,7 @@ const ready: AgentAlert = {
   projectName: "keel",
   muted: false,
   windowFocused: false,
+  paneFocused: false,
   restoring: false,
   silentPane: false,
 };
@@ -30,14 +31,20 @@ describe("shouldAlert", () => {
     assert.deepEqual(shouldAlert({ ...ready, kind: "exited" }), yes);
   });
 
-  it("is silent while the window has focus", () => {
-    assert.deepEqual(shouldAlert({ ...ready, windowFocused: true }), no);
-    assert.deepEqual(shouldAlert({ ...ready, kind: "exited", windowFocused: true }), no);
+  it("chimes while Keel has focus somewhere else, without an OS toast", () => {
+    assert.deepEqual(shouldAlert({ ...ready, windowFocused: true }), { notify: false, chime: true });
+    assert.deepEqual(shouldAlert({ ...ready, kind: "exited", windowFocused: true }), { notify: false, chime: true });
   });
 
-  it("is silent for a muted pane", () => {
-    assert.deepEqual(shouldAlert({ ...ready, muted: true }), no);
-    assert.deepEqual(shouldAlert({ ...ready, kind: "exited", muted: true }), no);
+  it("is silent while the specific terminal has focus", () => {
+    assert.deepEqual(shouldAlert({ ...ready, windowFocused: true, paneFocused: true }), no);
+    assert.deepEqual(shouldAlert({ ...ready, kind: "exited", windowFocused: true, paneFocused: true }), no);
+  });
+
+  it("plays sound for a muted pane, while suppressing its desktop notification", () => {
+    assert.deepEqual(shouldAlert({ ...ready, muted: true }), { notify: false, chime: true });
+    assert.deepEqual(shouldAlert({ ...ready, kind: "exited", muted: true }), { notify: false, chime: true });
+    assert.deepEqual(shouldAlert({ ...ready, muted: true, windowFocused: true, paneFocused: true }), no);
   });
 
   it("is silent during restore", () => {

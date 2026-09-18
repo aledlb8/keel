@@ -2,11 +2,9 @@
  * OS toasts and the chime for an agent that finished, or whose process died,
  * while you were looking at something else.
  *
- * The island already covers "an agent finished" inside the window. These
- * alerts exist for the alt-tab-away-and-forget case: never while the window
- * has focus, never for a muted pane, never during restore, never for an
- * editor or a plain shell. The policy lives in `shouldAlert` so it can be
- * tested without IPC.
+ * Sounds follow focus on the specific terminal, so another deck, project,
+ * editor or dialog does not silence them. OS toasts remain background-only.
+ * The policy lives in `shouldAlert` so it can be tested without IPC.
  */
 
 import {
@@ -27,6 +25,7 @@ export interface AgentAlert {
   projectName: string;
   muted: boolean;
   windowFocused: boolean;
+  paneFocused: boolean;
   restoring: boolean;
   /** editor pane or no agent */
   silentPane: boolean;
@@ -64,12 +63,11 @@ export function pruneAlertMap(
 }
 
 export function shouldAlert(alert: AgentAlert): { notify: boolean; chime: boolean } {
-  const ok =
-    !alert.muted &&
-    !alert.silentPane &&
-    !alert.restoring &&
-    !alert.windowFocused;
-  return { notify: ok, chime: ok };
+  const ok = !alert.silentPane && !alert.restoring;
+  return {
+    notify: ok && !alert.muted && !alert.windowFocused,
+    chime: ok && !alert.paneFocused,
+  };
 }
 
 export function alertCopy(

@@ -826,6 +826,7 @@ export const TerminalSurface = memo(function TerminalSurface({
     // z-indexed layers from stacking over the header.
     <div
       className="relative isolate flex h-full w-full flex-col overflow-hidden"
+      data-terminal-pane={paneId}
       onMouseDown={() => onFocus(paneId)}
     >
       {needsVpnRestart ? (

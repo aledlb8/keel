@@ -186,7 +186,7 @@ export interface KeelState {
   /** Bumped to respawn a pane's process in the same terminal. Not persisted. */
   generations: Record<string, number>;
   restartPane: (paneId: string) => void;
-  /** This pane will not chime or raise an OS toast. */
+  /** Suppress this pane's OS toasts; sounds still follow terminal focus. */
   setPaneMuted: (paneId: string, muted: boolean) => void;
   /** Agent process left the shell; the next spawn should not type the command. */
   releaseAgent: (paneId: string, generation?: number) => void;
@@ -2371,6 +2371,14 @@ export const useKeel = create<KeelState>((set, get) => {
   };
 });
 
+/** A selected pane behind a dialog or editor does not have terminal focus. */
+function watchedTerminal(state: KeelState): string | null {
+  if (typeof document === "undefined" || !document.hasFocus()) return null;
+  const paneId = document.activeElement?.closest("[data-terminal-pane]")
+    ?.getAttribute("data-terminal-pane");
+  return paneId && paneId === lookingAt(state.projects, state.activeProjectId) ? paneId : null;
+}
+
 function paneAlert(
   pane: Pane,
   projectName: string,
@@ -2384,6 +2392,7 @@ function paneAlert(
     projectName,
     muted: pane.muted === true,
     windowFocused: typeof document !== "undefined" && document.hasFocus(),
+    paneFocused: watchedTerminal(useKeel.getState()) === pane.id,
     restoring,
     silentPane: Boolean(pane.editor) || !pane.agentId,
   };
@@ -2404,11 +2413,8 @@ export function startAttentionTracking(): () => void {
 
     const now = Date.now();
     const clock = performance.now();
-    // The terminal in front of you, while the window has focus. An agent that
-    // finishes there was never waiting for you.
-    const watching = document.hasFocus()
-      ? lookingAt(state.projects, state.activeProjectId)
-      : null;
+    // Only actual focus inside this terminal suppresses its completion.
+    const watching = watchedTerminal(state);
 
     for (const project of state.projects) {
       for (const deck of project.decks) {
@@ -2464,4 +2470,3 @@ export function startAttentionTracking(): () => void {
 
   return () => clearInterval(timer);
 }
-

@@ -4,11 +4,14 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { startAttentionTracking, useKeel } from "../state/store.ts";
 import type { AgentScreen } from "./agentActivity.ts";
 import { forgetPaneAlerts, shouldAlert } from "./agentNotify.ts";
+import { ChimePlayer } from "./chime.ts";
 import type { Project } from "./types.ts";
 
 const state = useKeel.getState;
 let now = 0;
 let focused = false;
+let activeTerminal: string | null = "agent";
+let chimes = 0;
 let stop: () => void;
 
 function project(id = "agent", agentId: string | null = "claude"): Project {
@@ -48,7 +51,13 @@ beforeEach(() => {
   forgetPaneAlerts("agent");
   now = 0;
   focused = false;
-  Object.assign(globalThis, { window: {}, document: { hasFocus: () => focused } });
+  activeTerminal = "agent";
+  chimes = 0;
+  mock.method(ChimePlayer.prototype, "play", async () => { chimes++; });
+  Object.assign(globalThis, { window: {}, document: {
+    hasFocus: () => focused,
+    activeElement: { closest: () => activeTerminal ? { getAttribute: () => activeTerminal } : null },
+  } });
   mockIPC(() => null);
   mock.timers.enable({ apis: ["setInterval", "Date"], now: 1_000_000 });
   mock.method(performance, "now", () => now);
@@ -97,7 +106,49 @@ it("does not notify about the terminal the user is watching", () => {
   tick(2_450);
   assert.equal(state().status.agent, "idle");
   assert.deepEqual(state().doneAt, {});
+  assert.equal(chimes, 0);
 });
+
+for (const elsewhere of ["terminal", "deck", "project", "workspace", "editor", "dialog", "background", "muted"] as const) {
+  it(`chimes once when the agent finishes while focus is elsewhere: ${elsewhere}`, () => {
+    focused = true;
+    startTurn();
+    const current = structuredClone(state().projects[0]!);
+    const other = project("other", null);
+    other.id = "other-project";
+    if (elsewhere === "terminal") {
+      current.decks[0]!.panes.other = other.decks[0]!.panes.other!;
+      current.decks[0]!.focused = "other";
+      useKeel.setState({ projects: [current] });
+      activeTerminal = "other";
+    } else if (elsewhere === "deck") {
+      other.decks[0]!.id = "other-deck";
+      current.decks.push(other.decks[0]!);
+      current.activeDeckId = "other-deck";
+      useKeel.setState({ projects: [current] });
+      activeTerminal = "other";
+    } else if (elsewhere === "project" || elsewhere === "workspace") {
+      useKeel.setState({ projects: [current, other], activeProjectId: other.id });
+      activeTerminal = "other";
+      if (elsewhere === "workspace") useKeel.setState({ workspaces: [
+        { id: "first", name: "First", collapsed: false, projectIds: [current.id], activeProjectId: current.id },
+        { id: "second", name: "Second", collapsed: false, projectIds: [other.id], activeProjectId: other.id },
+      ] });
+    } else if (elsewhere === "background") {
+      focused = false;
+    } else {
+      // An editor or portal dialog owns DOM focus while this pane remains selected.
+      activeTerminal = null;
+      if (elsewhere === "muted") state().setPaneMuted("agent", true);
+    }
+    render(ready);
+    tick(2_450);
+    assert.equal(state().status.agent, "done");
+    assert.equal(chimes, 1);
+    tick(5_000);
+    assert.equal(chimes, 1);
+  });
+}
 
 it("clears done before restart, ignores old generations, and ignores restore replay", () => {
   startTurn();
@@ -248,6 +299,7 @@ function alertFor(paneId: string, kind: "done" | "exited") {
     projectName: project.name,
     muted: pane.muted === true,
     windowFocused: focused,
+    paneFocused: focused && activeTerminal === paneId,
     restoring: state().restoreStatus === "restoring",
     silentPane: Boolean(pane.editor) || !pane.agentId,
   };
@@ -268,7 +320,7 @@ it("an agent process death is eligible for an OS toast, and mute strips from the
   assert.deepEqual(shouldAlert(alertFor("agent", "exited")), { notify: true, chime: true });
   state().setPaneMuted("agent", true);
   assert.equal(state().projects[0]?.decks[0]?.panes.agent?.muted, true);
-  assert.deepEqual(shouldAlert(alertFor("agent", "exited")), { notify: false, chime: false });
+  assert.deepEqual(shouldAlert(alertFor("agent", "exited")), { notify: false, chime: true });
   state().setPaneMuted("agent", false);
   assert.equal("muted" in (state().projects[0]?.decks[0]?.panes.agent ?? {}), false);
 });
@@ -309,5 +361,6 @@ for (const suppressor of ["muted", "focused", "restoring", "closing", "hostLost"
     await Promise.resolve();
     await Promise.resolve();
     assert.deepEqual(notifications, []);
+    assert.equal(chimes, suppressor === "muted" ? 1 : 0);
   });
 }
