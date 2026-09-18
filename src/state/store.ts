@@ -102,6 +102,14 @@ export type RestoreStatus = "idle" | "restoring" | "partial" | "failed";
  * writes hundreds of times a second and none of that should re-render React.
  */
 const activity = new Map<string, AgentActivity>();
+// OpenCode may create its session well after Enter (startup, plugins, or a
+// busy database). Keep the original capture boundary across later prompts.
+const sessionCaptures = new WeakMap<AgentActivity, {
+  since: number;
+  pending: boolean;
+  retryAt: number;
+  retryUntil: number;
+}>();
 /** Pane ids that already reported a post-reopen spawn settle. */
 const restoreSettled = new Set<string>();
 
@@ -1261,43 +1269,62 @@ export const useKeel = create<KeelState>((set, get) => {
       // opencode creates its conversation when the first prompt is submitted,
       // so a capture armed at spawn would have nothing to find — and could
       // bind a neighbour's chat. Only the submit path arms it.
-      if (store === "opencode" && since === undefined) return;
-
       const capturedActivity = activity.get(paneId);
-      const spawnedAt = since ?? capturedActivity?.spawnedAt ?? Date.now();
-
-      for (let attempt = 0; attempt < 6; attempt += 1) {
-        if (attempt > 0) {
-          await new Promise((resolve) => setTimeout(resolve, 400));
+      if (!capturedActivity) return;
+      let capture = sessionCaptures.get(capturedActivity);
+      if (store === "opencode") {
+        if (!capture) {
+          if (since === undefined) return;
+          capture = { since, pending: false, retryAt: 0, retryUntil: 0 };
+          sessionCaptures.set(capturedActivity, capture);
         }
-        const live = findPane(paneId);
-        if (!live?.resumeAgent) return;
-        if (live.sessionReady) return;
-        // A restart while we were waiting belongs to a later capture.
-        if (activity.get(paneId) !== capturedActivity) return;
+        // Bound idle polling; another submission retries the original chat.
+        if (since !== undefined) capture.retryUntil = performance.now() + 60_000;
+        if (capture.pending) return;
+        capture.pending = true;
+      }
+      const spawnedAt = capture?.since ?? since ?? capturedActivity.spawnedAt;
 
-        const recent = await backend
-          .sessionRecent({
-            store,
-            cwd: live.cwd ?? project.path,
-            accountEnv: agent?.accountEnv ?? null,
-            accountId: live.accountId,
-          })
-          .catch(() => [] as { id: string; mtimeMs: number }[]);
+      try {
+        for (let attempt = 0; attempt < (store === "opencode" ? 1 : 6); attempt += 1) {
+          if (attempt > 0) {
+            await new Promise((resolve) => setTimeout(resolve, 400));
+          }
+          const live = findPane(paneId);
+          if (!live?.resumeAgent) return;
+          if (live.sessionReady) return;
+          // A restart while we were waiting belongs to a later capture.
+          if (activity.get(paneId) !== capturedActivity) return;
 
-        if (activity.get(paneId) !== capturedActivity || !findPane(paneId)?.resumeAgent) return;
+          const recent = await backend
+            .sessionRecent({
+              store,
+              cwd: live.cwd ?? project.path,
+              accountEnv: agent?.accountEnv ?? null,
+              accountId: live.accountId,
+            })
+            .catch(() => [] as { id: string; mtimeMs: number }[]);
 
-        const captured = pickCapturedSession({
-          // Never wait for a leftover generated UUID. Fresh launches do not
-          // pass `--session-id`, so the process creates its own conversation.
-          mintedId: null,
-          recent,
-          claimed: claimedSessionIds(paneId, live),
-          spawnedAt,
-        });
-        if (captured) {
-          get().bindSession(paneId, captured);
-          return;
+          const current = findPane(paneId);
+          if (activity.get(paneId) !== capturedActivity || !current?.resumeAgent || current.sessionReady) return;
+
+          const captured = pickCapturedSession({
+            // Never wait for a leftover generated UUID. Fresh launches do not
+            // pass `--session-id`, so the process creates its own conversation.
+            mintedId: null,
+            recent,
+            claimed: claimedSessionIds(paneId, current),
+            spawnedAt,
+          });
+          if (captured) {
+            get().bindSession(paneId, captured);
+            return;
+          }
+        }
+      } finally {
+        if (capture) {
+          capture.pending = false;
+          capture.retryAt = performance.now() + 2_000;
         }
       }
     },
@@ -2432,6 +2459,11 @@ export function startAttentionTracking(): () => void {
             entry &&
             !(paneId in state.exited)
           ) {
+            const capture = sessionCaptures.get(entry);
+            if (!pane.sessionReady && capture && !capture.pending &&
+              clock >= capture.retryAt && clock <= capture.retryUntil) {
+              void state.captureSession(paneId, state.generations[paneId]);
+            }
             current = entry.status(previous, clock, paneId === watching);
           }
 
