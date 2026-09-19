@@ -158,7 +158,7 @@ it("connects on launch only when connectOnLaunch was opted in", async () => {
   assert.equal(state().vpn.spawnAllowed, true);
 });
 
-it("keeps terminals waiting when connect-on-launch fails", async () => {
+it("releases waiting terminals when connect-on-launch fails", async () => {
   mockIPC((cmd) => {
     if (cmd === "vpn_connect") return Promise.reject("VPN service timed out");
     if (cmd === "detect_agents") return [];
@@ -179,7 +179,7 @@ it("keeps terminals waiting when connect-on-launch fails", async () => {
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(state().vpn.autoConnect, true);
   assert.equal(state().vpn.phase, "error");
-  assert.equal(state().vpn.spawnAllowed, false);
+  assert.equal(state().vpn.spawnAllowed, true);
 });
 
 it("starts waiting terminals when connect-on-launch is turned off", () => {

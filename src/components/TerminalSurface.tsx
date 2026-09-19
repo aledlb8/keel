@@ -321,10 +321,9 @@ export const TerminalSurface = memo(function TerminalSurface({
   const vpnError = useKeel((state) => state.vpn.error);
   const proxyPort = useKeel((state) => state.vpn.proxyPort);
   const startedGeneration = useRef<number | null>(null);
-  // Connect-on-launch holds new shells until the tunnel is up, not merely until
-  // an attempt finishes. A running generation is left alone.
-  const launchHold =
-    autoConnect && vpnPhase !== "connected" && vpnPhase !== "idle";
+  // Connect-on-launch holds new shells only while the tunnel is still being
+  // attempted. An error or idle phase must never block terminals from loading.
+  const launchHold = autoConnect && vpnPhase === "connecting";
   const canStart =
     (spawnAllowed && !launchHold) || startedGeneration.current === generation;
   const vpnWait = !canStart && (!spawnAllowed || launchHold);

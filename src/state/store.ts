@@ -549,11 +549,9 @@ function readVpn(document: Record<string, unknown> | null): VpnSettings {
   };
 }
 
-/** New shells wait while connecting, and while launch still needs a tunnel. */
-function spawnAllowedAfter(autoConnect: boolean, phase: VpnPhase): boolean {
-  if (phase === "connecting") return false;
-  if (phase === "connected") return true;
-  return !autoConnect;
+/** New shells wait while connecting, but never after the attempt settles. */
+function spawnAllowedAfter(phase: VpnPhase): boolean {
+  return phase !== "connecting";
 }
 
 function vpnFromSnapshot(
@@ -1418,7 +1416,7 @@ export const useKeel = create<KeelState>((set, get) => {
           return {
             vpn: {
               ...vpn,
-              spawnAllowed: spawnAllowedAfter(vpn.autoConnect, vpn.phase),
+              spawnAllowed: spawnAllowedAfter(vpn.phase),
             },
           };
         });
@@ -1429,7 +1427,7 @@ export const useKeel = create<KeelState>((set, get) => {
           vpn: {
             ...state.vpn,
             phase: "error",
-            spawnAllowed: spawnAllowedAfter(state.vpn.autoConnect, "error"),
+            spawnAllowed: spawnAllowedAfter("error"),
             error: String(error),
           },
         }));
@@ -1469,7 +1467,7 @@ export const useKeel = create<KeelState>((set, get) => {
         vpn: {
           ...state.vpn,
           autoConnect,
-          spawnAllowed: spawnAllowedAfter(autoConnect, state.vpn.phase),
+          spawnAllowed: spawnAllowedAfter(state.vpn.phase),
         },
       }));
       persist();
