@@ -254,13 +254,13 @@ export function LaunchDialog({
         }}
       >
         <header className="flex h-12 items-center gap-1 pl-5 pr-2">
-          <DialogTitle className="text-[15px]">Add terminals</DialogTitle>
+          <DialogTitle className="text-title">Add terminals</DialogTitle>
           <DialogDescription className="sr-only">
             Pick agents to open as new terminals in the current deck.
           </DialogDescription>
           {project ? (
             <>
-              <span className="ml-0.5 text-[15px] text-faint">in</span>
+              <span className="ml-0.5 text-title text-faint">in</span>
               <FolderPicker
                 project={project}
                 folders={folders}
@@ -321,7 +321,7 @@ export function LaunchDialog({
         />
 
         <footer className="mt-3 flex h-14 items-center gap-2 border-t border-line pl-5 pr-3">
-          <p className="flex items-center gap-1.5 text-[12px] text-faint">
+          <p className="flex items-center gap-1.5 text-body text-faint">
             {full ? (
               `${MAX_NEW} at a time is the most one batch can open.`
             ) : (
@@ -386,7 +386,7 @@ function Stage({
       className="flex h-[min(40vh,320px)] flex-col gap-1.5 rounded-[var(--keel-r-window)] bg-[color:var(--keel-void)] p-1.5 shadow-[inset_0_0_0_1px_var(--keel-line)]"
     >
       {picks.length === 0 ? (
-        <div className="grid flex-1 place-items-center rounded-[7px] border border-dashed border-line-strong px-10 text-center text-[13px] leading-relaxed text-faint">
+        <div className="grid flex-1 place-items-center rounded-[7px] border border-dashed border-line-strong px-10 text-center text-row leading-relaxed text-faint">
           {placeholder}
         </div>
       ) : (
@@ -451,12 +451,12 @@ function StageTile({
           size={12}
           variant="glyph"
         />
-        <span className="hidden truncate text-[11px] text-dim @min-[6rem]:block">
+        <span className="hidden truncate text-small text-dim @min-[6rem]:block">
           {key.name}
         </span>
       </span>
 
-      <span className="hidden items-center gap-1.5 px-2 pt-1 font-mono text-[11px] leading-none @min-[8rem]:flex">
+      <span className="hidden items-center gap-1.5 px-2 pt-1 font-mono text-small leading-none @min-[8rem]:flex">
         <span style={{ color: key.accent }}>❯</span>
         {key.command ? (
           <span className="truncate text-dim">{key.command}</span>
@@ -522,17 +522,17 @@ function AgentKey({
       />
 
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-[13px] font-medium leading-tight">
+        <span className="block truncate text-row font-medium leading-tight">
           {entry.name}
         </span>
-        <span className="mt-0.5 block truncate font-mono text-[11px] text-faint">
+        <span className="mt-0.5 block truncate font-mono text-small text-faint">
           {entry.command ?? "nothing typed in"}
         </span>
       </span>
 
       {lit ? (
         <span
-          className="text-[13px] font-semibold tabular-nums"
+          className="text-row font-semibold tabular-nums"
           style={{ color: entry.accent }}
         >
           ×{count}
@@ -559,7 +559,7 @@ function CatalogueNote({
   if (!empty && missing.length === 0) return null;
 
   return (
-    <p className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 pt-3 text-[12px] text-faint">
+    <p className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 pt-3 text-body text-faint">
       <span>
         {empty
           ? "No agents in the catalogue yet. Shells still work."
@@ -606,7 +606,7 @@ function FolderPicker({
       <SelectTrigger
         variant="ghost"
         aria-label="Folder"
-        className="max-w-[300px] text-[15px]"
+        className="max-w-[300px] text-title"
       >
         <SelectValue />
       </SelectTrigger>
@@ -625,7 +625,7 @@ function FolderPicker({
 
 function Kbd({ children }: { children: ReactNode }) {
   return (
-    <kbd className="inline-grid h-[18px] min-w-[18px] shrink-0 place-items-center rounded-[4px] px-1 font-sans text-[11px] font-medium text-faint shadow-[inset_0_0_0_1px_var(--keel-line-strong),inset_0_-1px_0_0_var(--keel-line-strong)]">
+    <kbd className="inline-grid h-[18px] min-w-[18px] shrink-0 place-items-center rounded-[4px] px-1 font-sans text-small font-medium text-faint shadow-[inset_0_0_0_1px_var(--keel-line-strong),inset_0_-1px_0_0_var(--keel-line-strong)]">
       {children}
     </kbd>
   );

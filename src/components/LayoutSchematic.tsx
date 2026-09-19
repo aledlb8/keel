@@ -31,7 +31,7 @@ export function LayoutSchematic(props: LayoutSchematicProps) {
 
   if (!props.deck.tree) {
     return (
-      <div className="grid h-full place-items-center rounded-[8px] border border-dashed border-line-strong text-[12px] text-faint">
+      <div className="grid h-full place-items-center rounded-[8px] border border-dashed border-line-strong text-body text-faint">
         Empty deck
       </div>
     );
@@ -90,13 +90,13 @@ function Node({
             accent={accent}
             size={16}
           />
-          <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-dim">
+          <span className="min-w-0 flex-1 truncate text-small font-medium text-dim">
             {agent?.name ?? "Shell"}
           </span>
           {state !== "idle" ? <StatusDot status={state} /> : null}
         </div>
         {brief ? (
-          <span className="line-clamp-3 min-w-0 break-words text-[11px] leading-snug text-foreground/80">
+          <span className="line-clamp-3 min-w-0 break-words text-small leading-snug text-foreground/80">
             {brief}
           </span>
         ) : null}

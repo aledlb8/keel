@@ -201,7 +201,7 @@ function GroupHeading({
           {renaming ? (
             <InlineRename
               value={name}
-              className="h-5 text-[11px]"
+              className="h-5 text-small"
               onCommit={(next) =>
                 useKeel.getState().renameWorkspace(workspaceId, next)
               }
@@ -434,7 +434,7 @@ function DeckGroup({
         {renaming ? (
           <InlineRename
             value={deck.name}
-            className="h-5 text-[12px]"
+            className="h-5 text-body"
             onCommit={(name) =>
               useKeel.getState().renameDeck(project.id, deck.id, name)
             }
@@ -588,7 +588,7 @@ function PaneRow({
           {account ? (
             <span
               className={cn(
-                "max-w-[64px] shrink-0 truncate pr-0.5 text-[11px] text-faint",
+                "max-w-[64px] shrink-0 truncate pr-0.5 text-small text-faint",
                 HIDE_ON_HOVER.pane,
               )}
             >
@@ -662,11 +662,11 @@ export function EmptyScope({ workspaceId }: { workspaceId: string | null }) {
         onClick={() => void pickProjectFolder(workspaceId ?? undefined)}
         className="k-empty-target"
       >
-        <span className="flex items-center gap-1.5 text-[13px] text-foreground">
+        <span className="flex items-center gap-1.5 text-row text-foreground">
           <Plus className="size-3.5 text-dim" />
           Add a folder
         </span>
-        <span className="text-[12px] leading-snug text-faint">
+        <span className="text-body leading-snug text-faint">
           Terminals are grouped by the project they run in.
         </span>
       </button>

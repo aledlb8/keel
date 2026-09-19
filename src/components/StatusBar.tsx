@@ -114,11 +114,11 @@ function Place({ project, cwd }: { project: Project; cwd: string | null }) {
 
   return (
     <span
-      className="min-w-0 truncate text-[11px] leading-none"
+      className="min-w-0 truncate text-small leading-none"
       title={cwd ?? project.path}
     >
       {root ? <span className="text-dim">{root}</span> : null}
-      <span className="font-mono text-[10.5px] text-faint">{tail}</span>
+      <span className="font-mono text-micro text-faint">{tail}</span>
     </span>
   );
 }
@@ -140,7 +140,7 @@ function DeckPill({
       title={`${deck.name}${index < 9 ? ` (Ctrl+${index + 1})` : ""}`}
       onClick={onSelect}
       className={cn(
-        "h-[18px] min-w-[18px] rounded-[var(--keel-r-chip)] px-1.5 text-[11px] font-medium tabular-nums transition-colors",
+        "h-[18px] min-w-[18px] rounded-[var(--keel-r-chip)] px-1.5 text-small font-medium tabular-nums transition-colors",
         active
           ? "bg-veil-3 text-foreground shadow-[inset_0_1px_0_0_var(--keel-sheen)]"
           : "text-faint hover:bg-veil-2 hover:text-foreground",
@@ -168,7 +168,7 @@ function VpnChip() {
       aria-label={title}
       onClick={() => useKeel.getState().openVpnSettings()}
       className={cn(
-        "flex h-[22px] shrink-0 items-center gap-2 rounded-[var(--keel-r-chip)] px-2 text-[11px] font-medium transition-colors hover:bg-veil-2 hover:text-foreground",
+        "flex h-[var(--keel-h-chip)] shrink-0 items-center gap-2 rounded-[var(--keel-r-chip)] px-2 text-small font-medium transition-colors hover:bg-veil-2 hover:text-foreground",
         tone === "idle" ? "text-faint" : "text-dim",
       )}
     >

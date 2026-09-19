@@ -109,7 +109,7 @@ export function UsageMeter() {
           <button
             type="button"
             aria-label={`Usage: ${summary}`}
-            className="flex h-[22px] items-center rounded-[var(--keel-r-chip)] px-0.5 outline-none transition-colors duration-100 hover:bg-veil-2 focus-visible:bg-veil-2 data-[state=open]:bg-veil-2"
+            className="flex h-[var(--keel-h-chip)] items-center rounded-[var(--keel-r-chip)] px-0.5 outline-none transition-colors duration-100 hover:bg-veil-2 focus-visible:bg-veil-2 data-[state=open]:bg-veil-2"
           >
             {rows.map((row, index) => (
               <Fragment key={row.key}>
@@ -168,7 +168,7 @@ function Segment({ row }: { row: Row }) {
       {row.showProfile ? (
         <span
           className={cn(
-            "max-w-16 truncate text-[11px] leading-none",
+            "max-w-16 truncate text-small leading-none",
             row.active ? "text-dim" : "text-faint",
           )}
         >
@@ -177,7 +177,7 @@ function Segment({ row }: { row: Row }) {
       ) : null}
       <span
         className={cn(
-          "text-[11px] font-medium tabular-nums leading-none",
+          "text-small font-medium tabular-nums leading-none",
           level === "ok" && (row.active ? "text-dim" : "text-faint"),
         )}
         style={level === "ok" ? undefined : { color: LEVEL_COLOR[level] }}
@@ -264,9 +264,9 @@ function UsageCard({
   return (
     <div className="w-[348px] overflow-hidden rounded-[var(--keel-r-window)] border border-line-strong bg-popover text-foreground shadow-[var(--keel-lift-strong)]">
       <header className="flex h-11 items-center gap-2 pl-4 pr-2">
-        <h2 className="text-[13px] font-semibold tracking-[-0.01em]">Usage</h2>
+        <h2 className="text-row font-semibold tracking-[-0.01em]">Usage</h2>
         {fetchedAt ? (
-          <span className="text-[11px] text-faint">
+          <span className="text-small text-faint">
             Updated {sinceLabel(fetchedAt, now)}
           </span>
         ) : null}
@@ -300,7 +300,7 @@ function UsageCard({
       </div>
 
       {anyMarker ? (
-        <footer className="flex items-center gap-2 px-4 pb-3 pt-2.5 text-[11px] text-faint">
+        <footer className="flex items-center gap-2 px-4 pb-3 pt-2.5 text-small text-faint">
           <span aria-hidden className="h-2.5 w-[2px] rounded-full bg-foreground/60" />
           How much of each window has passed
         </footer>
@@ -334,7 +334,7 @@ function Login({
         size={22}
       />
       <span
-        className="min-w-0 flex-1 truncate text-left text-[13px] font-medium"
+        className="min-w-0 flex-1 truncate text-left text-row font-medium"
         title={row.showProfile ? `${usage.name} ${row.profile}` : usage.name}
       >
         {open || !row.showProfile ? (
@@ -440,7 +440,7 @@ function Glance({ windows, accent }: { windows: UsageWindow[]; accent: string })
         const level = usageLevel(used);
         return (
           <span key={window.label} className="flex items-center gap-1.5">
-            <span className="text-[10px] font-medium text-faint">
+            <span className="text-micro font-medium text-faint">
               {windowShortName(window.label)}
             </span>
             <span className="h-[3px] w-6 overflow-hidden rounded-full bg-veil-3">
@@ -454,7 +454,7 @@ function Glance({ windows, accent }: { windows: UsageWindow[]; accent: string })
             </span>
             <span
               className={cn(
-                "w-7 text-right text-[11px] font-medium tabular-nums",
+                "w-7 text-right text-small font-medium tabular-nums",
                 level === "ok" && "text-dim",
               )}
               style={level === "ok" ? undefined : { color: LEVEL_COLOR[level] }}
@@ -487,10 +487,10 @@ function WindowRow({
   return (
     <li className="flex flex-col gap-1.5">
       <div className="flex items-baseline gap-3">
-        <span className="flex-1 text-[12px] text-dim">{windowName(window.label)}</span>
+        <span className="flex-1 text-body text-dim">{windowName(window.label)}</span>
         <span
           className={cn(
-            "text-[12px] font-semibold tabular-nums",
+            "text-body font-semibold tabular-nums",
             level === "ok" && "text-foreground",
           )}
           style={level === "ok" ? undefined : { color: LEVEL_COLOR[level] }}
@@ -518,7 +518,7 @@ function WindowRow({
       </div>
 
       {reset || ahead ? (
-        <div className="flex items-center gap-3 text-[11px] text-faint">
+        <div className="flex items-center gap-3 text-small text-faint">
           <span className="flex-1">
             {reset === "now" ? "Resetting now" : reset ? `Resets in ${reset}` : ""}
           </span>
@@ -535,7 +535,7 @@ function Tag({ children, strong }: { children: ReactNode; strong?: boolean }) {
   return (
     <span
       className={cn(
-        "shrink-0 rounded-full px-2 py-[3px] text-[10px] font-medium leading-none",
+        "shrink-0 rounded-full px-2 py-[3px] text-micro font-medium leading-none",
         // Plans arrive lower-case ("max"); "In use" is already written right.
         strong ? "bg-veil-3 text-foreground" : "bg-veil-2 capitalize text-dim",
       )}

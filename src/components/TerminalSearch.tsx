@@ -87,7 +87,7 @@ export function TerminalSearch({
       </div>
       <span
         aria-live="polite"
-        className="min-w-[4.25rem] px-1 text-right text-[11px] tabular-nums text-faint"
+        className="min-w-[4.25rem] px-1 text-right text-small tabular-nums text-faint"
       >
         {countLabel}
       </span>

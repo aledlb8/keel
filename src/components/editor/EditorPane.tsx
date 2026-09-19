@@ -207,19 +207,27 @@ function TabChip({
   const id = editorRefId(tab);
   const name = editorRefName(tab);
   const dirty = useDirty(tab);
+  const chip = useRef<HTMLDivElement>(null);
   const close = () => useWorkspace.getState().closeTab(projectId, paneId, id);
+
+  useEffect(() => {
+    if (!active) return;
+    // `nearest` on both axes: the least scrolling that reveals it, and no
+    // vertical movement in a strip that only scrolls sideways.
+    chip.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [active]);
 
   return (
     <div
+      ref={chip}
       role="tab"
       aria-selected={active}
       data-active={active}
       title={tab.kind === "diff" ? `Changes in ${tab.rel}` : tab.rel}
-      className="k-tab group/tab h-6"
+      className="k-tab group/tab"
       onClick={(event) => {
         if ((event.target as HTMLElement).closest("button")) return;
-        useKeel.getState().selectEditorTab(projectId, paneId, id);
-        useWorkspace.getState().setActiveEditor(id);
+        showEditorTab(projectId, paneId, id);
       }}
       onAuxClick={(event) => {
         if (event.button !== 1) return;
@@ -381,11 +389,11 @@ function PathBar({
   const shown = segments.length > 4 ? ["…", ...segments.slice(-4)] : segments;
 
   return (
-    <div className="flex h-[30px] shrink-0 items-center gap-3 border-y border-[color:var(--keel-term-border)] px-3">
+    <div className="flex h-[var(--keel-h-row)] shrink-0 items-center gap-3 border-y border-[color:var(--keel-term-border)] px-3">
       <nav
         aria-label="Path"
         title={tab.rel}
-        className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden text-[11.5px] text-faint"
+        className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden text-small text-faint"
       >
         {shown.map((segment, index) => {
           const last = index === shown.length - 1;

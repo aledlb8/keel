@@ -49,14 +49,14 @@ export function Overview({ project, agents, onClose }: OverviewProps) {
     <div className="absolute inset-0 z-50 flex flex-col bg-[color:var(--keel-void)] animate-in fade-in-0 duration-150">
       <div className="flex h-[52px] shrink-0 items-center gap-3 pl-6 pr-3">
         <div className="flex min-w-0 items-baseline gap-2.5">
-          <span className="truncate text-[15px] font-semibold tracking-[-0.01em] text-foreground">
+          <span className="truncate text-title font-semibold tracking-[-0.01em] text-foreground">
             {project.name}
           </span>
-          <span className="shrink-0 text-[12px] text-faint">
+          <span className="shrink-0 text-body text-faint">
             {project.decks.length} {project.decks.length === 1 ? "deck" : "decks"}
           </span>
         </div>
-        <span className="ml-auto hidden truncate text-[12px] text-faint md:block">
+        <span className="ml-auto hidden truncate text-body text-faint md:block">
           Drag a terminal onto another deck to move it
         </span>
         <button
@@ -111,7 +111,7 @@ export function Overview({ project, agents, onClose }: OverviewProps) {
               <div className="flex h-11 items-center gap-2.5 pl-3 pr-2">
                 <span
                   className={cn(
-                    "grid size-5 shrink-0 place-items-center rounded-full text-[11px] font-semibold tabular-nums",
+                    "grid size-5 shrink-0 place-items-center rounded-full text-small font-semibold tabular-nums",
                     active
                       ? "bg-foreground text-background"
                       : "bg-veil-2 text-dim",
@@ -135,13 +135,13 @@ export function Overview({ project, agents, onClose }: OverviewProps) {
                     onDoubleClick={() => setRenaming(deck.id)}
                     onClick={open}
                     title="Double-click to rename"
-                    className="min-w-0 flex-1 truncate text-left text-[13px] font-medium text-foreground"
+                    className="min-w-0 flex-1 truncate text-left text-row font-medium text-foreground"
                   >
                     {deck.name}
                   </button>
                 )}
 
-                <span className="shrink-0 text-[12px] tabular-nums text-faint">
+                <span className="shrink-0 text-body tabular-nums text-faint">
                   {count} {count === 1 ? "terminal" : "terminals"}
                 </span>
                 <button
@@ -183,7 +183,7 @@ export function Overview({ project, agents, onClose }: OverviewProps) {
             useKeel.getState().addDeck(project.id);
             onClose();
           }}
-          className="flex min-h-[200px] flex-col items-center justify-center gap-2.5 rounded-[14px] border border-dashed border-line-strong text-[13px] font-medium text-dim transition-colors hover:border-foreground/25 hover:bg-veil hover:text-foreground"
+          className="flex min-h-[200px] flex-col items-center justify-center gap-2.5 rounded-[14px] border border-dashed border-line-strong text-row font-medium text-dim transition-colors hover:border-foreground/25 hover:bg-veil hover:text-foreground"
         >
           <span className="grid size-8 place-items-center rounded-full bg-veil-2">
             <Plus className="size-4" />
@@ -219,7 +219,7 @@ function DeckNameInput({
         if (event.key === "Enter") onCommit(event.currentTarget.value);
         if (event.key === "Escape") onCancel();
       }}
-      className="min-w-0 flex-1 rounded-[var(--keel-r-chip)] border border-line-strong bg-veil-2 px-2 py-1 text-[13px] outline-none transition-colors focus:border-foreground/40"
+      className="min-w-0 flex-1 rounded-[var(--keel-r-chip)] border border-line-strong bg-veil-2 px-2 py-1 text-row outline-none transition-colors focus:border-foreground/40"
     />
   );
 }

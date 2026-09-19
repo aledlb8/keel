@@ -99,10 +99,10 @@ export function VpnDialog() {
             <Icon className="size-[18px]" />
           </span>
           <div className="min-w-0 flex-1 pt-0.5">
-            <DialogTitle className="text-[15px] font-semibold tracking-[-0.01em]">
+            <DialogTitle className="text-title font-semibold tracking-[-0.01em]">
               Private VPN
             </DialogTitle>
-            <DialogDescription className="mt-1 text-[12px] leading-snug text-faint">
+            <DialogDescription className="mt-1 text-body leading-snug text-faint">
               Only Keel and its terminals use the tunnel. The rest of this PC
               stays on your normal connection.
             </DialogDescription>
@@ -121,7 +121,7 @@ export function VpnDialog() {
           <StatusCard vpn={vpn} />
 
           <div className="flex flex-col gap-1.5">
-            <span className="text-[12px] font-medium text-dim">Profile</span>
+            <span className="text-body font-medium text-dim">Profile</span>
             <Select
               {...(profileValue ? { value: profileValue } : {})}
               onValueChange={(value) => useKeel.getState().setVpnProfile(value)}
@@ -139,7 +139,7 @@ export function VpnDialog() {
               </SelectContent>
             </Select>
             {noProfiles ? (
-              <span className="text-[12px] leading-snug text-faint">
+              <span className="text-body leading-snug text-faint">
                 Import a profile in OpenVPN Connect first — Keel reads it from
                 that app&apos;s profiles folder.
               </span>
@@ -167,13 +167,13 @@ export function VpnDialog() {
                 className="mt-px size-4 shrink-0"
                 style={{ color: "var(--keel-ansi-yellow)" }}
               />
-              <p className="text-[12px] leading-relaxed text-dim">
+              <p className="text-body leading-relaxed text-dim">
                 <span className="font-medium text-foreground">
                   OpenVPN client needed.
                 </span>{" "}
                 Connect can&apos;t isolate a single app. Install the OpenVPN
                 community client (it ships{" "}
-                <code className="font-mono text-[11px]">openvpn.exe</code>) so
+                <code className="font-mono text-small">openvpn.exe</code>) so
                 Keel can run a tunnel that leaves this PC alone.
               </p>
             </div>
@@ -240,10 +240,10 @@ function StatusCard({ vpn }: { vpn: VpnState }) {
       <div className="flex items-center gap-3 px-3.5 py-3">
         <StatusLight tone={tone} color={color} size={10} />
         <div className="min-w-0 flex-1">
-          <p className="text-[13px] font-medium text-foreground">{headline}</p>
+          <p className="text-row font-medium text-foreground">{headline}</p>
           <p
             className={cn(
-              "mt-0.5 text-[12px] leading-snug",
+              "mt-0.5 text-body leading-snug",
               tone === "error"
                 ? "max-h-28 overflow-y-auto whitespace-pre-wrap break-words text-[color:var(--keel-dead)]"
                 : "text-faint",
@@ -254,7 +254,7 @@ function StatusCard({ vpn }: { vpn: VpnState }) {
         </div>
         {tone === "connected" ? (
           <span
-            className="flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-[11px] font-medium leading-none"
+            className="flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-small font-medium leading-none"
             style={
               vpn.isolated
                 ? {
@@ -310,11 +310,11 @@ function Detail({
 }) {
   return (
     <div className="min-w-0 px-3.5 py-2.5">
-      <dt className="text-[11px] text-faint">{label}</dt>
+      <dt className="text-small text-faint">{label}</dt>
       <dd
         className={cn(
           "mt-0.5 truncate text-foreground",
-          mono ? "font-mono text-[12px]" : "text-[12px]",
+          mono ? "font-mono text-body" : "text-body",
         )}
         title={value ?? undefined}
       >
@@ -382,10 +382,10 @@ function SwitchRow({
       className="flex items-center gap-3 rounded-[var(--keel-r-control)] text-left outline-none"
     >
       <span className="min-w-0 flex-1">
-        <span className="block text-[13px] font-medium text-foreground">
+        <span className="block text-row font-medium text-foreground">
           {title}
         </span>
-        <span className="mt-0.5 block text-[12px] leading-snug text-faint">
+        <span className="mt-0.5 block text-body leading-snug text-faint">
           {hint}
         </span>
       </span>

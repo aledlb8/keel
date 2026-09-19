@@ -163,7 +163,7 @@ function MenubarTrigger({
     <Primitive.Trigger
       data-slot="menubar-trigger"
       className={cn(
-        "flex h-[26px] items-center rounded-[var(--keel-r-control)] px-2.5 text-[13px] text-dim outline-none transition-[background-color,color] duration-100 select-none hover:bg-veil-2 hover:text-foreground focus-visible:bg-veil-2 focus-visible:text-foreground data-[state=open]:bg-veil-3 data-[state=open]:text-foreground data-[state=open]:shadow-[inset_0_1px_0_0_var(--keel-sheen)]",
+        "flex h-[var(--keel-h-control)] items-center rounded-[var(--keel-r-control)] px-2.5 text-row text-dim outline-none transition-[background-color,color] duration-100 select-none hover:bg-veil-2 hover:text-foreground focus-visible:bg-veil-2 focus-visible:text-foreground data-[state=open]:bg-veil-3 data-[state=open]:text-foreground data-[state=open]:shadow-[inset_0_1px_0_0_var(--keel-sheen)]",
         className,
       )}
       {...props}
@@ -288,7 +288,7 @@ function MenubarLabel({
     <Primitive.Label
       data-slot="menubar-label"
       className={cn(
-        "truncate px-2.5 pb-1 pt-1.5 text-[11px] font-medium text-faint",
+        "truncate px-2.5 pb-1 pt-1.5 text-small font-medium text-faint",
         className,
       )}
       {...props}
@@ -313,7 +313,7 @@ function MenubarShortcut({ className, ...props }: React.ComponentProps<"span">) 
   return (
     <span
       data-slot="menubar-shortcut"
-      className={cn("ml-auto pl-5 text-[11px] tracking-wide text-faint", className)}
+      className={cn("ml-auto pl-5 text-small tracking-wide text-faint", className)}
       {...props}
     />
   );

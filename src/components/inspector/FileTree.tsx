@@ -568,7 +568,7 @@ function ChildList({
       ))}
       {empty && depth > 0 ? (
         <div
-          className="k-row h-[28px] gap-1.5 text-[12px] italic text-faint"
+          className="k-row k-row-dense gap-1.5 text-body italic text-faint"
           style={indentStyle(depth)}
         >
           <Guides depth={depth} />
@@ -630,7 +630,7 @@ function TreeRow({
             }
             draggable={!isRenaming}
             style={indentStyle(depth)}
-            className="k-row group/entry h-[28px] gap-1.5"
+            className="k-row group/entry k-row-dense gap-1.5"
             onDragStart={(event) => {
               event.stopPropagation();
               event.dataTransfer.effectAllowed = "move";
@@ -681,7 +681,7 @@ function TreeRow({
             {isRenaming ? (
               <InlineRename
                 value={entry.name}
-                className="h-[22px]"
+                className="h-[var(--keel-h-chip)]"
                 onCommit={(name) =>
                   void useWorkspace.getState().confirmRename(name)
                 }
@@ -758,7 +758,7 @@ function HitRow({
       tabIndex={0}
       title={entry.rel}
       data-selected={selected}
-      className="k-row h-[28px] gap-2"
+      className="k-row k-row-dense gap-2"
       onClick={activate}
       onKeyDown={(event) => {
         if (event.target !== event.currentTarget) return;
@@ -780,7 +780,7 @@ function HitRow({
           {fileName(entry.rel)}
         </span>
         {parent ? (
-          <span className="min-w-0 truncate text-[11px] text-faint">{parent}</span>
+          <span className="min-w-0 truncate text-small text-faint">{parent}</span>
         ) : null}
       </span>
       {!folder && status ? <GitLetter status={status} /> : null}
@@ -790,13 +790,13 @@ function HitRow({
 
 function CreateRow({ kind, depth }: { kind: "file" | "dir"; depth: number }) {
   return (
-    <div className="k-row h-[28px] gap-1.5" style={indentStyle(depth)}>
+    <div className="k-row k-row-dense gap-1.5" style={indentStyle(depth)}>
       <Guides depth={depth} />
       <span className="w-3.5 shrink-0" />
       <FileIcon name="" folder={kind === "dir"} />
       <InlineRename
         value=""
-        className="h-[22px]"
+        className="h-[var(--keel-h-chip)]"
         onCommit={(name) => void useWorkspace.getState().confirmCreate(name)}
         onDone={() => useWorkspace.getState().cancelCreate()}
       />

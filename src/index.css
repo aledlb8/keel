@@ -75,6 +75,19 @@
     --color-input: var(--input);
     --color-ring: var(--ring);
 
+    /*
+     * The type scale, as utilities. The names are the job, not the size, so a
+     * new component asks "is this a row or a label" rather than picking a
+     * number. They sit outside Tailwind's own `text-xs`…`text-xl`, which the
+     * shadcn primitives still use.
+     */
+    --text-micro: var(--keel-type-micro);
+    --text-small: var(--keel-type-small);
+    --text-body: var(--keel-type-body);
+    --text-row: var(--keel-type-row);
+    --text-title: var(--keel-type-title);
+    --text-display: var(--keel-type-display);
+
     /* Three radii, and they are not interchangeable. See the note above. */
     --radius-window: var(--keel-r-window);
     --radius-control: var(--keel-r-control);
@@ -118,6 +131,13 @@
     --keel-line: rgba(255, 255, 255, 0.055);
     --keel-line-strong: rgba(255, 255, 255, 0.12);
     /*
+     * Keyboard focus, and the one veil allowed to be loud. A hairline at
+     * `line-strong` measured 1.4:1 against the chrome — technically drawn,
+     * practically invisible, in an app where most of the work is done from
+     * the keyboard. At 45% it clears 4.5:1 and still has no hue.
+     */
+    --keel-focus: rgba(255, 255, 255, 0.45);
+    /*
      * The 1px of light along the top of a panel. It is the single detail that
      * makes a flat fill read as a surface catching the light, and it costs one
      * inset shadow.
@@ -130,10 +150,36 @@
      * Three steps, and the gap between them is deliberate. `dim` has to stay
      * comfortably readable — it carries every unselected row in the sidebar —
      * so the drop to `faint` does the work of pushing counters and paths back.
+     *
+     * `faint` is the step that gets overused, and at #707070 it sat at 3.6:1
+     * on the chrome — under AA at the 10–12px sizes it is spent on. #808080
+     * clears 4.5:1 and still reads as the quiet one. It is deliberately no
+     * longer the same grey as `idle`: a dot at rest and a label are different
+     * kinds of quiet.
      */
     --keel-text: #ededed;
     --keel-text-dim: #a1a1a1;
-    --keel-text-faint: #707070;
+    --keel-text-faint: #808080;
+
+    /*
+     * Six sizes, and every one of them is a whole pixel. The scale used to run
+     * 9.5, 10, 10.5, 11, 11.5, 12, 12.5, 13, 14, 15 — steps half a pixel apart
+     * that Windows rounds together at 125% and 150% display scaling, so the
+     * distinction was invisible on some monitors and not on others.
+     *
+     *   micro    counts and numbers riding on a chip
+     *   small    labels, paths, captions — anything pushed back
+     *   body     dense UI text: pane headers, menus, secondary rows
+     *   row      a row you click, and the app's base size
+     *   title    a dialog or card title
+     *   display  the one headline on an empty screen
+     */
+    --keel-type-micro: 10px;
+    --keel-type-small: 11px;
+    --keel-type-body: 12px;
+    --keel-type-row: 13px;
+    --keel-type-title: 15px;
+    --keel-type-display: 19px;
 
     /* ---- State (opaque, and the only colour in the chrome) -------------- */
     /*
@@ -203,6 +249,17 @@
     /* Air between a row and the panel it sits in, so its radius has room. */
     --keel-inset: 6px;
 
+    /*
+     * How tall the things you click are. Four steps, by what the thing is:
+     * a place you go to, one file in a long list of them, a control in a bar,
+     * a chip riding on one. Icon glyphs keep their own sizes — an icon is
+     * geometry, not a step on this ladder.
+     */
+    --keel-h-row: 30px;
+    --keel-h-dense: 28px;
+    --keel-h-control: 26px;
+    --keel-h-chip: 22px;
+
     /* Two lifts. A pane gets the first, anything modal gets the second. */
     --keel-lift: 0 10px 30px -12px rgba(0, 0, 0, 0.75);
     --keel-lift-strong: 0 28px 64px -18px rgba(0, 0, 0, 0.85);
@@ -232,7 +289,8 @@
     --destructive: var(--keel-dead);
     --border: var(--keel-line);
     --input: var(--keel-veil-1);
-    --ring: var(--keel-line-strong);
+    /* The primitives' own focus ring, on the same token as everything else. */
+    --ring: var(--keel-focus);
     --radius: var(--keel-r-window);
 }
 
@@ -259,7 +317,7 @@
         overflow: hidden;
         /* The whole app is one fixed surface; nothing outside a pane scrolls. */
         overscroll-behavior: none;
-        font-size: 13px;
+        font-size: var(--keel-type-row);
         letter-spacing: -0.006em;
         /* Inter's open digits, single-storey a and flat-sided 6/9: calmer at
          * small sizes and closer to a modern system face. */
@@ -297,7 +355,7 @@
 
     /* Keyboard focus is visible; a mouse never draws a ring. */
     :focus-visible {
-        outline: 1px solid var(--keel-line-strong);
+        outline: 1px solid var(--keel-focus);
         outline-offset: 1px;
         border-radius: var(--keel-r-chip);
     }
@@ -329,11 +387,11 @@
         /* A hair of air top and bottom, so two filled rows in a row still read
          * as two chips rather than as one tall slab. */
         margin-block: 1px;
-        height: 30px;
+        height: var(--keel-h-row);
         gap: 7px;
         padding-inline: calc(8px + var(--row-indent)) 5px;
         border-radius: var(--keel-r-control);
-        font-size: 13px;
+        font-size: var(--keel-type-row);
         text-align: left;
         cursor: default;
         transition:
@@ -356,7 +414,15 @@
 
     /* Deeper rows are quieter: a project is a place, a terminal is a thing in it. */
     .k-row-sub {
-        font-size: 12.5px;
+        font-size: var(--keel-type-body);
+    }
+
+    /*
+     * One file among hundreds. Shorter than a row you navigate to, because a
+     * file tree is read as a column of names rather than clicked through.
+     */
+    .k-row-dense {
+        height: var(--keel-h-dense);
     }
 
     /* Two lines of text — a name and where it lives — need the extra height. */
@@ -530,7 +596,7 @@
     /* Quiet heading over a group of rows. Sentence case, never tracked-out caps. */
     .k-label {
         padding-inline: calc(var(--keel-inset) + 8px);
-        font-size: 11px;
+        font-size: var(--keel-type-small);
         font-weight: 500;
         color: var(--keel-text-faint);
     }
@@ -744,7 +810,7 @@
         border-radius: 999px;
         background: var(--keel-veil-2);
         color: var(--keel-text-dim);
-        font-size: 10px;
+        font-size: var(--keel-type-micro);
         font-weight: 500;
         font-variant-numeric: tabular-nums;
         line-height: 1;
@@ -807,7 +873,7 @@
         display: flex;
         align-items: center;
         gap: 6px;
-        height: 28px;
+        height: var(--keel-h-dense);
         padding-inline: 8px 4px;
         border-radius: var(--keel-r-chip);
         background: var(--keel-veil-1);
@@ -832,7 +898,7 @@
         height: 24px;
         margin: 8px var(--keel-inset) 1px;
         padding-inline: 4px;
-        font-size: 11px;
+        font-size: var(--keel-type-small);
         font-weight: 500;
         color: var(--keel-text-faint);
         border-radius: var(--keel-r-chip);
@@ -930,7 +996,7 @@
         padding: 6px 8px;
         border-top: 1px solid var(--keel-line);
         text-align: left;
-        font-size: 11px;
+        font-size: var(--keel-type-small);
         color: var(--keel-text-faint);
         cursor: default;
         transition: color 110ms ease;
@@ -941,7 +1007,7 @@
     }
 
     .k-link {
-        font-size: 12px;
+        font-size: var(--keel-type-body);
         color: var(--keel-text-dim);
         text-decoration: underline;
         text-decoration-color: var(--keel-line-strong);
@@ -998,7 +1064,7 @@
         border-radius: 999px;
         background: var(--keel-veil-1);
         color: var(--keel-text-faint);
-        font-size: 10px;
+        font-size: var(--keel-type-micro);
         font-weight: 600;
         font-variant-numeric: tabular-nums;
         line-height: 1;
@@ -1031,7 +1097,7 @@
         display: flex;
         align-items: center;
         gap: 7px;
-        height: 30px;
+        height: var(--keel-h-row);
         padding-inline: 9px;
         border-radius: var(--keel-r-control);
         background: var(--keel-veil-1);
@@ -1055,7 +1121,7 @@
         height: 100%;
         background: transparent;
         color: var(--keel-text);
-        font-size: 13px;
+        font-size: var(--keel-type-row);
         outline: none;
     }
 
@@ -1104,7 +1170,7 @@
         background: transparent;
         padding: 9px 10px 4px;
         color: var(--keel-text);
-        font-size: 13px;
+        font-size: var(--keel-type-row);
         line-height: 1.45;
         outline: none;
     }
@@ -1124,7 +1190,7 @@
     .k-split {
         display: flex;
         align-items: stretch;
-        height: 26px;
+        height: var(--keel-h-control);
         overflow: hidden;
         border-radius: var(--keel-r-chip);
         background: var(--keel-text);
@@ -1140,7 +1206,7 @@
         display: flex;
         align-items: center;
         gap: 5px;
-        font-size: 12px;
+        font-size: var(--keel-type-body);
         font-weight: 500;
         transition: background-color 110ms ease;
     }
@@ -1168,7 +1234,7 @@
         border-radius: 4px;
         background: color-mix(in srgb, var(--git) 14%, transparent);
         color: var(--git);
-        font-size: 10px;
+        font-size: var(--keel-type-micro);
         font-weight: 600;
         line-height: 1;
     }
@@ -1180,7 +1246,7 @@
         background: var(--keel-veil-2);
         color: var(--keel-text-dim);
         font-family: var(--keel-font-mono);
-        font-size: 10.5px;
+        font-size: var(--keel-type-micro);
         line-height: 18px;
     }
 
@@ -1195,7 +1261,7 @@
         background: var(--keel-veil-2);
         color: var(--keel-text-faint);
         font-family: inherit;
-        font-size: 10px;
+        font-size: var(--keel-type-micro);
     }
 
     .k-tag {
@@ -1206,7 +1272,7 @@
         border-radius: 5px;
         background: var(--keel-veil-2);
         color: var(--keel-text-dim);
-        font-size: 10.5px;
+        font-size: var(--keel-type-micro);
         font-weight: 500;
     }
 
@@ -1240,11 +1306,11 @@
         align-items: center;
         justify-content: center;
         gap: 6px;
-        height: 26px;
+        height: var(--keel-h-control);
         padding: 0 9px;
         border-radius: calc(var(--keel-r-control) - 2px);
-        color: var(--keel-text-faint);
-        font-size: 12px;
+        color: var(--keel-text-dim);
+        font-size: var(--keel-type-body);
         font-weight: 500;
         transition:
             background-color 110ms ease,
@@ -1410,7 +1476,7 @@
         margin-inline: auto;
         border-radius: var(--keel-r-control);
         color: var(--keel-text-dim);
-        font-size: 12px;
+        font-size: var(--keel-type-body);
         font-weight: 500;
         letter-spacing: 0.01em;
         cursor: default;
@@ -1500,7 +1566,7 @@
         background: color-mix(in srgb, var(--keel-text) 18%, var(--keel-chrome));
         box-shadow: 0 0 0 2px var(--keel-chrome);
         color: var(--keel-text);
-        font-size: 9.5px;
+        font-size: var(--keel-type-micro);
         font-weight: 600;
         font-variant-numeric: tabular-nums;
         line-height: 1;
@@ -1729,6 +1795,23 @@
 }
 
 /*
+ * A strip that scrolls with nothing to show for it: the editor's tabs, the
+ * rail's tiles. Unlayered for the same reason — a Tailwind `scrollbar-width`
+ * utility is layered and loses to the `*` above, so it silently did nothing
+ * and a classic scrollbar took a bite out of a 24px strip of tabs instead.
+ * The `::-webkit-scrollbar` half covers runtimes older than `scrollbar-width`.
+ */
+.k-scroll-hidden {
+    scrollbar-width: none;
+    scrollbar-gutter: auto;
+}
+
+.k-scroll-hidden::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+}
+
+/*
  * Tooltips — every `title` in the app is drawn here (see TitleTips.tsx), and
  * the rail tips borrow the same surface. The top of the stack, so it takes the
  * dialog value, the strong hairline and the lift; one small radius, no arrow.
@@ -1761,7 +1844,7 @@
         inset 0 1px 0 var(--keel-sheen),
         var(--keel-lift);
     color: var(--keel-text);
-    font-size: 12px;
+    font-size: var(--keel-type-body);
     line-height: 1.35;
 }
 
@@ -1786,7 +1869,7 @@
     padding-top: 4px;
     border-top: 1px solid var(--keel-line);
     color: var(--keel-text-dim);
-    font-size: 11.5px;
+    font-size: var(--keel-type-small);
 }
 
 .k-tip-keys {
@@ -1804,7 +1887,7 @@
     box-shadow: inset 0 -1px 0 var(--keel-line-strong);
     color: var(--keel-text-dim);
     font-family: inherit;
-    font-size: 10.5px;
+    font-size: var(--keel-type-micro);
     font-weight: 500;
     text-align: center;
 }

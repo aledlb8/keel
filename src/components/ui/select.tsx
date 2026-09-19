@@ -30,7 +30,7 @@ function SelectValue({
 const TRIGGER = {
   /** A form field: bordered, full width, matches the text inputs. */
   field:
-    "h-9 w-full justify-between rounded-[var(--keel-r-control)] border border-line-strong bg-veil pl-3 pr-2.5 text-[13px] hover:border-foreground/20 hover:bg-veil-2 focus-visible:border-foreground/40 data-[state=open]:border-foreground/40 data-[state=open]:bg-veil-2",
+    "h-9 w-full justify-between rounded-[var(--keel-r-control)] border border-line-strong bg-veil pl-3 pr-2.5 text-row hover:border-foreground/20 hover:bg-veil-2 focus-visible:border-foreground/40 data-[state=open]:border-foreground/40 data-[state=open]:bg-veil-2",
   /** Inline in a line of text: no box until you reach for it, like a button. */
   ghost:
     "h-8 rounded-[var(--keel-r-control)] pl-2 pr-1.5 hover:bg-veil-2 focus-visible:bg-veil-2 data-[state=open]:bg-veil-2",
@@ -105,7 +105,7 @@ function SelectLabel({
   return (
     <SelectPrimitive.Label
       data-slot="select-label"
-      className={cn("px-2.5 pt-1 pb-1.5 text-[11px] font-medium text-faint", className)}
+      className={cn("px-2.5 pt-1 pb-1.5 text-small font-medium text-faint", className)}
       {...props}
     />
   )
@@ -120,7 +120,7 @@ function SelectItem({
     <SelectPrimitive.Item
       data-slot="select-item"
       className={cn(
-        "relative flex w-full cursor-default items-center gap-2 rounded-[var(--keel-r-chip)] py-[7px] pr-8 pl-2.5 text-[13px] outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0",
+        "relative flex w-full cursor-default items-center gap-2 rounded-[var(--keel-r-chip)] py-[7px] pr-8 pl-2.5 text-row outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0",
         className
       )}
       {...props}

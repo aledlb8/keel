@@ -242,10 +242,10 @@ export function Island({ actions, onNavigate }: IslandProps) {
       content = (
         <span className="flex h-full items-center gap-2.5 pl-3 pr-[3px]">
           <StatusLight tone="error" color="var(--keel-dead)" size={7} />
-          <span className="text-[12px] font-medium text-foreground">
+          <span className="text-body font-medium text-foreground">
             Keel isn&apos;t responding
           </span>
-          <span className="text-[12px] text-faint">Terminals keep running</span>
+          <span className="text-body text-faint">Terminals keep running</span>
           <IslandChip onClick={retryHost}>Retry</IslandChip>
         </span>
       );
@@ -257,9 +257,9 @@ export function Island({ actions, onNavigate }: IslandProps) {
       content = (
         <span className="flex h-full items-center gap-2.5 px-3">
           <LoaderCircle className="size-3.5 animate-spin text-faint" />
-          <span className="text-[12px] text-dim">Reopening terminals</span>
+          <span className="text-body text-dim">Reopening terminals</span>
           {progress && progress.total > 0 ? (
-            <span className="text-[12px] tabular-nums text-faint">
+            <span className="text-body tabular-nums text-faint">
               {progress.done} of {progress.total}
             </span>
           ) : null}
@@ -277,9 +277,9 @@ export function Island({ actions, onNavigate }: IslandProps) {
           className="flex h-full items-center gap-2.5 px-3 outline-none"
         >
           <StatusLight tone="connecting" color="var(--keel-working)" size={7} />
-          <span className="text-[12px] text-dim">Connecting VPN</span>
+          <span className="text-body text-dim">Connecting VPN</span>
           {vpnProfile ? (
-            <span className="max-w-[180px] truncate text-[12px] text-faint">
+            <span className="max-w-[180px] truncate text-body text-faint">
               {vpnProfile}
             </span>
           ) : null}
@@ -299,9 +299,9 @@ export function Island({ actions, onNavigate }: IslandProps) {
             className="size-3.5"
             style={{ color: "var(--keel-done)" }}
           />
-          <span className="text-[12px] text-dim">VPN connected</span>
+          <span className="text-body text-dim">VPN connected</span>
           {vpnProfile ? (
-            <span className="max-w-[180px] truncate text-[12px] text-faint">
+            <span className="max-w-[180px] truncate text-body text-faint">
               {vpnProfile}
             </span>
           ) : null}
@@ -313,7 +313,7 @@ export function Island({ actions, onNavigate }: IslandProps) {
       label = "No agents waiting";
       content = (
         <span className="flex h-full items-center gap-2 px-3.5">
-          <span className="text-[12px] text-faint">No agents waiting</span>
+          <span className="text-body text-faint">No agents waiting</span>
         </span>
       );
       break;
@@ -340,15 +340,15 @@ export function Island({ actions, onNavigate }: IslandProps) {
           className="flex h-full items-center gap-2.5 pl-1 pr-[3px] outline-none"
         >
           <MarkStack panes={waiting.slice(-3).reverse()} agentById={agentById} />
-          <span className="text-[12px] font-medium text-foreground">
+          <span className="text-body font-medium text-foreground">
             {many
               ? `${waiting.length} agents waiting`
               : `${leadAgent?.name ?? "Shell"} finished`}
           </span>
-          <span className="max-w-[220px] truncate text-[12px] text-faint">
+          <span className="max-w-[220px] truncate text-body text-faint">
             {many ? `longest in ${lead.projectName}` : `in ${whereOf(lead)}`}
           </span>
-          <span className="flex h-5 items-center gap-1 rounded-full bg-foreground pl-2 pr-1.5 text-[11px] font-medium text-background">
+          <span className="flex h-5 items-center gap-1 rounded-full bg-foreground pl-2 pr-1.5 text-small font-medium text-background">
             Jump
             <ArrowUpRight className="size-3" />
           </span>
@@ -380,7 +380,7 @@ export function Island({ actions, onNavigate }: IslandProps) {
                     away. */}
                 <span className="flex min-w-0 items-center gap-2">
                   {group ? <WorkspaceMark name={group.name} size={16} /> : null}
-                  <span className="max-w-[220px] truncate text-[12px] text-dim transition-colors group-hover/rest:text-foreground">
+                  <span className="max-w-[220px] truncate text-body text-dim transition-colors group-hover/rest:text-foreground">
                     {project.name}
                   </span>
                 </span>
@@ -390,14 +390,14 @@ export function Island({ actions, onNavigate }: IslandProps) {
                       aria-hidden
                       className="h-3 w-px shrink-0 bg-line-strong"
                     />
-                    <span className="max-w-[160px] truncate text-[12px] text-faint transition-colors group-hover/rest:text-dim">
+                    <span className="max-w-[160px] truncate text-body text-faint transition-colors group-hover/rest:text-dim">
                       {deck.name}
                     </span>
                   </>
                 ) : null}
               </>
             ) : (
-              <span className="flex items-center gap-1.5 text-[12px] text-faint transition-colors group-hover/rest:text-dim">
+              <span className="flex items-center gap-1.5 text-body text-faint transition-colors group-hover/rest:text-dim">
                 <Search className="size-3" />
                 Go to…
               </span>
@@ -412,7 +412,7 @@ export function Island({ actions, onNavigate }: IslandProps) {
                 "nextWaiting",
               )}
               aria-label={`${waiting.length} agents waiting`}
-              className="-ml-1 mr-[3px] flex h-5 items-center gap-1.5 rounded-full pl-1.5 pr-2 text-[11px] font-semibold tabular-nums outline-none transition-[filter] hover:brightness-125"
+              className="-ml-1 mr-[3px] flex h-5 items-center gap-1.5 rounded-full pl-1.5 pr-2 text-small font-semibold tabular-nums outline-none transition-[filter] hover:brightness-125"
               style={{
                 color: "var(--keel-done)",
                 background:
@@ -472,7 +472,7 @@ export function Island({ actions, onNavigate }: IslandProps) {
           onPointerLeave={() => setHovered(false)}
           data-moment={moment}
           className={cn(
-            "k-island relative h-[26px] max-w-full shrink-0 overflow-hidden rounded-full",
+            "k-island relative h-[var(--keel-h-control)] max-w-full shrink-0 overflow-hidden rounded-full",
             moment === "host-lost"
               ? "bg-[color:color-mix(in_srgb,var(--keel-dead)_14%,transparent)]"
               : moment === "rest"
@@ -563,7 +563,7 @@ function IslandChip({
     <button
       type="button"
       onClick={onClick}
-      className="flex h-5 items-center rounded-full bg-foreground px-2.5 text-[11px] font-medium text-background outline-none transition-opacity hover:opacity-85"
+      className="flex h-5 items-center rounded-full bg-foreground px-2.5 text-small font-medium text-background outline-none transition-opacity hover:opacity-85"
     >
       {children}
     </button>
@@ -712,7 +712,7 @@ function Switcher({
         paneEntry(
           entry,
           "Waiting",
-          <span className="flex items-center gap-1.5 text-[11px] text-dim">
+          <span className="flex items-center gap-1.5 text-small text-dim">
             <span className="size-1.5 rounded-full bg-[color:var(--keel-done)]" />
             {sinceLabel(entry.since, now)}
           </span>,
@@ -722,7 +722,7 @@ function Switcher({
         paneEntry(
           entry,
           "Working",
-          <span className="flex items-center gap-2 text-[11px] text-faint">
+          <span className="flex items-center gap-2 text-small text-faint">
             <StatusLight tone="connecting" color="var(--keel-working)" size={6} />
             Working
           </span>,
@@ -753,13 +753,13 @@ function Switcher({
           search: [deck.name, project.name, String(index + 1)],
           leading: (
             <Tile>
-              <span className="text-[11px] font-semibold tabular-nums">
+              <span className="text-small font-semibold tabular-nums">
                 {index + 1}
               </span>
             </Tile>
           ),
           trailing: (
-            <span className="text-[11px] text-faint">
+            <span className="text-small text-faint">
               {current ? "Current" : `${count} ${count === 1 ? "terminal" : "terminals"}`}
             </span>
           ),
@@ -795,7 +795,7 @@ function Switcher({
         ],
         leading: <Tile>{monogram(workspace.name)}</Tile>,
         trailing: (
-          <span className="text-[11px] text-faint">
+          <span className="text-small text-faint">
             {workspace.projectIds.includes(activeProjectId ?? "")
               ? "Current"
               : count
@@ -830,7 +830,7 @@ function Switcher({
           </Tile>
         ),
         trailing: (
-          <span className="text-[11px] text-faint">
+          <span className="text-small text-faint">
             {project.id === activeProjectId
               ? "Current"
               : `${count} ${count === 1 ? "terminal" : "terminals"}`}
@@ -952,7 +952,7 @@ function Switcher({
           aria-activedescendant={visible[active] ? `island-${visible[active].id}` : undefined}
           spellCheck={false}
           autoComplete="off"
-          className="min-w-0 flex-1 bg-transparent text-[14px] text-foreground outline-none placeholder:text-faint"
+          className="min-w-0 flex-1 bg-transparent text-title text-foreground outline-none placeholder:text-faint"
         />
         <Keys>Esc</Keys>
       </label>
@@ -965,7 +965,7 @@ function Switcher({
         className="max-h-[min(440px,60vh)] overflow-y-auto py-1.5"
       >
         {visible.length === 0 ? (
-          <p className="px-4 py-8 text-center text-[13px] text-faint">
+          <p className="px-4 py-8 text-center text-row text-faint">
             Nothing matches &ldquo;{query.trim()}&rdquo;
           </p>
         ) : (
@@ -974,10 +974,10 @@ function Switcher({
             return (
               <div key={entry.id}>
                 {first ? (
-                  <p className="flex items-center gap-2 px-4 pb-1 pt-2.5 text-[11px] font-medium text-faint">
+                  <p className="flex items-center gap-2 px-4 pb-1 pt-2.5 text-small font-medium text-faint">
                     {entry.group}
                     {entry.group === "Waiting" ? (
-                      <span className="rounded-full bg-[color:color-mix(in_srgb,var(--keel-done)_15%,transparent)] px-1.5 text-[10px] font-semibold leading-4 tabular-nums text-[color:var(--keel-done)]">
+                      <span className="rounded-full bg-[color:color-mix(in_srgb,var(--keel-done)_15%,transparent)] px-1.5 text-micro font-semibold leading-4 tabular-nums text-[color:var(--keel-done)]">
                         {waiting.length}
                       </span>
                     ) : null}
@@ -999,11 +999,11 @@ function Switcher({
                 >
                   {entry.leading}
                   <span className="flex min-w-0 flex-1 flex-col">
-                    <span className="truncate text-[13px] text-foreground">
+                    <span className="truncate text-row text-foreground">
                       {entry.label}
                     </span>
                     {entry.detail ? (
-                      <span className="truncate text-[11px] text-faint">
+                      <span className="truncate text-small text-faint">
                         {entry.detail}
                       </span>
                     ) : null}
@@ -1018,7 +1018,7 @@ function Switcher({
         )}
       </div>
 
-      <footer className="flex h-9 shrink-0 items-center gap-4 border-t border-line px-4 text-[11px] text-faint">
+      <footer className="flex h-9 shrink-0 items-center gap-4 border-t border-line px-4 text-small text-faint">
         <span className="flex items-center gap-1.5">
           <Keys>↑</Keys>
           <Keys>↓</Keys>
@@ -1049,7 +1049,7 @@ function Tile({ children }: { children: ReactNode }) {
 
 function Keys({ children }: { children: ReactNode }) {
   return (
-    <kbd className="inline-grid h-[18px] min-w-[18px] shrink-0 place-items-center rounded-[4px] px-1 font-sans text-[10px] font-medium text-faint shadow-[inset_0_0_0_1px_var(--keel-line-strong),inset_0_-1px_0_0_var(--keel-line-strong)]">
+    <kbd className="inline-grid h-[18px] min-w-[18px] shrink-0 place-items-center rounded-[4px] px-1 font-sans text-micro font-medium text-faint shadow-[inset_0_0_0_1px_var(--keel-line-strong),inset_0_-1px_0_0_var(--keel-line-strong)]">
       {children}
     </kbd>
   );

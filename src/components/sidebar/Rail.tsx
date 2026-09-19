@@ -115,7 +115,7 @@ export function Rail({
                 onSelect={() => onScope(option.scope)}
               >
                 <span className="min-w-0 flex-1 truncate">{option.name}</span>
-                <span className="text-[11px] tabular-nums text-faint">
+                <span className="text-small tabular-nums text-faint">
                   {option.count}
                 </span>
                 <Check
@@ -151,7 +151,7 @@ export function Rail({
 
         <span aria-hidden className="k-rail-rule" />
 
-        <div className="flex min-h-0 w-full flex-1 flex-col items-center gap-1 overflow-y-auto overflow-x-hidden pb-2 [scrollbar-width:none]">
+        <div className="k-scroll-hidden flex min-h-0 w-full flex-1 flex-col items-center gap-1 overflow-y-auto overflow-x-hidden pb-2">
           {entries.map((entry, index) => {
             const project = entry.project;
             const total = project.decks.reduce(

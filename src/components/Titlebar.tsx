@@ -143,7 +143,7 @@ export function Titlebar({
           className="flex items-center gap-2 pr-2.5 text-dim"
         >
           <KeelMark />
-          <span className="text-[13px] font-medium tracking-[0.01em] text-dim">
+          <span className="text-row font-medium tracking-[0.01em] text-dim">
             Keel
           </span>
         </span>

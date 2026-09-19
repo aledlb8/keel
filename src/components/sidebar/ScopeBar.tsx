@@ -98,7 +98,7 @@ function Switcher({ scope, options, workspaces, onScope }: SwitcherProps) {
       <DropdownMenuTrigger asChild>
         <button type="button" className="k-scope" aria-label="Switch workspace">
           <ScopeMark scope={scope} workspaces={workspaces} />
-          <span className="min-w-0 flex-1 truncate text-left text-[13px] font-medium text-foreground">
+          <span className="min-w-0 flex-1 truncate text-left text-row font-medium text-foreground">
             {scopeName(scope, workspaces)}
           </span>
           {current?.count ? (
@@ -118,7 +118,7 @@ function Switcher({ scope, options, workspaces, onScope }: SwitcherProps) {
           >
             <ScopeMark scope={option.scope} workspaces={workspaces} size={16} />
             <span className="min-w-0 flex-1 truncate">{option.name}</span>
-            <span className="text-[11px] tabular-nums text-faint">
+            <span className="text-small tabular-nums text-faint">
               {option.count}
             </span>
             <Check
@@ -257,7 +257,7 @@ export function ScopeBar({
               else event.currentTarget.blur();
             }
           }}
-          className="min-w-0 flex-1 bg-transparent text-[12px] text-foreground outline-none placeholder:text-faint"
+          className="min-w-0 flex-1 bg-transparent text-body text-foreground outline-none placeholder:text-faint"
         />
         {query ? (
           <button

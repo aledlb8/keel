@@ -260,7 +260,7 @@ export function GitPanel() {
       />
 
       {gitError ? (
-        <p className="mx-[var(--keel-inset)] mb-2 rounded-[var(--keel-r-control)] bg-[color:var(--keel-dead)]/10 px-2.5 py-2 text-[12px] leading-snug text-[color:var(--keel-dead)]">
+        <p className="mx-[var(--keel-inset)] mb-2 rounded-[var(--keel-r-control)] bg-[color:var(--keel-dead)]/10 px-2.5 py-2 text-body leading-snug text-[color:var(--keel-dead)]">
           {gitError}
         </p>
       ) : null}
@@ -268,7 +268,7 @@ export function GitPanel() {
       {/* A soft fade instead of a rule where the list slides under the box. */}
       <div className="min-h-0 flex-1 overflow-y-auto pb-3 pt-1 [mask-image:linear-gradient(to_bottom,transparent,black_10px)]">
         {!git ? (
-          <p className="px-[calc(var(--keel-inset)+8px)] py-2 text-[12px] text-faint">
+          <p className="px-[calc(var(--keel-inset)+8px)] py-2 text-body text-faint">
             {gitLoading ? "Reading git status…" : "Git status isn't available."}
           </p>
         ) : changeCount === 0 ? (
@@ -421,7 +421,7 @@ function BranchBar({
             className="k-field k-field-button min-w-0 flex-1"
           >
             <GitBranch aria-hidden className="size-3.5 shrink-0" />
-            <span className="min-w-0 flex-1 truncate text-left text-[12.5px] font-medium text-foreground">
+            <span className="min-w-0 flex-1 truncate text-left text-body font-medium text-foreground">
               {current}
             </span>
             <ChevronDown aria-hidden className="size-3 shrink-0" />
@@ -528,7 +528,7 @@ function SyncButton({
       className="k-seg-btn gap-1 px-[7px] disabled:opacity-40"
     >
       {children}
-      {count ? <span className="text-[11px] tabular-nums">{count}</span> : null}
+      {count ? <span className="text-small tabular-nums">{count}</span> : null}
     </button>
   );
 }
@@ -582,7 +582,7 @@ function Composer({
         />
         <div className="flex items-center gap-2 pb-1.5 pl-2.5 pr-1.5">
           <span
-            className="min-w-0 flex-1 truncate text-[11px] text-faint"
+            className="min-w-0 flex-1 truncate text-small text-faint"
             title="Ctrl+Enter commits, Ctrl+Shift+Enter commits and pushes"
           >
             {summary}
@@ -638,8 +638,8 @@ function CleanTree({ git }: { git: GitStatus }) {
         <Check className="size-3.5 text-[color:var(--keel-done)]" />
       </span>
       <span className="min-w-0">
-        <span className="block text-[12.5px] text-dim">No local changes</span>
-        <span className="block truncate text-[11px] text-faint">{detail}</span>
+        <span className="block text-body text-dim">No local changes</span>
+        <span className="block truncate text-small text-faint">{detail}</span>
       </span>
     </div>
   );
@@ -683,7 +683,7 @@ function Section({
               open && "rotate-90",
             )}
           />
-          <span className="truncate text-[11px] font-medium text-faint transition-colors group-hover/section:text-dim">
+          <span className="truncate text-small font-medium text-faint transition-colors group-hover/section:text-dim">
             {title}
           </span>
           {count ? <span className="k-count">{count}</span> : null}
@@ -774,7 +774,7 @@ function ChangeGroup({
       zone={zone}
     >
       {placeholder ? (
-        <div className="k-row h-[28px] justify-center text-[12px] text-faint">
+        <div className="k-row k-row-dense justify-center text-body text-faint">
           {action === "stage" ? "Drop to stage" : "Drop to unstage"}
         </div>
       ) : (
@@ -894,7 +894,7 @@ function ChangeRow({
             dnd?.setDrag(null);
             dnd?.setOver(null);
           }}
-          className="k-row group/change h-[28px] gap-2"
+          className="k-row group/change k-row-dense gap-2"
           onClick={(event) => {
             if (!isControl(event.target)) openDiff();
           }}
@@ -921,7 +921,7 @@ function ChangeRow({
               {name}
             </span>
             {parent ? (
-              <span className="min-w-0 truncate text-[11px] text-faint">{parent}</span>
+              <span className="min-w-0 truncate text-small text-faint">{parent}</span>
             ) : null}
           </span>
 
@@ -1002,7 +1002,7 @@ function RowIcon({
 
 function Hint({ children }: { children: ReactNode }) {
   return (
-    <p className="px-[calc(var(--keel-inset)+8px)] pb-1.5 pt-0.5 text-[12px] leading-relaxed text-faint">
+    <p className="px-[calc(var(--keel-inset)+8px)] pb-1.5 pt-0.5 text-body leading-relaxed text-faint">
       {children}
     </p>
   );
@@ -1092,7 +1092,7 @@ function BranchList({
           tabIndex={0}
           aria-current={item.current || undefined}
           title={item.upstream ? `${item.name} → ${item.upstream}` : item.name}
-          className="k-row group/branch h-[28px] gap-2"
+          className="k-row group/branch k-row-dense gap-2"
           onClick={(event) => {
             if (!isControl(event.target) && !item.current) checkout(item.name);
           }}
@@ -1136,7 +1136,7 @@ function BranchList({
 
       {remote.length > 0 ? (
         <>
-          <p className="px-[calc(var(--keel-inset)+8px)] pb-0.5 pt-2 text-[11px] text-faint">
+          <p className="px-[calc(var(--keel-inset)+8px)] pb-0.5 pt-2 text-small text-faint">
             Remote
           </p>
           {remote.map((item) => (
@@ -1145,7 +1145,7 @@ function BranchList({
               role="button"
               tabIndex={0}
               title={`Check out ${item.name}`}
-              className="k-row h-[28px] gap-2"
+              className="k-row k-row-dense gap-2"
               onClick={() => checkout(item.name)}
               onKeyDown={(event) => {
                 if (event.key === "Enter" || event.key === " ") {
@@ -1193,7 +1193,7 @@ function PullRequests({ prs, busy }: { prs: PrList | null; busy: boolean }) {
         <button
           type="button"
           onClick={() => setComposing(true)}
-          className="k-row h-[28px] gap-2 text-faint hover:text-dim"
+          className="k-row k-row-dense gap-2 text-faint hover:text-dim"
         >
           <Plus aria-hidden className="size-3.5 shrink-0" />
           New pull request
@@ -1235,7 +1235,7 @@ function PrRow({ pr, busy }: { pr: PullRequest; busy: boolean }) {
       />
       <span className="min-w-0 flex-1">
         <span className="block truncate leading-5 text-dim">{pr.title}</span>
-        <span className="block truncate text-[11px] leading-4 text-faint">
+        <span className="block truncate text-small leading-4 text-faint">
           <span className="tabular-nums">#{pr.number}</span> · {pr.head} → {pr.base}
         </span>
       </span>
@@ -1356,7 +1356,7 @@ function History({ commits }: { commits: GitCommit[] }) {
           <span className="k-hash mt-px">{commit.short}</span>
           <span className="min-w-0 flex-1">
             <span className="block truncate leading-5 text-dim">{commit.subject}</span>
-            <span className="block truncate text-[11px] leading-4 text-faint">
+            <span className="block truncate text-small leading-4 text-faint">
               {commit.author}
               {commit.timestamp ? ` · ${relativeTime(commit.timestamp)}` : ""}
             </span>

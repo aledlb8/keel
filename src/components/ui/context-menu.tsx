@@ -27,7 +27,7 @@ export const MENU_SURFACE =
 const SURFACE = `${MENU_SURFACE} max-h-(--radix-context-menu-content-available-height) origin-(--radix-context-menu-content-transform-origin)`;
 
 export const MENU_ITEM =
-  "relative flex h-[30px] cursor-default items-center gap-2.5 rounded-[var(--keel-r-chip)] px-2.5 text-[13px] text-foreground outline-hidden select-none focus:bg-veil-3 data-disabled:pointer-events-none data-disabled:opacity-40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5 [&_svg]:text-dim focus:[&_svg]:text-foreground";
+  "relative flex h-[var(--keel-h-row)] cursor-default items-center gap-2.5 rounded-[var(--keel-r-chip)] px-2.5 text-row text-foreground outline-hidden select-none focus:bg-veil-3 data-disabled:pointer-events-none data-disabled:opacity-40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5 [&_svg]:text-dim focus:[&_svg]:text-foreground";
 
 export const MENU_DESTRUCTIVE =
   "data-[variant=destructive]:text-[color:var(--keel-dead)] data-[variant=destructive]:[&_svg]:text-[color:var(--keel-dead)] data-[variant=destructive]:focus:bg-[color-mix(in_srgb,var(--keel-dead)_16%,transparent)]";
@@ -124,7 +124,7 @@ function ContextMenuLabel({
     <Primitive.Label
       data-slot="context-menu-label"
       className={cn(
-        "truncate px-2.5 pb-1 pt-1.5 text-[11px] font-medium text-faint",
+        "truncate px-2.5 pb-1 pt-1.5 text-small font-medium text-faint",
         className,
       )}
       {...props}
@@ -139,7 +139,7 @@ function ContextMenuShortcut({
   return (
     <span
       data-slot="context-menu-shortcut"
-      className={cn("ml-auto pl-5 text-[11px] tracking-wide text-faint", className)}
+      className={cn("ml-auto pl-5 text-small tracking-wide text-faint", className)}
       {...props}
     />
   );

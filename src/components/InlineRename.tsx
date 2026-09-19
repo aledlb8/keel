@@ -59,7 +59,7 @@ export function InlineRename({
       onClick={(event) => event.stopPropagation()}
       onDoubleClick={(event) => event.stopPropagation()}
       className={cn(
-        "h-6 min-w-0 flex-1 rounded-[var(--keel-r-chip)] border border-foreground/25 bg-veil-2 px-1.5 text-[13px] text-foreground outline-none selection:bg-foreground/20",
+        "h-6 min-w-0 flex-1 rounded-[var(--keel-r-chip)] border border-foreground/25 bg-veil-2 px-1.5 text-row text-foreground outline-none selection:bg-foreground/20",
         className,
       )}
     />

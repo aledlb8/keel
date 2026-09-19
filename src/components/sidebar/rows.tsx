@@ -236,7 +236,7 @@ export function Count({
   return (
     <span
       className={cn(
-        "shrink-0 pr-0.5 text-[11px] tabular-nums text-faint",
+        "shrink-0 pr-0.5 text-small tabular-nums text-faint",
         className,
       )}
     >

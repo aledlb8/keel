@@ -88,7 +88,7 @@ type Field = "name" | "command" | "short" | "accent" | "accountEnv";
 type Problems = Partial<Record<Field, string>>;
 
 const FIELD =
-  "w-full min-w-0 rounded-[var(--keel-r-control)] border border-line-strong bg-veil px-2.5 text-[12px] text-foreground outline-none transition-colors placeholder:text-faint hover:border-foreground/20 focus:border-foreground/40 focus:bg-veil-2 aria-invalid:border-[color:var(--keel-dead)]/70";
+  "w-full min-w-0 rounded-[var(--keel-r-control)] border border-line-strong bg-veil px-2.5 text-body text-foreground outline-none transition-colors placeholder:text-faint hover:border-foreground/20 focus:border-foreground/40 focus:bg-veil-2 aria-invalid:border-[color:var(--keel-dead)]/70";
 
 function expandHex(value: string): string | null {
   const match = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(value.trim());
@@ -426,14 +426,14 @@ export function AgentSettingsDialog() {
       >
         <aside className="flex min-h-0 flex-col bg-[color:var(--keel-chrome)] shadow-[inset_-1px_0_0_0_var(--keel-line)]">
           <div className="flex h-[52px] shrink-0 items-center gap-2 pl-4 pr-2">
-            <DialogTitle className="text-[13px] font-semibold">
+            <DialogTitle className="text-row font-semibold">
               Agents
             </DialogTitle>
             <DialogDescription className="sr-only">
               Choose how each agent starts, how it looks, and which sign-ins it
               can use.
             </DialogDescription>
-            <span className="text-[12px] tabular-nums text-faint">
+            <span className="text-body tabular-nums text-faint">
               {drafts.length}
             </span>
             <span className="flex-1" />
@@ -535,7 +535,7 @@ export function AgentSettingsDialog() {
                 <button
                   type="button"
                   onClick={addAgent}
-                  className="flex flex-col items-center gap-3 rounded-[var(--keel-r-window)] border border-dashed border-line-strong px-10 py-8 text-[13px] text-dim transition-colors hover:border-foreground/25 hover:bg-veil hover:text-foreground"
+                  className="flex flex-col items-center gap-3 rounded-[var(--keel-r-window)] border border-dashed border-line-strong px-10 py-8 text-row text-dim transition-colors hover:border-foreground/25 hover:bg-veil hover:text-foreground"
                 >
                   <span className="grid size-9 place-items-center rounded-full bg-veil-2">
                     <Plus className="size-4" />
@@ -615,7 +615,7 @@ function RailAction({
       title={title}
       onClick={onClick}
       disabled={disabled}
-      className="flex h-7 items-center gap-1.5 rounded-[var(--keel-r-chip)] px-2 text-[12px] text-faint transition-colors hover:bg-veil-2 hover:text-foreground disabled:pointer-events-none"
+      className="flex h-7 items-center gap-1.5 rounded-[var(--keel-r-chip)] px-2 text-body text-faint transition-colors hover:bg-veil-2 hover:text-foreground disabled:pointer-events-none"
     >
       {children}
     </button>
@@ -647,7 +647,7 @@ function SaveIndicator({
       role="status"
       title={state === "error" ? (error ?? undefined) : undefined}
       className={cn(
-        "flex items-center gap-1.5 text-[12px] animate-in fade-in-0",
+        "flex items-center gap-1.5 text-body animate-in fade-in-0",
         tone,
       )}
     >
@@ -677,7 +677,7 @@ function AgentMenu({
   if (confirming) {
     return (
       <span className="mr-1 flex items-center gap-2 animate-in fade-in-0">
-        <span className="text-[12px] text-dim">
+        <span className="text-body text-dim">
           Delete {agent.name.trim() || "this agent"}?
           {openPanes > 0 ? (
             <span className="text-faint">
@@ -776,7 +776,7 @@ function AgentEditor({
             aria-label="Name"
             aria-invalid={Boolean(problems.name)}
             spellCheck={false}
-            className="-ml-1.5 h-9 w-full rounded-[var(--keel-r-control)] bg-transparent px-1.5 text-[22px] font-semibold tracking-[-0.02em] text-foreground outline-none transition-colors placeholder:text-faint hover:bg-veil focus:bg-veil-2"
+            className="-ml-1.5 h-9 w-full rounded-[var(--keel-r-control)] bg-transparent px-1.5 text-display font-semibold tracking-[-0.02em] text-foreground outline-none transition-colors placeholder:text-faint hover:bg-veil focus:bg-veil-2"
           />
           {problems.name ? (
             <FieldError message={problems.name} />
@@ -802,7 +802,7 @@ function AgentEditor({
         {problems.command ? (
           <FieldError message={problems.command} />
         ) : (
-          <p className="text-[12px] text-faint">
+          <p className="text-body text-faint">
             Typed into a new shell each time one of these terminals opens.
           </p>
         )}
@@ -852,7 +852,7 @@ function AgentEditor({
 function Availability({ agent }: { agent: Agent }) {
   const colour = agent.installed ? "var(--keel-done)" : "var(--keel-idle)";
   return (
-    <p className="mt-0.5 flex min-w-0 items-center gap-2 text-[12px]">
+    <p className="mt-0.5 flex min-w-0 items-center gap-2 text-body">
       <span
         aria-hidden
         className="size-1.5 shrink-0 rounded-full"
@@ -868,14 +868,14 @@ function Availability({ agent }: { agent: Agent }) {
       </span>
       {agent.installed && agent.path ? (
         <span
-          className="min-w-0 truncate font-mono text-[11px] text-faint"
+          className="min-w-0 truncate font-mono text-small text-faint"
           title={agent.path}
         >
           {agent.path}
         </span>
       ) : null}
       {agent.hidden ? (
-        <span className="shrink-0 rounded-full bg-veil-2 px-2 py-0.5 text-[11px] leading-none text-dim">
+        <span className="shrink-0 rounded-full bg-veil-2 px-2 py-0.5 text-small leading-none text-dim">
           Hidden from the launcher
         </span>
       ) : null}
@@ -895,9 +895,9 @@ function SectionHeading({
   return (
     <div className="flex items-end gap-3">
       <div className="min-w-0 flex-1">
-        <h3 className="text-[13px] font-medium text-foreground">{title}</h3>
+        <h3 className="text-row font-medium text-foreground">{title}</h3>
         {detail ? (
-          <p className="mt-0.5 text-[12px] text-faint">{detail}</p>
+          <p className="mt-0.5 text-body text-faint">{detail}</p>
         ) : null}
       </div>
       {children}
@@ -908,7 +908,7 @@ function SectionHeading({
 function FieldError({ message }: { message?: string | undefined }) {
   if (!message) return null;
   return (
-    <p className="mt-0.5 text-[12px] text-[color:var(--keel-dead)] animate-in fade-in-0">
+    <p className="mt-0.5 text-body text-[color:var(--keel-dead)] animate-in fade-in-0">
       {message}
     </p>
   );
@@ -952,11 +952,11 @@ function PanePreview({
           accent={accent}
           size={16}
         />
-        <span className="min-w-0 truncate text-[12px] text-dim">
+        <span className="min-w-0 truncate text-body text-dim">
           {agent.name.trim() || "Untitled"}
         </span>
         {profileName ? (
-          <span className="flex h-5 shrink-0 items-center gap-1 px-1.5 text-[11px] text-faint">
+          <span className="flex h-5 shrink-0 items-center gap-1 px-1.5 text-small text-faint">
             {profileName}
             <ChevronDown className="size-3" />
           </span>
@@ -975,7 +975,7 @@ function PanePreview({
         </span>
       </div>
 
-      <label className="flex cursor-text items-center gap-2.5 px-4 pb-8 pt-3 font-mono text-[13px]">
+      <label className="flex cursor-text items-center gap-2.5 px-4 pb-8 pt-3 font-mono text-row">
         <span aria-hidden style={{ color: accent }}>
           ❯
         </span>
@@ -1080,7 +1080,7 @@ function ColourPicker({
           spellCheck={false}
           aria-label="Hex colour"
           aria-invalid={Boolean(problem)}
-          className="h-7 w-[84px] rounded-[var(--keel-r-chip)] bg-transparent px-2 text-right font-mono text-[12px] text-dim outline-none transition-colors placeholder:text-faint hover:bg-veil focus:bg-veil-2 focus:text-foreground aria-invalid:text-[color:var(--keel-dead)]"
+          className="h-7 w-[84px] rounded-[var(--keel-r-chip)] bg-transparent px-2 text-right font-mono text-body text-dim outline-none transition-colors placeholder:text-faint hover:bg-veil focus:bg-veil-2 focus:text-foreground aria-invalid:text-[color:var(--keel-dead)]"
         />
       </div>
       <FieldError message={problem} />
@@ -1113,10 +1113,10 @@ function ProfilesOff({
       </span>
       <div className="flex min-w-0 flex-1 flex-col gap-3">
         <div>
-          <p className="text-[13px] font-medium text-foreground">
+          <p className="text-row font-medium text-foreground">
             Use more than one sign-in
           </p>
-          <p className="mt-1 max-w-[460px] text-[12px] leading-relaxed text-faint">
+          <p className="mt-1 max-w-[460px] text-body leading-relaxed text-faint">
             Profiles point {agentName} at a separate config folder. Enter the
             environment variable it reads that folder from to turn them on.
           </p>
@@ -1178,12 +1178,12 @@ function ProfileList({
           </span>
           <span className="flex min-w-0 flex-1 flex-col">
             <span className="flex min-w-0 items-center gap-2">
-              <span className="truncate text-[13px] text-foreground">
+              <span className="truncate text-row text-foreground">
                 Default
               </span>
               {chosen ? null : <NewTerminalsBadge />}
             </span>
-            <span className="text-[11px] text-faint">
+            <span className="text-small text-faint">
               The CLI&apos;s own sign-in
             </span>
           </span>
@@ -1219,7 +1219,7 @@ function ProfileList({
         <button
           type="button"
           onClick={add}
-          className="flex h-10 items-center gap-3 rounded-[var(--keel-r-control)] px-2.5 text-[13px] text-dim transition-colors hover:bg-veil-2 hover:text-foreground"
+          className="flex h-10 items-center gap-3 rounded-[var(--keel-r-control)] px-2.5 text-row text-dim transition-colors hover:bg-veil-2 hover:text-foreground"
         >
           <span className="grid size-7 shrink-0 place-items-center rounded-full border border-dashed border-line-strong">
             <Plus className="size-3.5" />
@@ -1227,7 +1227,7 @@ function ProfileList({
           Add profile
         </button>
       </div>
-      <p className="px-1 text-[11px] text-faint">
+      <p className="px-1 text-small text-faint">
         Each profile gets its own folder, handed to the CLI as{" "}
         <code className="font-mono text-dim">{env}</code>.
       </p>
@@ -1259,10 +1259,10 @@ function ProfileRow({
     return (
       <div className="flex h-12 items-center gap-3 rounded-[var(--keel-r-control)] bg-[color:color-mix(in_srgb,var(--keel-dead)_8%,transparent)] px-2.5 animate-in fade-in-0">
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-[13px] text-foreground">
+          <span className="block truncate text-row text-foreground">
             Remove {account.name}?
           </span>
-          <span className="block text-[11px] text-faint">
+          <span className="block text-small text-faint">
             {usage > 0
               ? `${plural(usage, "terminal restarts", "terminals restart")} on Default.`
               : "Its sign-in folder stays on disk."}
@@ -1289,7 +1289,7 @@ function ProfileRow({
     >
       <span
         aria-hidden
-        className="grid size-7 shrink-0 place-items-center rounded-full text-[12px] font-semibold"
+        className="grid size-7 shrink-0 place-items-center rounded-full text-body font-semibold"
         style={{
           color: accent,
           background: `color-mix(in srgb, ${accent} 14%, transparent)`,
@@ -1313,7 +1313,7 @@ function ProfileRow({
         ) : (
           <span className="flex min-w-0 items-center gap-2">
             <span
-              className="truncate text-[13px] text-foreground"
+              className="truncate text-row text-foreground"
               title="Double-click to rename"
             >
               {account.name}
@@ -1321,7 +1321,7 @@ function ProfileRow({
             {account.isDefault ? <NewTerminalsBadge /> : null}
           </span>
         )}
-        <span className="text-[11px] text-faint">
+        <span className="text-small text-faint">
           {usage > 0
             ? `Open in ${plural(usage, "terminal", "terminals")}`
             : "Not in use"}
@@ -1357,7 +1357,7 @@ function NewTerminalsBadge() {
   return (
     <span
       title="New terminals start on this profile"
-      className="shrink-0 rounded-full bg-veil-2 px-2 py-[3px] text-[10px] font-medium leading-none text-dim"
+      className="shrink-0 rounded-full bg-veil-2 px-2 py-[3px] text-micro font-medium leading-none text-dim"
     >
       New terminals
     </span>
@@ -1414,7 +1414,7 @@ function Advanced({
         type="button"
         onClick={() => setOpen((previous) => !previous)}
         aria-expanded={open}
-        className="-ml-1 flex w-fit items-center gap-1.5 rounded-[var(--keel-r-chip)] px-1 py-0.5 text-[13px] font-medium text-dim transition-colors hover:text-foreground"
+        className="-ml-1 flex w-fit items-center gap-1.5 rounded-[var(--keel-r-chip)] px-1 py-0.5 text-row font-medium text-dim transition-colors hover:text-foreground"
       >
         <ChevronRight
           className={cn(
@@ -1473,7 +1473,7 @@ function Advanced({
             />
           </SettingRow>
           <SettingRow label="Catalogue id" hint="How saved layouts refer to it.">
-            <code className="flex h-8 items-center font-mono text-[12px] text-dim">
+            <code className="flex h-8 items-center font-mono text-body text-dim">
               {agent.id}
             </code>
           </SettingRow>
@@ -1499,9 +1499,9 @@ function SettingRow({
   return (
     <div className="grid grid-cols-[180px_minmax(0,1fr)] gap-x-6">
       <div className="pt-1.5">
-        <p className="text-[12px] text-dim">{label}</p>
+        <p className="text-body text-dim">{label}</p>
         {hint ? (
-          <p className="mt-1 text-[11px] leading-relaxed text-faint">{hint}</p>
+          <p className="mt-1 text-small leading-relaxed text-faint">{hint}</p>
         ) : null}
       </div>
       <div className="min-w-0">

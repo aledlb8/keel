@@ -171,13 +171,13 @@ export function PaneHeader({
       {renaming ? (
         <InlineRename
           value={pane.title}
-          className="h-5 max-w-56 flex-initial text-[12px]"
+          className="h-5 max-w-56 flex-initial text-body"
           onCommit={onRename}
           onDone={onStopRename}
         />
       ) : (
         <span
-          className="min-w-0 truncate text-[12px] text-dim"
+          className="k-pane-title min-w-0 truncate text-body"
           title="Double-click to rename"
           onDoubleClick={onStartRename}
         >
@@ -193,7 +193,7 @@ export function PaneHeader({
             <button
               type="button"
               title={`Profile: ${currentAccount?.name ?? "Default"}`}
-              className="flex h-5 min-w-0 max-w-32 items-center gap-1 rounded-[var(--keel-r-chip)] px-1.5 text-[11px] text-dim outline-none transition-colors duration-100 hover:bg-veil-2 hover:text-foreground focus-visible:bg-veil-2 data-[state=open]:bg-veil-2 data-[state=open]:text-foreground"
+              className="flex h-5 min-w-0 max-w-32 items-center gap-1 rounded-[var(--keel-r-chip)] px-1.5 text-small text-dim outline-none transition-colors duration-100 hover:bg-veil-2 hover:text-foreground focus-visible:bg-veil-2 data-[state=open]:bg-veil-2 data-[state=open]:text-foreground"
             >
               <span className="truncate">
                 {currentAccount?.name ?? "Default"}
@@ -244,7 +244,7 @@ export function PaneHeader({
 
       {exited ? (
         <>
-          <span className="ml-1 shrink-0 text-[11px] text-faint">
+          <span className="ml-1 shrink-0 text-small text-faint">
             Exited
           </span>
           <HeaderButton label="Relaunch" onClick={onRestart}>

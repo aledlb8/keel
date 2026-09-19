@@ -189,10 +189,10 @@ export function ShortcutsDialog({
         <header className="flex flex-col gap-4 px-5 pb-4 pt-5">
           <div className="flex items-start gap-3">
             <div className="min-w-0 flex-1">
-              <DialogTitle className="text-[15px] font-semibold tracking-[-0.01em]">
+              <DialogTitle className="text-title font-semibold tracking-[-0.01em]">
                 Keyboard shortcuts
               </DialogTitle>
-              <DialogDescription className="mt-1 text-[12px] leading-snug text-faint">
+              <DialogDescription className="mt-1 text-body leading-snug text-faint">
                 Click a shortcut to change it. Changes save as you make them.
               </DialogDescription>
             </div>
@@ -215,14 +215,14 @@ export function ShortcutsDialog({
                 placeholder="Search actions or keys"
                 aria-label="Search shortcuts"
                 spellCheck={false}
-                className="min-w-0 flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-faint"
+                className="min-w-0 flex-1 bg-transparent text-row text-foreground outline-none placeholder:text-faint"
               />
             </label>
 
             {customized.length > 0 ? (
               confirmReset ? (
                 <span className="flex shrink-0 items-center gap-1.5 animate-in fade-in-0">
-                  <span className="text-[12px] text-dim">
+                  <span className="text-body text-dim">
                     Reset {customized.length}{" "}
                     {customized.length === 1 ? "shortcut" : "shortcuts"}?
                   </span>
@@ -251,7 +251,7 @@ export function ShortcutsDialog({
                 >
                   <RotateCcw className="size-3.5" />
                   Reset all
-                  <span className="rounded-full bg-veil-2 px-1.5 text-[10px] font-semibold leading-4 tabular-nums text-dim">
+                  <span className="rounded-full bg-veil-2 px-1.5 text-micro font-semibold leading-4 tabular-nums text-dim">
                     {customized.length}
                   </span>
                 </Button>
@@ -262,7 +262,7 @@ export function ShortcutsDialog({
 
         <div className="min-h-0 overflow-y-auto border-t border-line px-5 pb-5">
           {visible.length === 0 ? (
-            <p className="py-12 text-center text-[13px] text-faint">
+            <p className="py-12 text-center text-row text-faint">
               No shortcut matches &ldquo;{query.trim()}&rdquo;
             </p>
           ) : (
@@ -271,7 +271,7 @@ export function ShortcutsDialog({
               if (rows.length === 0) return null;
               return (
                 <section key={group} className="pt-4">
-                  <h3 className="px-1 pb-1.5 text-[11px] font-medium text-faint">
+                  <h3 className="px-1 pb-1.5 text-small font-medium text-faint">
                     {group}
                   </h3>
                   <div className="flex flex-col gap-px rounded-[var(--keel-r-window)] bg-veil p-1 shadow-[inset_0_1px_0_0_var(--keel-sheen)]">
@@ -318,7 +318,7 @@ export function ShortcutsDialog({
         </div>
 
         <footer className="flex h-12 items-center gap-3 border-t border-line bg-veil px-5">
-          <p className="flex items-center gap-1.5 text-[11px] text-faint">
+          <p className="flex items-center gap-1.5 text-small text-faint">
             {recording ? (
               <>
                 Press the new shortcut, or <Cap muted>Esc</Cap> to stop
@@ -385,7 +385,7 @@ function ShortcutRow({
     >
       <div className="flex min-h-11 items-center gap-3 py-1.5 pl-3 pr-1.5">
         <div className="min-w-0 flex-1">
-          <p className="flex min-w-0 items-center gap-2 text-[13px] text-foreground">
+          <p className="flex min-w-0 items-center gap-2 text-row text-foreground">
             <span className="truncate">{shortcut.label}</span>
             {customized ? (
               <span
@@ -395,7 +395,7 @@ function ShortcutRow({
             ) : null}
           </p>
           {hint && recording ? (
-            <p className="mt-0.5 text-[11px] text-faint animate-in fade-in-0">{hint}</p>
+            <p className="mt-0.5 text-small text-faint animate-in fade-in-0">{hint}</p>
           ) : null}
         </div>
 
@@ -451,14 +451,14 @@ function ShortcutRow({
               {heldParts.length > 0 ? (
                 <Caps parts={heldParts} muted />
               ) : (
-                <span className="text-[12px] text-dim">Press a shortcut</span>
+                <span className="text-body text-dim">Press a shortcut</span>
               )}
               <span aria-hidden className="k-caret h-3.5 w-px bg-foreground/70" />
             </span>
           ) : binding ? (
             <Caps parts={bindingParts(binding, shortcut.family)} />
           ) : (
-            <span className="rounded-[5px] border border-dashed border-line-strong px-2 py-[3px] text-[11px] text-faint">
+            <span className="rounded-[5px] border border-dashed border-line-strong px-2 py-[3px] text-small text-faint">
               Not set
             </span>
           )}
@@ -466,7 +466,7 @@ function ShortcutRow({
       </div>
 
       {note ? (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 pb-2.5 pl-3 pr-1.5 text-[12px] animate-in fade-in-0 slide-in-from-top-1 duration-150">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 pb-2.5 pl-3 pr-1.5 text-body animate-in fade-in-0 slide-in-from-top-1 duration-150">
           {note.kind === "problem" ? (
             <p className="text-[color:var(--keel-dead)]">{note.text}</p>
           ) : note.kind === "warning" ? (
@@ -541,7 +541,7 @@ function Cap({
     <kbd
       className={cn(
         "inline-grid shrink-0 place-items-center rounded-[5px] font-sans font-medium shadow-[inset_0_0_0_1px_var(--keel-line-strong),inset_0_-1px_0_0_var(--keel-line-strong)]",
-        small ? "h-5 min-w-5 px-1 text-[10px]" : "h-6 min-w-6 px-1.5 text-[11px]",
+        small ? "h-5 min-w-5 px-1 text-micro" : "h-6 min-w-6 px-1.5 text-small",
         muted ? "text-faint" : "bg-veil-2 text-foreground",
       )}
     >

@@ -837,7 +837,7 @@ export const TerminalSurface = memo(function TerminalSurface({
       onMouseDown={() => onFocus(paneId)}
     >
       {needsVpnRestart ? (
-        <div role="status" className="flex shrink-0 items-center justify-between gap-3 border-b border-line bg-[color:var(--keel-term-solid)] px-3 py-2 text-[12px] text-dim">
+        <div role="status" className="flex shrink-0 items-center justify-between gap-3 border-b border-line bg-[color:var(--keel-term-solid)] px-3 py-2 text-body text-dim">
           <span>Restart this terminal to use the connected VPN.</span>
           <button
             type="button"
@@ -891,7 +891,7 @@ export const TerminalSurface = memo(function TerminalSurface({
             {vpnPhase === "error" && vpnWait ? null : (
               <LoaderCircle aria-hidden className="size-5 text-faint motion-safe:animate-spin" />
             )}
-            <p className="text-[13px] font-medium text-dim">
+            <p className="text-row font-medium text-dim">
               {vpnWait
                 ? vpnPhase === "error"
                   ? "VPN didn't connect"
@@ -900,7 +900,7 @@ export const TerminalSurface = memo(function TerminalSurface({
                   ? "Restoring terminal…"
                   : "Starting terminal…"}
             </p>
-            <p className="max-h-28 overflow-y-auto text-[12px] leading-relaxed break-words text-faint">
+            <p className="max-h-28 overflow-y-auto text-body leading-relaxed break-words text-faint">
               {vpnWait
                 ? vpnPhase === "error"
                   ? (vpnError ?? "The private tunnel did not come up.")

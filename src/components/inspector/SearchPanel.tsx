@@ -87,7 +87,7 @@ export function SearchPanel() {
         </button>
       </div>
 
-      <p className="px-[var(--keel-inset)] pb-2 text-[11px] text-faint">
+      <p className="px-[var(--keel-inset)] pb-2 text-small text-faint">
         Text files up to 1 MB. Hidden and ignored files excluded.
       </p>
 
@@ -105,13 +105,13 @@ export function SearchPanel() {
               <FileGroup key={group.rel} rel={group.rel} hits={group.hits} />
             ))}
             {grepTruncated ? (
-              <p className="px-[var(--keel-inset)] py-2 text-[11px] text-faint">
+              <p className="px-[var(--keel-inset)] py-2 text-small text-faint">
                 Showing the first 500 matching lines
               </p>
             ) : null}
           </>
         ) : grepLoading ? (
-          <p className="px-[var(--keel-inset)] py-2 text-[12px] text-faint">Searching…</p>
+          <p className="px-[var(--keel-inset)] py-2 text-body text-faint">Searching…</p>
         ) : grepError ? (
           <DockNotice
             icon={SearchX}
@@ -137,12 +137,12 @@ function FileGroup({ rel, hits }: { rel: string; hits: GrepHit[] }) {
   const parent = parentRel(rel);
   return (
     <div className="mb-0.5">
-      <div className="k-row h-[28px] gap-2" title={rel}>
+      <div className="k-row k-row-dense gap-2" title={rel}>
         <FileIcon name={name} />
         <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
           <span className="max-w-full shrink-0 truncate text-dim">{name}</span>
           {parent ? (
-            <span className="min-w-0 truncate text-[11px] text-faint">{parent}</span>
+            <span className="min-w-0 truncate text-small text-faint">{parent}</span>
           ) : null}
         </span>
       </div>
@@ -162,7 +162,7 @@ function HitRow({ hit }: { hit: GrepHit }) {
       role="button"
       tabIndex={0}
       title={`${hit.rel}:${hit.line}`}
-      className="k-row h-[28px] gap-2"
+      className="k-row k-row-dense gap-2"
       onClick={activate}
       onKeyDown={(event) => {
         if (event.target !== event.currentTarget) return;
@@ -172,10 +172,10 @@ function HitRow({ hit }: { hit: GrepHit }) {
         }
       }}
     >
-      <span className="w-8 shrink-0 text-right text-[11px] tabular-nums text-faint">
+      <span className="w-8 shrink-0 text-right text-small tabular-nums text-faint">
         {hit.line}
       </span>
-      <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-dim">
+      <span className="min-w-0 flex-1 truncate font-mono text-body text-dim">
         {hit.text}
       </span>
     </div>
