@@ -62,10 +62,12 @@ const chrome = EditorView.theme(
       {
         backgroundColor: "rgba(255, 255, 255, 0.16)",
       },
+    // No ground of its own: the gutter travels with the code (see
+    // `gutters({ fixed: false })`), so nothing ever passes behind it.
     ".cm-gutters": {
       backgroundColor: "transparent",
       border: "none",
-      color: "#707070",
+      color: "var(--keel-text-faint)",
     },
     ".cm-lineNumbers .cm-gutterElement": {
       padding: "0 16px 0 14px",
@@ -74,9 +76,11 @@ const chrome = EditorView.theme(
     ".cm-activeLine": {
       backgroundColor: "rgba(255, 255, 255, 0.03)",
     },
+    // The active line is marked in the gutter by a brighter number, not by a
+    // band: the highlight behind the code stops where the code does.
     ".cm-activeLineGutter": {
       backgroundColor: "transparent",
-      color: "#a1a1a1",
+      color: "var(--keel-text-dim)",
     },
     // The search panel, restyled from CodeMirror's light-grey form controls.
     ".cm-panels": {

@@ -1438,6 +1438,11 @@
         background: transparent;
     }
 
+    /*
+     * Code is content, not chrome: the editor, a diff and a terminal share one
+     * size of their own and stay off the chrome's type scale, so tightening
+     * the UI never reflows what someone is reading.
+     */
     .cm-editor .cm-scroller {
         font-family: var(--keel-font-mono);
         font-size: 13px;

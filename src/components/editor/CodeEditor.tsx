@@ -19,6 +19,7 @@ import { searchKeymap } from "@codemirror/search";
 import { Compartment, EditorState } from "@codemirror/state";
 import {
   EditorView,
+  gutters,
   highlightActiveLine,
   highlightActiveLineGutter,
   keymap,
@@ -66,6 +67,10 @@ export function CodeEditor({
           keelEditorTheme,
           history(),
           lineNumbers(),
+          // The numbers belong to their lines, not to the window: scrolling a
+          // long line sideways carries them off with the code rather than
+          // pinning them over it. CodeMirror pins them by default.
+          gutters({ fixed: false }),
           highlightActiveLine(),
           highlightActiveLineGutter(),
           bracketMatching(),
