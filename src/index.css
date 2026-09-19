@@ -453,6 +453,50 @@
     }
 
     /*
+     * Anything that folds open and shut: a folder's children in the tree, a
+     * project's terminals in the dock, a section of the git panel. A single
+     * grid track running 0fr → 1fr carries the height, so nothing has to be
+     * measured and late-arriving rows keep growing instead of popping. The
+     * rows lean down out of the row that opened them as they come.
+     *
+     * The clipping lasts only as long as the movement: a settled fold lets
+     * drop lines and focus rings hang outside it again.
+     */
+    .k-fold {
+        display: grid;
+        grid-template-rows: 0fr;
+        opacity: 0;
+        transition:
+            grid-template-rows 200ms cubic-bezier(0.2, 0.8, 0.2, 1),
+            opacity 140ms ease;
+    }
+
+    .k-fold[data-open="true"] {
+        grid-template-rows: 1fr;
+        opacity: 1;
+    }
+
+    /* Shutting is quicker than opening — you already know what is in there. */
+    .k-fold:not([data-open="true"]) {
+        transition-duration: 160ms, 120ms;
+    }
+
+    .k-fold-body {
+        min-height: 0;
+        overflow: hidden;
+        transform: translateY(-3px);
+        transition: transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    }
+
+    .k-fold[data-open="true"] > .k-fold-body {
+        transform: none;
+    }
+
+    .k-fold[data-settled="true"] > .k-fold-body {
+        overflow: visible;
+    }
+
+    /*
      * A region that takes a drop as a whole: a git group, or the empty part of
      * the file tree. It lights up the way a folder row does.
      */

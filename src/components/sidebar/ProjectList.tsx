@@ -22,6 +22,7 @@ import { Plus, X } from "lucide-react";
 import { ChevronRight } from "lucide-react";
 
 import { AgentMark } from "@/components/AgentMark";
+import { Fold } from "@/components/Fold";
 import { InlineRename } from "@/components/InlineRename";
 import { StatusDot } from "@/components/StatusDot";
 import { WorkspaceMark } from "@/components/WorkspaceMark";
@@ -319,56 +320,60 @@ function ProjectSection({
         )}
       </Row>
 
-      {!open ? null : panes ? (
-        <div className="k-tree-group" style={{ ["--guide" as string]: "20px" }}>
-          {panes.map((paneId) => {
-            const deck = project.decks.find((entry) => paneId in entry.panes);
-            const pane = deck?.panes[paneId];
-            if (!deck || !pane) return null;
-            return (
-              <PaneRow
-                key={paneId}
-                project={project}
-                deck={deck}
-                pane={pane}
-                depth={1}
-                draggable={false}
-                selected={leaf?.kind === "pane" && leaf.id === paneId}
-                focused={deck.id === project.activeDeckId && deck.focused === paneId}
-                {...tree}
-              />
-            );
-          })}
-        </div>
-      ) : showDecks ? (
-        project.decks.map((deck, index) => (
-          <DeckGroup
-            key={deck.id}
-            project={project}
-            deck={deck}
-            index={index}
-            leaf={leaf}
-            {...tree}
-          />
-        ))
-      ) : soloDeck && total > 0 ? (
-        <div className="k-tree-group" style={{ ["--guide" as string]: "20px" }}>
-          <PaneRows
+      <Fold open={open}>
+        {panes ? (
+          <div className="k-tree-group" style={{ ["--guide" as string]: "20px" }}>
+            {panes.map((paneId) => {
+              const deck = project.decks.find((entry) => paneId in entry.panes);
+              const pane = deck?.panes[paneId];
+              if (!deck || !pane) return null;
+              return (
+                <PaneRow
+                  key={paneId}
+                  project={project}
+                  deck={deck}
+                  pane={pane}
+                  depth={1}
+                  draggable={false}
+                  selected={leaf?.kind === "pane" && leaf.id === paneId}
+                  focused={
+                    deck.id === project.activeDeckId && deck.focused === paneId
+                  }
+                  {...tree}
+                />
+              );
+            })}
+          </div>
+        ) : showDecks ? (
+          project.decks.map((deck, index) => (
+            <DeckGroup
+              key={deck.id}
+              project={project}
+              deck={deck}
+              index={index}
+              leaf={leaf}
+              {...tree}
+            />
+          ))
+        ) : soloDeck && total > 0 ? (
+          <div className="k-tree-group" style={{ ["--guide" as string]: "20px" }}>
+            <PaneRows
+              project={project}
+              deck={soloDeck}
+              depth={1}
+              leaf={leaf}
+              {...tree}
+            />
+          </div>
+        ) : soloDeck ? (
+          <EmptyRow
             project={project}
             deck={soloDeck}
             depth={1}
-            leaf={leaf}
-            {...tree}
+            onAdd={addTerminals}
           />
-        </div>
-      ) : soloDeck ? (
-        <EmptyRow
-          project={project}
-          deck={soloDeck}
-          depth={1}
-          onAdd={addTerminals}
-        />
-      ) : null}
+        ) : null}
+      </Fold>
     </div>
   );
 }

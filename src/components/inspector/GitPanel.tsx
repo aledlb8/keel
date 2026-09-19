@@ -53,6 +53,7 @@ import {
 import { toast } from "sonner";
 
 import { DockNotice } from "@/components/Dock";
+import { Fold } from "@/components/Fold";
 import { FileIcon } from "@/components/inspector/FileIcon";
 import { GitLetter } from "@/components/inspector/GitLetter";
 import { LoadingRows } from "@/components/inspector/LoadingRows";
@@ -693,7 +694,7 @@ function Section({
           </span>
         ) : null}
       </div>
-      {open ? children : null}
+      <Fold open={open}>{children}</Fold>
     </section>
   );
 }
