@@ -222,6 +222,10 @@ export function Canvas({
       useKeel.getState().autoTitlePane(paneId, title, source),
     [],
   );
+  const cwdPane = useCallback(
+    (paneId: string, dir: string) => useKeel.getState().notePaneCwd(paneId, dir),
+    [],
+  );
   const splitPane = useCallback(
     (paneId: string, direction: Direction) =>
       project && useKeel.getState().duplicatePane(project.id, paneId, direction),
@@ -442,6 +446,7 @@ export function Canvas({
                 onOutput={noteOutput}
                 onActivity={noteActivity}
                 onTitle={titlePane}
+                onCwd={cwdPane}
                 onSplit={splitPane}
                 onZoom={zoomPane}
                 onClose={closePane}

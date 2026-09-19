@@ -53,7 +53,12 @@ export interface Pane {
    * leave these alone.
    */
   titleLocked?: boolean | undefined;
-  /** Absolute path the shell starts in. `null` falls back to the project root. */
+  /**
+   * Absolute path the shell runs in. Spawned there and then kept in step with
+   * the shell's own `cd` — the prompt reports each folder change — so a
+   * restart reopens where you actually got to. `null` falls back to the
+   * project root.
+   */
   cwd: string | null;
   /**
    * Present on an editor pane: the files and diffs open in it. A pane with this

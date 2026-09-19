@@ -166,6 +166,74 @@ try {
 }
 "####;
 
+/// The contents of `keel-term.ps1`, Keel's terminal integration.
+///
+/// This file is Keel's, not the user's: it carries no choices of its own — the
+/// prompt they stare at lives in `shell-init.ps1` — so Keel keeps it in step
+/// with the binary on every launch, and a fix here reaches every machine the
+/// moment it ships.
+const POWERSHELL_INTEGRATION: &str = r####"# Keel — terminal integration. Keel writes and updates this file; what you
+# personalise lives in shell-init.ps1 beside it.
+#
+# The job: say where the shell is, every time a prompt comes up. Keel then
+# reopens a restarted pane in the folder you actually reached, not the one it
+# launched in. `9;9` is the ConEmu spelling Windows Terminal reads and takes
+# the raw path; `7` is the POSIX one and takes a file URL. Both are escape
+# codes the terminal eats — you never see them.
+#
+# This runs last, so it wraps whichever prompt exists: the one you wrote in
+# your profile, or Keel's default. Your prompt stays yours.
+
+if (Get-Command keel-report-cwd -ErrorAction SilentlyContinue) { return }
+
+function global:keel-report-cwd {
+    $e = [char]27
+    $bell = [char]7
+    $here = $PWD.Path
+    $where = "$e]9;9;$here$bell"
+    try {
+        # The property access has to happen inside $() — an interpolation
+        # reads `$here` and then stops, leaving `.AbsoluteUri` as words.
+        $where += "$e]7;$( ([System.Uri]$here).AbsoluteUri )$bell"
+    } catch {
+        # Not a filesystem location — a registry drive, say. The raw form
+        # above already said where we are; a prompt that fails to print is a
+        # lot worse than a missing second spelling.
+    }
+    # One string. Two returns in an interpolation join with a space, and the
+    # space would land inside the terminal's escape soup for no reason.
+    $where
+}
+
+# Keep the prompt you have and run it after the report. A prompt defined
+# later — a `Set-PSReadLineOption`-style module, say — wins over the wrap;
+# Keel says where it is, not how your prompt looks.
+$global:keelPrompt = if ($function:prompt) { $function:prompt } else { { "PS> " } }
+function global:prompt {
+    "$(& keel-report-cwd)$(& $global:keelPrompt)"
+}
+"####;
+
+/// What `keel-term.ps1` should say, given what is already on disk.
+///
+/// The file is refreshed whenever its contents drift from the binary — a copy
+/// from an older build is exactly the case that must catch up. If the write
+/// fails the caller simply launches without it: a shell that opens beats an
+/// integration that does not.
+fn next_terminal_integration(existing: Option<&str>) -> Option<&'static str> {
+    match existing {
+        Some(content) if content == POWERSHELL_INTEGRATION => None,
+        _ => Some(POWERSHELL_INTEGRATION),
+    }
+}
+
+/// A dot-source line for `path`, with the path quoted the way PowerShell
+/// quotes: single quotes, and an embedded one doubled.
+fn dot_source(path: &Path) -> String {
+    let text = path.to_string_lossy().replace('\'', "''");
+    format!(". '{}'; ", text)
+}
+
 /// Where the per-user shell setup lives, written on first use.
 ///
 /// A pane is chrome the user stares at all day, and stock PowerShell opens it
@@ -182,6 +250,21 @@ fn powershell_init(app: &AppHandle) -> Option<PathBuf> {
     let file = dir.join("shell-init.ps1");
     if !file.is_file() {
         std::fs::write(&file, POWERSHELL_INIT).ok()?;
+    }
+    Some(file)
+}
+
+/// Where Keel's terminal integration lives, kept in step on every launch.
+///
+/// Returns `None` if it cannot be written; the shell then runs without cwd
+/// reporting, which is a missing nicety, not a broken terminal.
+fn terminal_integration(app: &AppHandle) -> Option<PathBuf> {
+    let dir = app.path().app_config_dir().ok()?;
+    std::fs::create_dir_all(&dir).ok()?;
+    let file = dir.join("keel-term.ps1");
+    let existing = std::fs::read_to_string(&file).ok();
+    if let Some(content) = next_terminal_integration(existing.as_deref()) {
+        std::fs::write(&file, content).ok()?;
     }
     Some(file)
 }
@@ -311,12 +394,19 @@ pub fn pty_spawn(
         // "A new PowerShell stable release is available" — a nag in a pane that
         // is about to have an agent typed into it.
         cmd.env("POWERSHELL_UPDATECHECK", "Off");
-        // `-NoExit -File` runs our setup after the user profile and then hands
-        // over an ordinary interactive session.
-        if let Some(init) = powershell_init(&app) {
+        // Dot-sourced in order — profile, the user's prompt setup, then Keel's
+        // integration — and then an ordinary interactive session. The
+        // integration loads last so it wraps whichever prompt exists.
+        let user_init = powershell_init(&app);
+        let integration = terminal_integration(&app);
+        if user_init.is_some() || integration.is_some() {
+            let mut script = String::new();
+            for path in [user_init, integration].into_iter().flatten() {
+                script.push_str(&dot_source(&path));
+            }
             cmd.arg("-NoExit");
-            cmd.arg("-File");
-            cmd.arg(init);
+            cmd.arg("-Command");
+            cmd.arg(script.trim_end());
         }
     }
 
@@ -699,5 +789,41 @@ mod tests {
         assert!(!pty_write_too_large(0));
         assert!(!pty_write_too_large(MAX_PTY_WRITE));
         assert!(pty_write_too_large(MAX_PTY_WRITE + 1));
+    }
+
+    #[test]
+    fn a_missing_integration_file_is_written() {
+        assert_eq!(
+            next_terminal_integration(None),
+            Some(POWERSHELL_INTEGRATION)
+        );
+    }
+
+    #[test]
+    fn a_current_integration_file_is_left_alone() {
+        assert_eq!(
+            next_terminal_integration(Some(POWERSHELL_INTEGRATION)),
+            None
+        );
+    }
+
+    #[test]
+    fn an_integration_file_from_an_older_build_is_refreshed() {
+        assert_eq!(
+            next_terminal_integration(Some("an older build's copy")),
+            Some(POWERSHELL_INTEGRATION)
+        );
+    }
+
+    #[test]
+    fn dot_source_quotes_the_powershell_way() {
+        assert_eq!(
+            dot_source(Path::new(r"C:\O'Brien's App\keel-term.ps1")),
+            r". 'C:\O''Brien''s App\keel-term.ps1'; "
+        );
+        assert_eq!(
+            dot_source(Path::new(r"C:\My Code\keel-term.ps1")),
+            r". 'C:\My Code\keel-term.ps1'; "
+        );
     }
 }

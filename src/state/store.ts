@@ -39,6 +39,7 @@ import {
 import { editorRefId, editorRefName } from "../lib/editorRefs.ts";
 import { moveTo, swapAt } from "../lib/order.ts";
 import { killPty } from "../lib/pty.ts";
+import { pathWithin } from "../lib/terminalCwd.ts";
 import {
   balance,
   besideTree,
@@ -197,6 +198,13 @@ export interface KeelState {
   restartPane: (paneId: string) => void;
   /** Suppress this pane's OS toasts; sounds still follow terminal focus. */
   setPaneMuted: (paneId: string, muted: boolean) => void;
+  /**
+   * The shell reported a folder change (OSC on each prompt). Kept on the pane
+   * so the next spawn starts there and the status bar shows where you are.
+   * Anything outside the pane's project is refused — a restart can only land
+   * where Keel is allowed to open a shell.
+   */
+  notePaneCwd: (paneId: string, dir: string) => void;
   /** Agent process left the shell; the next spawn should not type the command. */
   releaseAgent: (paneId: string, generation?: number) => void;
   /** First successful spawn: later launches should resume this conversation. */
@@ -1239,6 +1247,16 @@ export const useKeel = create<KeelState>((set, get) => {
         const { muted: _drop, ...rest } = pane;
         return rest;
       });
+    },
+
+    notePaneCwd(paneId, dir) {
+      const pane = findPane(paneId);
+      if (!pane || pane.editor) return;
+      const project = get().projects.find((item) => deckOfPane(item, paneId));
+      if (!project || !pathWithin(dir, project.path)) return;
+      // Prompts redraw constantly; a folder that did not change is not news.
+      if (pane.cwd === dir) return;
+      patchPane(paneId, (current) => ({ ...current, cwd: dir }));
     },
 
     releaseAgent(paneId, generation) {

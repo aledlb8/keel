@@ -24,6 +24,7 @@ import { TerminalSearch } from "@/components/TerminalSearch";
 import { readAgentScreen } from "@/lib/agentActivity";
 import { briefFromOsc, createPromptDraft, type TitleSource } from "@/lib/paneTitle";
 import { resizePty, spawnPty, writePty } from "@/lib/pty";
+import { cwdFromOsc7, cwdFromOsc99 } from "@/lib/terminalCwd";
 import {
   isTerminalFindChord,
   TERMINAL_SEARCH_DECORATIONS,
@@ -290,6 +291,8 @@ export interface TerminalSurfaceProps {
   /** Keystrokes, resizes and (re)starts — the things output is a reply to. */
   onActivity?: ((paneId: string, kind: PaneActivity, data?: string) => void) | undefined;
   onFocus: (paneId: string) => void;
+  /** Keel keeps a pane's cwd in step with the shell, so a restart lands here. */
+  onCwd?: ((paneId: string, dir: string) => void) | undefined;
   /** Spawn settled — ok or fail. Used for reopen chrome + spawn-fail UI. */
   onSpawnResult?: ((paneId: string, ok: boolean, reason?: string) => void) | undefined;
   /** A prompt was submitted, or the process set the window title. */
@@ -312,6 +315,7 @@ export const TerminalSurface = memo(function TerminalSurface({
   onOutput,
   onActivity,
   onFocus,
+  onCwd,
   onSpawnResult,
   onTitle,
 }: TerminalSurfaceProps) {
@@ -370,10 +374,11 @@ export const TerminalSurface = memo(function TerminalSurface({
     onOutput,
     onActivity,
     onFocus,
+    onCwd,
     onSpawnResult,
     onTitle,
   });
-  handlers.current = { onOutput, onActivity, onFocus, onSpawnResult, onTitle };
+  handlers.current = { onOutput, onActivity, onFocus, onCwd, onSpawnResult, onTitle };
 
   const runFind = (
     direction: "next" | "previous",
@@ -632,6 +637,21 @@ export const TerminalSurface = memo(function TerminalSurface({
       if (brief) handlers.current.onTitle?.(paneId, brief, "osc");
     });
 
+    // Shells announce their folder on every prompt (OSC 9;9 / OSC 7). The
+    // terminal hands the payload over reassembled, whatever chunking the
+    // bytes arrived in; deciding what is worth keeping happens in the store.
+    // An `ident 9` handler sees everything under OSC 9 — `9;9;…` here, with
+    // the sub-ident left on the front of the payload.
+    const reportedCwd = (data: string) => {
+      const dir = data.startsWith("9;")
+        ? cwdFromOsc99(data.slice(2))
+        : cwdFromOsc7(data);
+      if (dir) handlers.current.onCwd?.(paneId, dir);
+      return true;
+    };
+    const cwd9 = term.parser.registerOscHandler(9, reportedCwd);
+    const cwd7 = term.parser.registerOscHandler(7, reportedCwd);
+
     const textarea = term.textarea;
     const noteFocus = () => handlers.current.onFocus(paneId);
     textarea?.addEventListener("focus", noteFocus);
@@ -710,6 +730,8 @@ export const TerminalSurface = memo(function TerminalSurface({
       textarea?.removeEventListener("paste", pasteImage, true);
       typed.dispose();
       titled.dispose();
+      cwd9.dispose();
+      cwd7.dispose();
       term.dispose();
       termRef.current = null;
       actions.current = { refit: () => {}, syncPty: () => {} };

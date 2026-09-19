@@ -63,6 +63,8 @@ export interface PaneViewProps {
   onCreateAccount: (paneId: string, agentId: string, name: string) => void;
   onSpawnResult?: ((paneId: string, ok: boolean, reason?: string) => void) | undefined;
   onTitle: (paneId: string, title: string, source: TitleSource) => void;
+  /** The shell's folder changed; kept on the pane for the next spawn. */
+  onCwd?: ((paneId: string, dir: string) => void) | undefined;
   /** A press on the header that may become a drag. Must be stable: this is memoised. */
   onDragStart: (paneId: string, event: React.PointerEvent) => void;
 }
@@ -136,6 +138,7 @@ export const PaneView = memo(function PaneView({
   onCreateAccount,
   onSpawnResult,
   onTitle,
+  onCwd,
   onDragStart,
 }: PaneViewProps) {
   const renaming = useKeel(
@@ -296,6 +299,7 @@ export const PaneView = memo(function PaneView({
                 onFocus={onFocus}
                 onSpawnResult={onSpawnResult}
                 onTitle={onTitle}
+                onCwd={onCwd}
               />
               )}
             </div>
