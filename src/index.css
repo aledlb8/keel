@@ -578,6 +578,39 @@
         box-shadow: inset 0 0 0 1px var(--keel-line-strong);
     }
 
+    /*
+     * The strip along the top of a pane, and where focus is said out loud.
+     *
+     * Which terminal takes your keystrokes used to hang on the pane's 1px
+     * border stepping 7% → 19% white — 1.8:1 against the slab, and not
+     * findable across six panes with agents printing in all of them. Focus is
+     * a value step now, the same way every other surface in the app separates:
+     * the focused strip lifts off its slab and its title comes up two steps
+     * while the others recede. It spends no colour, so hue still answers only
+     * which agent and what it is doing.
+     */
+    .k-pane-head {
+        transition:
+            background-color 140ms ease,
+            box-shadow 140ms ease;
+    }
+
+    .k-pane-head[data-focused="true"] {
+        /* The veil that means "this is the current one" everywhere else in the
+         * app — the active tab in a track, the selected tile on a rail. */
+        background: var(--keel-veil-3);
+        box-shadow: inset 0 1px 0 0 var(--keel-sheen);
+    }
+
+    .k-pane-title {
+        color: var(--keel-text-faint);
+        transition: color 140ms ease;
+    }
+
+    .k-pane-head[data-focused="true"] .k-pane-title {
+        color: var(--keel-text);
+    }
+
     /* A closing pane shrinks back into the ground before it is removed. */
     .k-pane-out {
         pointer-events: none;

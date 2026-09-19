@@ -12,6 +12,10 @@
  *
  * The strip is also the pane's handle: press on any part of it that is not a
  * button and drag, and the pane can be dropped against another one.
+ *
+ * It is where focus is said out loud, too: the strip of the pane taking your
+ * keystrokes lifts off its slab and brightens its title, while every other one
+ * recedes. See `.k-pane-head`.
  */
 
 import {
@@ -135,7 +139,8 @@ export function PaneHeader({
   return (
     <div
       data-no-select
-      className="flex h-7 shrink-0 cursor-grab items-center gap-1 pl-2.5 pr-1"
+      data-focused={focused ? "true" : undefined}
+      className="k-pane-head flex h-7 shrink-0 cursor-grab items-center gap-1 pl-2.5 pr-1"
       onPointerDown={(event) => {
         if (event.button !== 0) return;
         // Same portal caveat as below: only presses on the strip itself.
