@@ -23,6 +23,8 @@ const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, 
 beforeEach(() => {
   Object.assign(globalThis, { window: {} });
   state().setRoot(null);
+  // Hidden files start shown now; the swap test wants to see them appear.
+  useWorkspace.setState({ showHidden: false });
   mockIPC((cmd) => cmd === "git_status" ? status : []);
   state().setRoot("project-a");
 });

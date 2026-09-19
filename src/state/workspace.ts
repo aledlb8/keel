@@ -30,6 +30,26 @@ import type {
 export type InspectorTab = "files" | "git" | "search";
 export type GitMetaSection = "branches" | "prs" | "history";
 
+/** A view preference, so it lives with the window rather than in the projects. */
+const SHOW_HIDDEN_KEY = "keel.showHidden";
+
+/** Shown unless the window remembers they were hidden. */
+function readShowHidden(): boolean {
+  try {
+    return localStorage.getItem(SHOW_HIDDEN_KEY) !== "hidden";
+  } catch {
+    return true;
+  }
+}
+
+function writeShowHidden(showHidden: boolean) {
+  try {
+    localStorage.setItem(SHOW_HIDDEN_KEY, showHidden ? "shown" : "hidden");
+  } catch {
+    // Storage unavailable: the choice just lasts for this session.
+  }
+}
+
 export type EditorKind = "file" | "diff";
 
 export interface EditorTab {
@@ -610,7 +630,7 @@ async function runGit(
 export const useWorkspace = create<WorkspaceState>((set, get) => ({
   root: null,
   tab: "files",
-  showHidden: false,
+  showHidden: readShowHidden(),
   query: "",
   tree: {},
   expanded: {},
@@ -754,6 +774,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     // The tree stays up while the new listings load — clearing it first blanked
     // the whole panel for a frame and left open folders empty.
     set({ showHidden });
+    writeShowHidden(showHidden);
     const root = get().root;
     if (!root) return;
     const version = projectVersion;
