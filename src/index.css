@@ -820,66 +820,6 @@
     }
 
     /*
-     * Agents waiting on you, at the top of the dock and outside the scope.
-     *
-     * It is the one section allowed a colour of its own, because it is the one
-     * section that is asking for something. The green is the status green, at
-     * the alpha the chrome can afford: a tint on the ground and a brighter
-     * count, never a filled banner.
-     */
-    .k-attn {
-        margin: 2px var(--keel-inset) 6px;
-        padding-bottom: 3px;
-        border-radius: var(--keel-r-control);
-        background: color-mix(in srgb, var(--keel-done) 7%, transparent);
-        box-shadow: inset 0 0 0 1px
-            color-mix(in srgb, var(--keel-done) 16%, transparent);
-    }
-
-    /* Rows inside it are already inset by the section; do not inset them twice. */
-    .k-attn .k-row {
-        width: calc(100% - 6px);
-        margin-inline: 3px;
-    }
-
-    .k-attn .k-row:hover {
-        background: color-mix(in srgb, var(--keel-done) 10%, transparent);
-    }
-
-    .k-attn-head {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        width: 100%;
-        height: 26px;
-        padding-inline: 6px 7px;
-        font-size: 11px;
-        font-weight: 500;
-        color: var(--keel-text-dim);
-        cursor: default;
-    }
-
-    .k-attn-more {
-        display: block;
-        width: 100%;
-        padding: 3px 10px 5px;
-        text-align: left;
-        font-size: 11px;
-        color: var(--keel-text-faint);
-        cursor: default;
-        transition: color 110ms ease;
-    }
-
-    .k-attn-more:hover {
-        color: var(--keel-text);
-    }
-
-    .k-count-done {
-        background: color-mix(in srgb, var(--keel-done) 22%, transparent);
-        color: var(--keel-done);
-    }
-
-    /*
      * Which group a run of projects belongs to. Only "All projects" draws these:
      * inside one workspace it would name the thing the switcher already names.
      * A caption, not a row — no fill, no hover, nothing to click — so the eye

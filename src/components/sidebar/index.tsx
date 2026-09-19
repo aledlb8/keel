@@ -12,12 +12,9 @@
  * three and, more importantly, makes the height of the dock a function of one
  * workspace rather than of all of them.
  *
- * Under the switcher, in order of how urgently it wants you:
- *
- *  1. **Needs you** — agents that finished, wherever they live, scope ignored.
- *     Empty and invisible most of the time. See `Attention.tsx`.
- *  2. **The projects in scope**, each opening to its decks and terminals. See
- *     `ProjectList.tsx`.
+ * Under the switcher sit the projects in scope, each opening to its decks and
+ * terminals. See `ProjectList.tsx`. What is waiting on you is said by the
+ * island in the titlebar rather than by a banner up here.
  *
  * The scope follows you. Jump to a terminal from the palette, a notification or
  * a shortcut and the dock re-scopes to wherever that project lives, so the row
@@ -51,7 +48,6 @@ import {
   type Scope,
 } from "@/lib/sidebarScope";
 import { useKeel } from "@/state/store";
-import { Attention } from "./Attention";
 import { EmptyScope, ProjectList } from "./ProjectList";
 import { Rail } from "./Rail";
 import { ScopeBar } from "./ScopeBar";
@@ -193,8 +189,6 @@ export function Sidebar({
           <ContextMenu>
             <ContextMenuTrigger asChild>
               <div className="min-h-0 flex-1 overflow-y-auto pb-2">
-                {!filtering ? <Attention onNavigate={onNavigate} /> : null}
-
                 {entries.length > 0 ? (
                   <ProjectList
                     entries={entries}
