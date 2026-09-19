@@ -60,6 +60,8 @@ export interface SidebarProps {
   /** Folded down to the rail. */
   collapsed: boolean;
   onToggleCollapsed: () => void;
+  /** How wide it opens, dragged at the seam. See `useDockWidth`. */
+  width: number;
   /**
    * Fired whenever a row moves you somewhere. The canvas can be covered by the
    * overview, and navigating from over here has to get you out from under it —
@@ -73,6 +75,7 @@ export function Sidebar({
   activeProjectId,
   collapsed,
   onToggleCollapsed,
+  width,
   onNavigate,
 }: SidebarProps) {
   const agents = useKeel((state) => state.agents);
@@ -165,6 +168,7 @@ export function Sidebar({
       data-collapsed={collapsed}
       aria-label="Projects"
       className="k-dock"
+      style={{ ["--dock-width" as string]: `${width}px` }}
     >
       <DockToggle
         side="left"

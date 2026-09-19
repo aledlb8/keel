@@ -8,7 +8,11 @@
  * and every one of them sits half a gutter inside its slot, so the air between
  * any two neighbours is the same 12px whatever they are.
  *
- * Every deck of every project stays mounted for the whole session â€” only the
+ * Each dock's width is dragged at the seam in the gutter beside it, the same
+ * gesture that resizes two panes against each other, and is remembered with
+ * the window rather than with the projects.
+ *
+ * Every deck of every project stays mounted for the whole session — only the
  * active one is visible. Hiding rather than unmounting is what lets you switch
  * away from six running agents and come back to them still running, scrollback
  * intact.
@@ -23,6 +27,7 @@ import { startChimeAudio } from "@/lib/chime";
 
 import { AgentSettingsDialog } from "@/components/AgentSettingsDialog";
 import { Canvas } from "@/components/Canvas";
+import { DockSeam, useDockWidth } from "@/components/Dock";
 import { focusTerminal, Island } from "@/components/Island";
 import { LaunchDialog } from "@/components/LaunchDialog";
 import { Overview } from "@/components/Overview";
@@ -44,6 +49,7 @@ import {
 } from "@/lib/appShortcuts";
 import { pickProjectFolder, statePath } from "@/lib/backend";
 import { startCloseGuard } from "@/lib/closeGuard";
+import { cycleEditorTab } from "@/lib/editorTabs";
 import { onHostLost } from "@/lib/invoke";
 import {
   bindingFor,
@@ -93,6 +99,11 @@ export default function App() {
       return false;
     }
   });
+  const [sidebarWidth, resizeSidebar] = useDockWidth("left");
+  const [inspectorWidth, resizeInspector] = useDockWidth("right");
+  // A seam is being dragged, so the docks drop the transition they fold with
+  // and follow the cursor in the same frame instead of easing along behind it.
+  const [resizing, setResizing] = useState(false);
 
   useEffect(() => {
     try {
@@ -441,6 +452,16 @@ export default function App() {
           claim();
           useWorkspace.getState().closePaneSafely(project.id, focused);
           break;
+        case "nextTab":
+        case "prevTab": {
+          // Only an editor pane has files to step through; in a terminal the
+          // chord is left alone for whatever is running in it.
+          const pane = activeDeck(project)?.panes[focused];
+          if (!pane?.editor) break;
+          claim();
+          cycleEditorTab(project.id, pane, matched.action === "nextTab" ? 1 : -1);
+          break;
+        }
         default:
           break;
       }
@@ -536,16 +557,31 @@ export default function App() {
 
       {/* Half a gutter of padding here, and half again inside every dock,
           pane and the editor, so all the air in the middle is one gutter. */}
-      <div className="flex min-h-0 flex-1 p-[6px]">
+      <div
+        data-dock-resizing={resizing ? "true" : undefined}
+        className="flex min-h-0 flex-1 p-[6px]"
+      >
         <Sidebar
           activeProjectId={activeProjectId}
           collapsed={!sidebar}
+          width={sidebarWidth}
           onToggleCollapsed={() => setSidebar((previous) => !previous)}
           // Going somewhere from the sidebar has to lift the overview, which
           // is an opaque sheet over the canvas — otherwise the deck really
           // does change underneath and the click looks like it was ignored.
           onNavigate={() => setOverview(false)}
         />
+
+        {/* Folded to the rail there is nothing to widen. */}
+        {sidebar ? (
+          <DockSeam
+            side="left"
+            what="the projects dock"
+            width={sidebarWidth}
+            onResize={resizeSidebar}
+            onResizing={setResizing}
+          />
+        ) : null}
 
         {/* Terminals and editors alike are panes on the canvas. Opening a file
             adds an editor pane to the deck, and the layout reflows around it. */}
@@ -564,10 +600,10 @@ export default function App() {
                 {/* The first screen anyone sees. It names the one thing to do
                     and gives the reason in a line, rather than explaining. */}
                 <div className="w-[340px] text-center">
-                  <p className="text-[19px] leading-snug text-foreground">
+                  <p className="text-display leading-snug text-foreground">
                     Point Keel at a folder
                   </p>
-                  <p className="mx-auto mt-2 max-w-[280px] text-[13px] leading-relaxed text-dim">
+                  <p className="mx-auto mt-2 max-w-[280px] text-row leading-relaxed text-dim">
                     Every terminal you open belongs to a project, so Keel can
                     bring the whole arrangement back next time.
                   </p>
@@ -588,8 +624,19 @@ export default function App() {
           </div>
         </main>
 
+        {inspector ? (
+          <DockSeam
+            side="right"
+            what="the files and git dock"
+            width={inspectorWidth}
+            onResize={resizeInspector}
+            onResizing={setResizing}
+          />
+        ) : null}
+
         <Inspector
           collapsed={!inspector}
+          width={inspectorWidth}
           onToggleCollapsed={() => setInspector((previous) => !previous)}
           projectPath={project?.path ?? null}
           projectName={project?.name ?? null}

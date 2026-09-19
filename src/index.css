@@ -687,7 +687,9 @@
      */
     .k-dock {
         --k-fold: cubic-bezier(0.32, 0.72, 0, 1);
-        --dock-width: 248px;
+        /* `--dock-width` is set on the element: it is dragged, and the
+         * numbers live with the seam that drags them, in `Dock.tsx`. The rail
+         * is not yours to resize, so it stays here. */
         --rail-width: 52px;
         position: relative;
         flex-shrink: 0;
@@ -703,13 +705,24 @@
         transition: width 420ms var(--k-fold);
     }
 
-    /* Git paths want the extra characters. */
-    .k-dock[data-side="right"] {
-        --dock-width: 288px;
-    }
-
     .k-dock[data-collapsed="true"] {
         width: var(--rail-width);
+    }
+
+    /*
+     * While a seam is being dragged the docks lose the transition they fold
+     * with, or a 420ms ease would trail 400ms behind the cursor. The cursor is
+     * held across the whole shell so it cannot flicker when the pointer
+     * outruns the seam, and nothing selects text under a drag.
+     */
+    [data-dock-resizing="true"] {
+        cursor: col-resize;
+        user-select: none;
+    }
+
+    [data-dock-resizing="true"] .k-dock,
+    [data-dock-resizing="true"] .k-dock > :is(.k-dock-panel, .k-dock-rail) {
+        transition: none;
     }
 
     .k-dock > .k-dock-panel,

@@ -25,6 +25,8 @@ import { useWorkspace, type InspectorTab } from "@/state/workspace";
 export interface InspectorProps {
   collapsed: boolean;
   onToggleCollapsed: () => void;
+  /** How wide it opens, dragged at the seam. See `useDockWidth`. */
+  width: number;
   projectPath: string | null;
   projectName: string | null;
 }
@@ -36,6 +38,7 @@ function tileIndex(index: number): CSSProperties {
 export function Inspector({
   collapsed,
   onToggleCollapsed,
+  width,
   projectPath,
   projectName,
 }: InspectorProps) {
@@ -72,6 +75,7 @@ export function Inspector({
       data-collapsed={collapsed}
       aria-label="Files, git and search"
       className="k-dock"
+      style={{ ["--dock-width" as string]: `${width}px` }}
     >
       <DockToggle
         side="right"
