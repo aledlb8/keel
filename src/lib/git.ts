@@ -73,8 +73,8 @@ export function gitStatusLabel(status: GitFileStatus): string {
   }
 }
 
-/** Status colour as a CSS custom property — the only colour in the chrome. */
-export function gitLetterColor(status: GitFileStatus): string {
+/** Status colour as a CSS custom property — tints the chip and the row's name. */
+export function gitStatusColor(status: GitFileStatus): string {
   switch (status) {
     case "added":
     case "untracked":
@@ -129,14 +129,30 @@ export function gitBadgeMap(files: GitFile[]): Record<string, GitFileStatus> {
   return map;
 }
 
-/** Every folder with a change somewhere inside it, so a folded folder can say so. */
-export function dirtyFolders(files: GitFile[]): Set<string> {
-  const folders = new Set<string>();
+/** Which status speaks for a folder when its children disagree. Trouble first. */
+const SEVERITY: Record<GitFileStatus, number> = {
+  conflict: 6,
+  deleted: 5,
+  modified: 4,
+  typechange: 4,
+  renamed: 3,
+  copied: 3,
+  added: 2,
+  untracked: 1,
+};
+
+/**
+ * Every folder with a change somewhere inside it, and the status that stands
+ * for it — the worst one below it — so a folded folder can still say so.
+ */
+export function folderStatuses(files: GitFile[]): Record<string, GitFileStatus> {
+  const folders: Record<string, GitFileStatus> = {};
   for (const file of files) {
     let parent = parentRel(file.path);
-    // Once a folder is in, its ancestors already are too.
-    while (parent && !folders.has(parent)) {
-      folders.add(parent);
+    while (parent) {
+      const current = folders[parent];
+      if (current && SEVERITY[current] >= SEVERITY[file.status]) break;
+      folders[parent] = file.status;
       parent = parentRel(parent);
     }
   }

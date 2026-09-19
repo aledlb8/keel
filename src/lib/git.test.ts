@@ -4,8 +4,8 @@ import { describe, it } from "node:test";
 import {
   aheadBehind,
   diffStats,
-  dirtyFolders,
   fileName,
+  folderStatuses,
   gitBadgeMap,
   gitLetter,
   gitStatusLabel,
@@ -85,14 +85,26 @@ describe("labels", () => {
   });
 });
 
-describe("dirtyFolders", () => {
+describe("folderStatuses", () => {
   it("marks every ancestor of a change, and nothing at the root", () => {
-    const folders = dirtyFolders([
+    const folders = folderStatuses([
       file({ path: "src/lib/git.ts" }),
       file({ path: "src/App.tsx" }),
       file({ path: "README.md" }),
     ]);
-    assert.deepEqual([...folders].sort(), ["src", "src/lib"]);
+    assert.deepEqual(Object.keys(folders).sort(), ["src", "src/lib"]);
+  });
+
+  it("gives a folder the worst status below it", () => {
+    const folders = folderStatuses([
+      file({ path: "src/a.ts", status: "untracked" }),
+      file({ path: "src/lib/b.ts", status: "modified" }),
+      file({ path: "src/lib/c.ts", status: "conflict" }),
+      file({ path: "docs/d.md", status: "added" }),
+    ]);
+    assert.equal(folders["src"], "conflict");
+    assert.equal(folders["src/lib"], "conflict");
+    assert.equal(folders["docs"], "added");
   });
 });
 

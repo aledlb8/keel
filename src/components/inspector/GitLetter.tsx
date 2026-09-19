@@ -1,11 +1,11 @@
 /**
  * Git's one-letter verdict on a file, on a small chip tinted with its own hue.
  *
- * The letter alone was hard to find at 11px, and colouring the file name
- * instead lit the whole list up. A 16px chip is findable without shouting.
+ * The letter alone was hard to find at 11px, so it sits on a 16px chip. The
+ * file's name carries the same hue beside it, the way an IDE's explorer does.
  */
 
-import { gitLetter, gitLetterColor, gitStatusLabel } from "@/lib/git";
+import { gitLetter, gitStatusColor, gitStatusLabel } from "@/lib/git";
 import { cn } from "@/lib/utils";
 import type { GitFileStatus } from "@/lib/workspace";
 
@@ -21,7 +21,7 @@ export function GitLetter({
       title={gitStatusLabel(status)}
       aria-label={gitStatusLabel(status)}
       className={cn("k-git-letter", className)}
-      style={{ ["--git" as string]: gitLetterColor(status) }}
+      style={{ ["--git" as string]: gitStatusColor(status) }}
     >
       {gitLetter(status)}
     </span>

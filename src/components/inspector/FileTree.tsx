@@ -7,8 +7,10 @@
  * It borrows the left sidebar's rows exactly — inset chips, the same hover and
  * selection — and adds what a tree of files needs on top: a glyph per kind of
  * file, a guide line down each open folder so depth reads without counting
- * indents, and git's letter beside anything that changed. A folder with a change
- * somewhere inside it carries a dot, so nothing hides behind a fold.
+ * indents, a fold that opens and shuts its own height rather than snapping,
+ * and git's colours on anything that changed. A changed file takes the hue on
+ * its name and git's letter beside it; a folder takes the hue alone, standing
+ * for the worst change below it, so nothing hides behind a fold.
  */
 
 import {
@@ -39,6 +41,7 @@ import {
 } from "lucide-react";
 
 import { DockNotice } from "@/components/Dock";
+import { Fold } from "@/components/Fold";
 import { InlineRename } from "@/components/InlineRename";
 import { FileIcon } from "@/components/inspector/FileIcon";
 import { GitLetter } from "@/components/inspector/GitLetter";
@@ -52,7 +55,13 @@ import {
   ContextMenuContent,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { dirtyFolders, fileName, gitBadgeMap, parentRel } from "@/lib/git";
+import {
+  fileName,
+  folderStatuses,
+  gitBadgeMap,
+  gitStatusColor,
+  parentRel,
+} from "@/lib/git";
 import { isRecent, recentAt } from "@/lib/recentFiles";
 import { bindingFor, matchesBinding } from "@/lib/keymap";
 import { cn } from "@/lib/utils";
@@ -277,7 +286,8 @@ interface TreeContext {
   creating: { parent: string; kind: "file" | "dir" } | null;
   renaming: string | null;
   badges: Record<string, GitFileStatus>;
-  dirtyDirs: Set<string>;
+  /** Folders stand for the worst change inside them; files speak for themselves. */
+  folderBadges: Record<string, GitFileStatus>;
   rowMotion: Record<string, "enter" | "leave">;
   /** The row being dragged, and the folder it would land in (`""` is the root). */
   drag: string | null;
@@ -306,7 +316,7 @@ export function FileTree() {
   const [over, setOver] = useState<string | null>(null);
 
   const badges = useMemo(() => gitBadgeMap(git?.files ?? []), [git]);
-  const dirtyDirs = useMemo(() => dirtyFolders(git?.files ?? []), [git]);
+  const folderBadges = useMemo(() => folderStatuses(git?.files ?? []), [git]);
 
   // Hovering a closed folder mid-drag springs it open, so you can go deeper.
   useEffect(() => {
@@ -336,7 +346,7 @@ export function FileTree() {
     creating,
     renaming,
     badges,
-    dirtyDirs,
+    folderBadges,
     rowMotion,
     drag,
     over,
@@ -454,7 +464,11 @@ export function FileTree() {
                     key={entry.rel}
                     entry={entry}
                     selected={selectedRel === entry.rel}
-                    badge={badges[entry.rel]}
+                    status={
+                      entry.kind === "dir"
+                        ? folderBadges[entry.rel]
+                        : badges[entry.rel]
+                    }
                   />
                 ))
               )
@@ -584,8 +598,9 @@ function TreeRow({
   const open = Boolean(context.expanded[entry.rel]);
   const selected = context.selectedRel === entry.rel;
   const isRenaming = context.renaming === entry.rel;
-  const badge = folder ? undefined : context.badges[entry.rel];
-  const changedInside = folder && context.dirtyDirs.has(entry.rel);
+  const status = folder
+    ? context.folderBadges[entry.rel]
+    : context.badges[entry.rel];
   const motion = leaving ? "leave" : context.rowMotion[entry.rel];
   /** Dropping on a folder puts it inside; dropping on a file, beside it. */
   const dropDir = folder ? entry.rel : parentRel(entry.rel);
@@ -606,7 +621,7 @@ function TreeRow({
             aria-expanded={folder ? open : undefined}
             aria-selected={selected}
             tabIndex={0}
-            title={entry.rel}
+            title={folder && status ? `${entry.rel} — contains changes` : entry.rel}
             data-selected={selected}
             data-motion={motion}
             data-dragging={context.drag === entry.rel ? "true" : undefined}
@@ -677,8 +692,9 @@ function TreeRow({
                 <span
                   className={cn(
                     "min-w-0 flex-1 truncate",
-                    selected ? "text-foreground" : "text-dim",
+                    !status && (selected ? "text-foreground" : "text-dim"),
                   )}
+                  style={status ? { color: gitStatusColor(status) } : undefined}
                 >
                   {entry.name}
                 </span>
@@ -686,14 +702,8 @@ function TreeRow({
                   {root && isRecent(root, entry.rel) ? (
                     <RecentDot at={recentAt(root, entry.rel)} />
                   ) : null}
-                  {badge ? (
-                    <GitLetter status={badge} />
-                  ) : changedInside ? (
-                    <span
-                      title="Contains changes"
-                      className="mr-1.5 size-[5px] rounded-full bg-[color:var(--keel-working)]"
-                    />
-                  ) : null}
+                  {/* The folder's hue says enough; only files carry a letter. */}
+                  {!folder && status ? <GitLetter status={status} /> : null}
                 </span>
                 <span className="hidden shrink-0 items-center group-hover/entry:flex group-focus-visible/entry:flex">
                   <MoreButton />
@@ -709,13 +719,15 @@ function TreeRow({
         </ContextMenuContent>
       </ContextMenu>
 
-      {folder && open ? (
-        <ChildList
-          parent={entry.rel}
-          depth={depth + 1}
-          context={context}
-          leaving={motion === "leave"}
-        />
+      {folder ? (
+        <Fold open={open}>
+          <ChildList
+            parent={entry.rel}
+            depth={depth + 1}
+            context={context}
+            leaving={motion === "leave"}
+          />
+        </Fold>
       ) : null}
     </>
   );
@@ -724,11 +736,11 @@ function TreeRow({
 function HitRow({
   entry,
   selected,
-  badge,
+  status,
 }: {
   entry: WorkspaceEntry;
   selected: boolean;
-  badge: GitFileStatus | undefined;
+  status: GitFileStatus | undefined;
 }) {
   const parent = parentRel(entry.rel);
   const folder = entry.kind === "dir";
@@ -761,8 +773,9 @@ function HitRow({
         <span
           className={cn(
             "max-w-full shrink-0 truncate",
-            selected ? "text-foreground" : "text-dim",
+            !status && (selected ? "text-foreground" : "text-dim"),
           )}
+          style={status ? { color: gitStatusColor(status) } : undefined}
         >
           {fileName(entry.rel)}
         </span>
@@ -770,7 +783,7 @@ function HitRow({
           <span className="min-w-0 truncate text-[11px] text-faint">{parent}</span>
         ) : null}
       </span>
-      {badge ? <GitLetter status={badge} /> : null}
+      {!folder && status ? <GitLetter status={status} /> : null}
     </div>
   );
 }
