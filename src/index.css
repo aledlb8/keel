@@ -1360,18 +1360,50 @@
         color: var(--keel-text);
     }
 
-    /* A tab in an editor pane's header. */
+    /*
+     * The strip the tabs ride in. It scrolls sideways with no scrollbar, so
+     * the end that has more behind it fades out instead: without it, tabs
+     * simply stop at the edge and nothing says there are more. The fade is
+     * zero-width until there is something to say, so a strip that fits is
+     * untouched.
+     */
+    .k-tabstrip {
+        --fade-start: 0px;
+        --fade-end: 0px;
+        --tabstrip-fade: linear-gradient(
+            to right,
+            transparent 0,
+            #000 var(--fade-start),
+            #000 calc(100% - var(--fade-end)),
+            transparent 100%
+        );
+        -webkit-mask-image: var(--tabstrip-fade);
+        mask-image: var(--tabstrip-fade);
+    }
+
+    .k-tabstrip[data-edge-start="true"] {
+        --fade-start: 20px;
+    }
+
+    .k-tabstrip[data-edge-end="true"] {
+        --fade-end: 20px;
+    }
+
+    /*
+     * A tab in an editor pane's header. Sized to the strip it rides in rather
+     * than to the row ladder — it is a chip inside a 32px band, not a row.
+     */
     .k-tab {
         display: flex;
         flex-shrink: 0;
         align-items: center;
         gap: 4px;
-        height: 28px;
+        height: 24px;
         max-width: 220px;
         padding-inline: 8px 4px;
         border-radius: var(--keel-r-control);
-        color: var(--keel-text-faint);
-        font-size: 12px;
+        color: var(--keel-text-dim);
+        font-size: var(--keel-type-body);
         transition:
             background-color 110ms ease,
             color 110ms ease;

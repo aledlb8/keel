@@ -11,8 +11,17 @@
  * by. The body is the tab on screen: a CodeMirror surface, or a diff.
  */
 
-import { useEffect, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+  type RefObject,
+} from "react";
+import {
+  ChevronDown,
   ChevronRight,
   FileDiff,
   FileImage,
@@ -25,17 +34,24 @@ import {
 } from "lucide-react";
 
 import { DockNotice } from "@/components/Dock";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { CodeEditor } from "@/components/editor/CodeEditor";
 import { DiffView } from "@/components/editor/DiffView";
 import { languageName } from "@/components/editor/language";
 import { FileIcon } from "@/components/inspector/FileIcon";
 import { LoadingRows } from "@/components/inspector/LoadingRows";
 import { editorRefId, editorRefName } from "@/lib/editorRefs";
-import { diffStats } from "@/lib/git";
+import { showEditorTab } from "@/lib/editorTabs";
+import { diffStats, parentRel } from "@/lib/git";
 import { withShortcut } from "@/lib/keymap";
 import type { Direction, EditorRef, Pane } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { useKeel } from "@/state/store";
 import { useWorkspace } from "@/state/workspace";
 
 function formatBytes(bytes: number): string {
@@ -101,6 +117,47 @@ export interface EditorHeaderProps {
   onDragStart: (event: ReactPointerEvent<HTMLDivElement>) => void;
 }
 
+/**
+ * Which ends of the tab strip have more beyond them.
+ *
+ * The strip scrolls without a scrollbar, so this is what says so: the side
+ * with more files fades out, and once either side is cut off the whole list
+ * becomes reachable from a menu. Tabs coming and going change what fits
+ * without anything being resized, hence the count in the dependencies.
+ */
+function useStripEdges(strip: RefObject<HTMLDivElement | null>, tabs: number) {
+  const [edges, setEdges] = useState({ start: false, end: false });
+
+  const read = useCallback(() => {
+    const el = strip.current;
+    if (!el) return;
+    const room = el.scrollWidth - el.clientWidth;
+    // A pixel of slack: fractional layout never quite lands on the end.
+    const next = { start: el.scrollLeft > 1, end: el.scrollLeft < room - 1 };
+    setEdges((current) =>
+      current.start === next.start && current.end === next.end ? current : next,
+    );
+  }, [strip]);
+
+  useEffect(() => {
+    read();
+  }, [read, tabs]);
+
+  useEffect(() => {
+    const el = strip.current;
+    if (!el) return;
+    el.addEventListener("scroll", read, { passive: true });
+    const observer = new ResizeObserver(read);
+    observer.observe(el);
+    return () => {
+      el.removeEventListener("scroll", read);
+      observer.disconnect();
+    };
+  }, [strip, read]);
+
+  return edges;
+}
+
 export function EditorHeader({
   projectId,
   pane,
@@ -115,11 +172,15 @@ export function EditorHeader({
   const tabs = pane.editor?.tabs ?? [];
   const shown = shownTab(pane);
   const shownId = shown ? editorRefId(shown) : null;
+  const strip = useRef<HTMLDivElement>(null);
+  const edges = useStripEdges(strip, tabs.length);
+  const cutOff = edges.start || edges.end;
 
   return (
     <div
       data-no-select
-      className="flex h-8 shrink-0 cursor-grab items-center gap-1 pl-1 pr-1"
+      data-focused={focused ? "true" : undefined}
+      className="k-pane-head flex h-8 shrink-0 cursor-grab items-center gap-1 pl-1 pr-1"
       onPointerDown={(event) => {
         if (event.button !== 0) return;
         if (!event.currentTarget.contains(event.target as Node)) return;
@@ -134,10 +195,15 @@ export function EditorHeader({
         if (!(event.target as HTMLElement).closest("button")) onFocus();
       }}
     >
+      {/* Full height, so the strip is the same band whether it scrolls or
+          not, and a focused tab has room for its ring. */}
       <div
+        ref={strip}
         role="tablist"
         aria-label="Open files"
-        className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto [scrollbar-width:none]"
+        data-edge-start={edges.start ? "true" : undefined}
+        data-edge-end={edges.end ? "true" : undefined}
+        className="k-tabstrip k-scroll-hidden flex h-full min-w-0 flex-1 items-center gap-0.5 overflow-x-auto"
       >
         {tabs.map((tab) => {
           const id = editorRefId(tab);
@@ -152,6 +218,54 @@ export function EditorHeader({
           );
         })}
       </div>
+
+      {/* Only once a tab has been pushed out of sight: with everything on
+          screen the strip is the list, and a second one would be clutter. */}
+      {cutOff ? (
+        <DropdownMenu modal={false}>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              title="All open files"
+              aria-label="All open files"
+              className="k-icon-btn size-6 shrink-0"
+            >
+              <ChevronDown className="size-3.5" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="end"
+            className="max-h-[50vh] min-w-56 overflow-y-auto"
+            onCloseAutoFocus={(event) => event.preventDefault()}
+          >
+            <DropdownMenuRadioGroup
+              value={shownId ?? ""}
+              onValueChange={(id) => showEditorTab(projectId, pane.id, id)}
+            >
+              {tabs.map((tab) => {
+                const id = editorRefId(tab);
+                const name = editorRefName(tab);
+                const folder = parentRel(tab.rel);
+                return (
+                  <DropdownMenuRadioItem key={id} value={id}>
+                    {tab.kind === "diff" ? (
+                      <FileDiff aria-hidden className="size-3.5 text-faint" />
+                    ) : (
+                      <FileIcon name={name} />
+                    )}
+                    <span className="min-w-0 truncate">{name}</span>
+                    {folder ? (
+                      <span className="min-w-0 truncate text-small text-faint">
+                        {folder}
+                      </span>
+                    ) : null}
+                  </DropdownMenuRadioItem>
+                );
+              })}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : null}
 
       <div
         className={cn(
@@ -192,6 +306,11 @@ export function EditorHeader({
 /**
  * A tab. The close button waits for hover — except on the tab you are on — and
  * an unsaved file shows a dot in its place until you reach for it.
+ *
+ * Once there are more tabs than strip, the one you are on pulls itself into
+ * view. The strip scrolls without a scrollbar, so a tab opened off the end
+ * would otherwise land somewhere you cannot see and nothing would appear to
+ * have happened.
  */
 function TabChip({
   projectId,
@@ -411,7 +530,7 @@ function PathBar({
         })}
       </nav>
 
-      <div className="flex shrink-0 items-center gap-2.5 text-[11px]">
+      <div className="flex shrink-0 items-center gap-2.5 text-small">
         {truncated ? (
           <span className="text-faint">Showing the start of a large file</span>
         ) : null}

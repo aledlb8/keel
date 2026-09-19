@@ -46,6 +46,8 @@ export type ShortcutId =
   | "fullscreen"
   | "balance"
   | "movePane"
+  | "nextTab"
+  | "prevTab"
   | "newDeck"
   | "overview"
   | "toggleSidebar"
@@ -184,6 +186,22 @@ export const SHORTCUTS: Shortcut[] = [
     group: "Panes",
     family: "single",
     defaults: bind("F11"),
+  },
+  {
+    // Not Ctrl+Tab, which already walks the panes; these are the pair every
+    // editor also answers to, and they only mean anything in an editor pane.
+    id: "nextTab",
+    label: "Next file in the editor",
+    group: "Panes",
+    family: "single",
+    defaults: bind("PageDown", { ctrl: true }),
+  },
+  {
+    id: "prevTab",
+    label: "Previous file in the editor",
+    group: "Panes",
+    family: "single",
+    defaults: bind("PageUp", { ctrl: true }),
   },
   {
     id: "balance",
@@ -484,6 +502,8 @@ export type ShortcutMatch =
   | { action: "splitDown" }
   | { action: "fullscreen" }
   | { action: "balance" }
+  | { action: "nextTab" }
+  | { action: "prevTab" }
   | { action: "movePane"; direction: MoveDirection }
   | { action: "newDeck" }
   | { action: "overview" }
