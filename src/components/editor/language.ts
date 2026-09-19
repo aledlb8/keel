@@ -2,6 +2,7 @@
 
 import { css } from "@codemirror/lang-css";
 import { html } from "@codemirror/lang-html";
+import { java } from "@codemirror/lang-java";
 import { javascript } from "@codemirror/lang-javascript";
 import { json } from "@codemirror/lang-json";
 import { markdown } from "@codemirror/lang-markdown";
@@ -45,6 +46,8 @@ export function languageFor(rel: string): Extension | null {
       return python();
     case "rs":
       return rust();
+    case "java":
+      return java();
     case "md":
     case "mdx":
       return markdown();
@@ -76,6 +79,7 @@ const NAMES: Record<string, string> = {
   scss: "SCSS",
   py: "Python",
   rs: "Rust",
+  java: "Java",
   md: "Markdown",
   mdx: "MDX",
   yml: "YAML",
