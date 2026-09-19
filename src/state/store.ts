@@ -2,7 +2,7 @@
  * The single source of truth: projects, their decks, and the terminals inside.
  *
  * Pane operations are addressed by `(projectId, paneId)` and find their own deck.
- * Callers almost never care which deck a terminal is on â€” the store does, so the
+ * Callers almost never care which deck a terminal is on — the store does, so the
  * deck layer stays invisible right up until you actually open a second one.
  *
  * Live terminal state (bytes, PTY handles) deliberately does not live here. Only
@@ -2040,7 +2040,7 @@ export const useKeel = create<KeelState>((set, get) => {
           };
         }
         const batch = gridOf(ids);
-        // Several at once means a batch launch â€” lay them out as a grid.
+        // Several at once means a batch launch — lay them out as a grid.
         return {
           ...current,
           // Beside what is already there, never re-gridded into it: the panes

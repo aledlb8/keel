@@ -132,7 +132,7 @@ export function Canvas({
 
   /**
    * One sweep measures every deck of every project at once. Pane ids are unique
-   * app-wide, so a single `querySelectorAll` over the container is enough â€” even
+   * app-wide, so a single `querySelectorAll` over the container is enough — even
    * for the hidden decks, which keep their layout because they are hidden with
    * `visibility` rather than `display`.
    */
@@ -376,7 +376,7 @@ export function Canvas({
   return (
     <div ref={containerRef} className="relative isolate h-full w-full">
       {/*
-       * Geometry only â€” and deliberately *underneath* the panes.
+       * Geometry only — and deliberately *underneath* the panes.
        *
        * Every pane is inset by half a gap, so the strip between two panes is
        * covered by nothing. A seam sits exactly in that strip and stays
