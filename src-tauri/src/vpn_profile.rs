@@ -342,6 +342,10 @@ pub fn discover_profiles() -> Vec<DiscoveredProfile> {
             let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
                 continue;
             };
+            // Isolated working copy, not a user-selected Connect profile.
+            if is_generated_working_copy(stem) {
+                continue;
+            }
             if !seen.insert(stem.to_ascii_lowercase()) {
                 continue;
             }
@@ -358,6 +362,10 @@ pub fn discover_profiles() -> Vec<DiscoveredProfile> {
             .cmp(&b.name.to_ascii_lowercase())
     });
     found
+}
+
+fn is_generated_working_copy(stem: &str) -> bool {
+    stem.eq_ignore_ascii_case("keel-app")
 }
 
 pub fn find_profile<'a>(
@@ -440,6 +448,14 @@ MIIB
         assert!(!isolated
             .lines()
             .any(|line| line.starts_with("route-ipv6 ") || line == "redirect-private"));
+    }
+
+    #[test]
+    fn generated_working_copy_is_not_a_user_profile() {
+        assert!(is_generated_working_copy("keel-app"));
+        assert!(is_generated_working_copy("Keel-App"));
+        assert!(!is_generated_working_copy("office"));
+        assert!(!is_generated_working_copy("keel-app-backup"));
     }
 
     #[test]

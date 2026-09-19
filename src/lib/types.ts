@@ -240,7 +240,11 @@ export type VpnPhase = "idle" | "connecting" | "connected" | "error";
 /** Live tunnel state. Only `autoConnect` / `connectOnLaunch` / `profileId` are written to disk. */
 export interface VpnState extends VpnSettings {
   phase: VpnPhase;
-  /** Hold new/restarted terminals until the current connection attempt settles. */
+  /**
+   * New/restarted terminals may spawn. False while a connect is in flight, and
+   * while connect-on-launch still needs a tunnel (idle/error at startup).
+   * Disconnecting releases the hold so an explicit opt-out is not stuck.
+   */
   spawnAllowed: boolean;
   connectInstalled: boolean;
   openvpnPath: string | null;

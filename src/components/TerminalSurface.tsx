@@ -316,11 +316,18 @@ export const TerminalSurface = memo(function TerminalSurface({
   onTitle,
 }: TerminalSurfaceProps) {
   const spawnAllowed = useKeel((state) => state.vpn.spawnAllowed);
+  const autoConnect = useKeel((state) => state.vpn.autoConnect);
   const vpnPhase = useKeel((state) => state.vpn.phase);
+  const vpnError = useKeel((state) => state.vpn.error);
   const proxyPort = useKeel((state) => state.vpn.proxyPort);
   const startedGeneration = useRef<number | null>(null);
-  // A reconnect gates new shells, not the output stream of a running shell.
-  const canStart = spawnAllowed || startedGeneration.current === generation;
+  // Connect-on-launch holds new shells until the tunnel is up, not merely until
+  // an attempt finishes. A running generation is left alone.
+  const launchHold =
+    autoConnect && vpnPhase !== "connected" && vpnPhase !== "idle";
+  const canStart =
+    (spawnAllowed && !launchHold) || startedGeneration.current === generation;
+  const vpnWait = !canStart && (!spawnAllowed || launchHold);
   const [spawnedProxyPort, setSpawnedProxyPort] = useState<number | null>(null);
   const restoring = useKeel((state) =>
     state.restoreStatus === "restoring" && paneId in state.restorePanes,
@@ -881,19 +888,46 @@ export const TerminalSurface = memo(function TerminalSurface({
       {starting ? (
         <div className="absolute inset-0 z-10 grid place-items-center bg-[color:var(--keel-term-solid)]">
           <div role="status" className="flex max-w-64 flex-col items-center gap-2 px-4 text-center">
-            <LoaderCircle aria-hidden className="size-5 text-faint motion-safe:animate-spin" />
+            {vpnPhase === "error" && vpnWait ? null : (
+              <LoaderCircle aria-hidden className="size-5 text-faint motion-safe:animate-spin" />
+            )}
             <p className="text-[13px] font-medium text-dim">
-              {!spawnAllowed ? "Waiting for VPN…" : restoring ? "Restoring terminal…" : "Starting terminal…"}
+              {vpnWait
+                ? vpnPhase === "error"
+                  ? "VPN didn't connect"
+                  : "Waiting for VPN…"
+                : restoring
+                  ? "Restoring terminal…"
+                  : "Starting terminal…"}
             </p>
-            <p className="text-[12px] leading-relaxed text-faint">
-              {!spawnAllowed
-                ? "This terminal will start when the connection attempt finishes."
+            <p className="max-h-28 overflow-y-auto text-[12px] leading-relaxed break-words text-faint">
+              {vpnWait
+                ? vpnPhase === "error"
+                  ? (vpnError ?? "The private tunnel did not come up.")
+                  : autoConnect
+                    ? "This terminal will start when the VPN is connected."
+                    : "This terminal will start when the connection attempt finishes."
                 : "Opening the shell and preparing your session."}
             </p>
-            {!spawnAllowed ? (
-              <button type="button" className="k-tag mt-1" onClick={() => useKeel.getState().openVpnSettings()}>
-                VPN settings
-              </button>
+            {vpnWait ? (
+              <div className="mt-1 flex flex-wrap items-center justify-center gap-2">
+                {vpnPhase === "error" ? (
+                  <button
+                    type="button"
+                    className="k-tag"
+                    onClick={() => void useKeel.getState().connectVpn()}
+                  >
+                    Try again
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="k-tag"
+                  onClick={() => useKeel.getState().openVpnSettings()}
+                >
+                  VPN settings
+                </button>
+              </div>
             ) : null}
           </div>
         </div>

@@ -158,6 +158,98 @@ it("connects on launch only when connectOnLaunch was opted in", async () => {
   assert.equal(state().vpn.spawnAllowed, true);
 });
 
+it("keeps terminals waiting when connect-on-launch fails", async () => {
+  mockIPC((cmd) => {
+    if (cmd === "vpn_connect") return Promise.reject("VPN service timed out");
+    if (cmd === "detect_agents") return [];
+    if (cmd === "state_load") {
+      return {
+        version: 5,
+        projects: [],
+        workspaces: [],
+        sidebar: [],
+        activeProjectId: null,
+        accounts: [],
+        vpn: { autoConnect: true, connectOnLaunch: true, profileId: "test" },
+      };
+    }
+    return idle;
+  });
+  await state().init();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(state().vpn.autoConnect, true);
+  assert.equal(state().vpn.phase, "error");
+  assert.equal(state().vpn.spawnAllowed, false);
+});
+
+it("starts waiting terminals when connect-on-launch is turned off", () => {
+  mockIPC(() => idle);
+  useKeel.setState({
+    ready: true,
+    vpn: { ...state().vpn, autoConnect: true, phase: "error", spawnAllowed: false },
+  });
+  state().setVpnAutoConnect(false);
+  assert.equal(state().vpn.autoConnect, false);
+  assert.equal(state().vpn.spawnAllowed, true);
+});
+
+it("persists connectOnLaunch with the launch toggle", () => {
+  let autoConnect: boolean | undefined;
+  let connectOnLaunch: boolean | undefined;
+  mockIPC((cmd, payload) => {
+    if (cmd === "state_save") {
+      const vpn = (payload as { state?: { vpn?: { autoConnect?: boolean; connectOnLaunch?: boolean } } })
+        .state?.vpn;
+      autoConnect = vpn?.autoConnect;
+      connectOnLaunch = vpn?.connectOnLaunch;
+      return;
+    }
+    return idle;
+  });
+  useKeel.setState({
+    ready: true,
+    restoreStatus: "idle",
+    vpn: { ...state().vpn, phase: "connected" },
+  });
+  state().setVpnAutoConnect(true);
+  state().flushPersist();
+  assert.equal(autoConnect, true);
+  assert.equal(connectOnLaunch, true);
+});
+
+it("does not reconnect the generated working copy as a saved profile", async () => {
+  const pending = deferred<VpnSnapshot>();
+  let connectProfile: unknown;
+  mockIPC((cmd, payload) => {
+    if (cmd === "vpn_connect") {
+      connectProfile = payload;
+      return pending.promise;
+    }
+    if (cmd === "detect_agents") return [];
+    if (cmd === "state_load") {
+      return {
+        version: 5,
+        projects: [],
+        workspaces: [],
+        sidebar: [],
+        activeProjectId: null,
+        accounts: [],
+        vpn: { autoConnect: true, connectOnLaunch: true, profileId: "keel-app" },
+      };
+    }
+    return idle;
+  });
+  await state().init();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(state().vpn.profileId, null);
+  assert.equal(state().vpn.spawnAllowed, false);
+  assert.equal(state().vpn.phase, "connecting");
+  assert.deepEqual(connectProfile, { profileId: null });
+  pending.resolve(connected);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(state().vpn.phase, "connected");
+});
+
 for (const removal of ["pane", "deck", "project"] as const) {
   it(`closing a waiting ${removal} settles restoration`, () => {
     mockIPC(() => undefined);

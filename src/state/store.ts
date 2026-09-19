@@ -70,6 +70,7 @@ import type {
   PersistedState,
   Project,
   SidebarRoot,
+  VpnPhase,
   VpnSettings,
   VpnState,
   Workspace,
@@ -526,16 +527,33 @@ export const DEFAULT_VPN: VpnSettings = {
   profileId: null,
 };
 
+/** Stem of the isolated working copy Keel writes; never a user-selected profile. */
+const KEEL_WORKING_PROFILE = "keel-app";
+
+function persistedProfileId(id: string | null | undefined): string | null {
+  if (typeof id !== "string") return null;
+  const trimmed = id.trim();
+  if (!trimmed || trimmed.toLowerCase() === KEEL_WORKING_PROFILE) return null;
+  return trimmed;
+}
+
 function readVpn(document: Record<string, unknown> | null): VpnSettings {
   const raw = document?.vpn;
   if (!raw || typeof raw !== "object") return { ...DEFAULT_VPN };
   const vpn = raw as Record<string, unknown>;
   return {
     autoConnect: vpn.connectOnLaunch === true,
-    profileId: typeof vpn.profileId === "string" && vpn.profileId.trim()
-      ? vpn.profileId
-      : null,
+    profileId: persistedProfileId(
+      typeof vpn.profileId === "string" ? vpn.profileId : null,
+    ),
   };
+}
+
+/** New shells wait while connecting, and while launch still needs a tunnel. */
+function spawnAllowedAfter(autoConnect: boolean, phase: VpnPhase): boolean {
+  if (phase === "connecting") return false;
+  if (phase === "connected") return true;
+  return !autoConnect;
 }
 
 function vpnFromSnapshot(
@@ -712,6 +730,7 @@ let saveTimer: ReturnType<typeof setTimeout> | null = null;
 export const useKeel = create<KeelState>((set, get) => {
   let vpnConnecting = false;
   let vpnRevision = 0;
+  let vpnOp = 0;
 
   /** Debounced write-through. Every mutation calls this; disk sees one write. */
   function persist(immediate = false) {
@@ -737,7 +756,7 @@ export const useKeel = create<KeelState>((set, get) => {
         vpn: {
           autoConnect: vpn.autoConnect,
           connectOnLaunch: vpn.autoConnect,
-          profileId: vpn.profileId,
+          profileId: persistedProfileId(vpn.profileId),
         },
         keybindings,
       };
@@ -901,6 +920,9 @@ export const useKeel = create<KeelState>((set, get) => {
         clearTimeout(saveTimer);
         saveTimer = null;
       }
+      vpnOp += 1;
+      vpnConnecting = false;
+      vpnRevision += 1;
       const existing = countPanes(get().projects);
       set({
         restoreStatus: existing > 0 ? "restoring" : "idle",
@@ -1368,8 +1390,9 @@ export const useKeel = create<KeelState>((set, get) => {
     async connectVpn(profileId) {
       if (vpnConnecting) return;
       vpnConnecting = true;
+      const op = ++vpnOp;
       vpnRevision += 1;
-      const chosen = profileId ?? get().vpn.profileId;
+      const chosen = persistedProfileId(profileId ?? get().vpn.profileId);
       set((state) => ({
         vpn: {
           ...state.vpn,
@@ -1382,40 +1405,52 @@ export const useKeel = create<KeelState>((set, get) => {
       persist();
       try {
         const snapshot = await backend.vpnConnect(chosen);
-        set((state) => ({
-          vpn: vpnFromSnapshot(
+        if (op !== vpnOp) return;
+        set((state) => {
+          const vpn = vpnFromSnapshot(
             {
               ...state.vpn,
               profileId: chosen ?? state.vpn.profileId,
             },
             snapshot,
             true,
-          ),
-        }));
+          );
+          return {
+            vpn: {
+              ...vpn,
+              spawnAllowed: spawnAllowedAfter(vpn.autoConnect, vpn.phase),
+            },
+          };
+        });
+        persist();
       } catch (error) {
+        if (op !== vpnOp) return;
         set((state) => ({
           vpn: {
             ...state.vpn,
             phase: "error",
-            spawnAllowed: true,
+            spawnAllowed: spawnAllowedAfter(state.vpn.autoConnect, "error"),
             error: String(error),
           },
         }));
       } finally {
-        vpnConnecting = false;
+        if (op === vpnOp) vpnConnecting = false;
         vpnRevision += 1;
       }
     },
 
     async disconnectVpn() {
       if (vpnConnecting) return;
+      const op = ++vpnOp;
       vpnRevision += 1;
       try {
         const snapshot = await backend.vpnDisconnect();
+        if (op !== vpnOp) return;
         set((state) => ({
           vpn: vpnFromSnapshot(state.vpn, snapshot, true),
         }));
       } catch (error) {
+        if (op !== vpnOp) return;
         set((state) => ({
           vpn: {
             ...state.vpn,
@@ -1430,7 +1465,13 @@ export const useKeel = create<KeelState>((set, get) => {
     },
 
     setVpnAutoConnect(autoConnect) {
-      set((state) => ({ vpn: { ...state.vpn, autoConnect } }));
+      set((state) => ({
+        vpn: {
+          ...state.vpn,
+          autoConnect,
+          spawnAllowed: spawnAllowedAfter(autoConnect, state.vpn.phase),
+        },
+      }));
       persist();
       if (autoConnect && get().vpn.phase !== "connected") {
         void get().connectVpn();
@@ -1438,7 +1479,9 @@ export const useKeel = create<KeelState>((set, get) => {
     },
 
     setVpnProfile(profileId) {
-      set((state) => ({ vpn: { ...state.vpn, profileId } }));
+      set((state) => ({
+        vpn: { ...state.vpn, profileId: persistedProfileId(profileId) },
+      }));
       persist();
     },
 
