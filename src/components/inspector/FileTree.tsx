@@ -621,7 +621,6 @@ function TreeRow({
             aria-expanded={folder ? open : undefined}
             aria-selected={selected}
             tabIndex={0}
-            title={folder && status ? `${entry.rel} — contains changes` : entry.rel}
             data-selected={selected}
             data-motion={motion}
             data-dragging={context.drag === entry.rel ? "true" : undefined}
@@ -756,7 +755,6 @@ function HitRow({
       role="treeitem"
       aria-selected={selected}
       tabIndex={0}
-      title={entry.rel}
       data-selected={selected}
       className="k-row k-row-dense gap-2"
       onClick={activate}
