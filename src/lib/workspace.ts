@@ -17,11 +17,15 @@ export interface FileContents {
   mtimeMs: number;
 }
 
+/**
+ * Children of a project folder. `null` means the path is no longer a folder:
+ * the listing must be forgotten, not retried.
+ */
 export function workspaceList(
   root: string,
   rel: string,
   showHidden = false,
-): Promise<WorkspaceEntry[]> {
+): Promise<WorkspaceEntry[] | null> {
   return invoke("workspace_list", { root, rel, showHidden });
 }
 

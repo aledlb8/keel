@@ -5,7 +5,7 @@ import { EditorState, type TransactionSpec } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import { registerEditorView } from "./editorViews.ts";
 import { diffTabId, fileTabId, unsavedFiles, unsavedFilesAll, useWorkspace } from "../state/workspace.ts";
-import type { GitDiff, GitStatus, PrList } from "./workspace.ts";
+import type { GitDiff, GitStatus, PrList, WorkspaceEntry } from "./workspace.ts";
 
 const state = useWorkspace.getState;
 const status: GitStatus = {
@@ -16,6 +16,15 @@ const branches = { current: "main", detached: false, items: [] };
 const prs: PrList = { available: true, items: [], error: null };
 const diff: GitDiff = { path: "a.ts", binary: false, hunks: [] };
 const contents = { text: "hello", size: 5, binary: false, truncated: false, mtimeMs: 1 };
+
+const entry = (rel: string, kind: "file" | "dir"): WorkspaceEntry => ({
+  name: rel.slice(rel.lastIndexOf("/") + 1),
+  rel,
+  kind,
+  size: kind === "file" ? 1 : null,
+});
+const file = (rel: string) => entry(rel, "file");
+const dir = (rel: string) => entry(rel, "dir");
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -336,6 +345,62 @@ it("refreshes the root tree again if an event arrives during its first listing",
   await tick();
   assert.equal(calls, 2);
   assert.equal(state().tree[""]?.[0]?.rel, "new.ts");
+});
+
+it("forgets a folder a refresh finds gone instead of asking for it forever", async () => {
+  const lists = new Map<string, WorkspaceEntry[] | null>([
+    ["", [dir("src")]],
+    ["src", [file("src/a.ts")]],
+  ]);
+  const asked: string[] = [];
+  ipc({
+    workspace_list: (args) => {
+      const rel = String(args.rel);
+      asked.push(rel);
+      return lists.has(rel) ? (lists.get(rel) as WorkspaceEntry[] | null) : [];
+    },
+  });
+  state().setRoot("gone-project");
+  await tick();
+  state().toggleExpanded("src");
+  await tick();
+  assert.deepEqual(state().tree.src?.map((item) => item.rel), ["src/a.ts"]);
+
+  lists.set("src", null);
+  state().applyFsChange("gone-project", ["src"], false);
+  await tick();
+  await tick();
+  assert.equal("src" in state().tree, false);
+  assert.equal("src" in state().expanded, false);
+
+  const before = asked.length;
+  state().applyFsChange("gone-project", ["other.ts"], false);
+  await tick();
+  await tick();
+  assert.ok(!asked.slice(before).includes("src"), "a gone folder is never listed again");
+});
+
+it("takes a deleted folder's listing and fold away at once", async () => {
+  ipc({
+    workspace_list: (args) => {
+      const rel = String(args.rel);
+      if (rel === "") return [dir("src")];
+      if (rel === "src") return [file("src/a.ts")];
+      return [];
+    },
+    workspace_delete: () => null,
+  });
+  state().setRoot("delete-project");
+  await tick();
+  state().toggleExpanded("src");
+  await tick();
+  state().setSelected("src/a.ts");
+  assert.ok(state().tree.src);
+
+  await state().deleteEntry("src");
+  assert.equal("src" in state().tree, false);
+  assert.equal("src" in state().expanded, false);
+  assert.equal(state().selectedRel, null);
 });
 
 it("reloads a stashed clean document changed by an agent in a background project", async () => {

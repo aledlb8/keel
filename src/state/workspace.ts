@@ -491,6 +491,27 @@ function treeRels(tree: Record<string, WorkspaceEntry[]>): Set<string> {
 }
 
 /**
+ * Forget a folder that is gone for good: its listing, its fold, and every
+ * listing and fold below it. Without this the tree kept a dead key, so each
+ * watcher event (or poll) asked for the missing path again and toasted again.
+ */
+function pruneDir(state: WorkspaceState, rel: string): Partial<WorkspaceState> {
+  const prefix = `${rel}/`;
+  const gone = (path: string) =>
+    path === rel || (rel !== "" && path.startsWith(prefix));
+  const without = <T,>(record: Record<string, T>): Record<string, T> =>
+    Object.fromEntries(Object.entries(record).filter(([path]) => !gone(path)));
+  return {
+    tree: without(state.tree),
+    expanded: without(state.expanded),
+    rowMotion: without(state.rowMotion),
+    selectedRel: state.selectedRel && gone(state.selectedRel) ? null : state.selectedRel,
+    creating: state.creating && gone(state.creating.parent) ? null : state.creating,
+    renaming: state.renaming && gone(state.renaming) ? null : state.renaming,
+  };
+}
+
+/**
  * Everything keyed by a path follows an entry that moved from `fromRel` to
  * `toRel`: open file tabs and their buffers, the selection, open folders.
  */
@@ -847,7 +868,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       try {
         const entries = await api.workspaceList(root, rel, showHidden);
         if (!isCurrent() || version !== projectVersion || showHidden !== get().showHidden) return;
-        set({ tree: { ...get().tree, [rel]: entries } });
+        if (entries === null) set(pruneDir(get(), rel));
+        else set({ tree: { ...get().tree, [rel]: entries } });
       } catch (error) {
         if (isCurrent()) toast.error(error instanceof Error ? error.message : String(error));
       }
@@ -1229,7 +1251,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         editors: get().editors.filter(
           (tab) => tab.rel !== rel && !tab.rel.startsWith(prefix),
         ),
-        selectedRel: get().selectedRel === rel ? null : get().selectedRel,
+        ...pruneDir(get(), rel),
       });
       await get().loadDir(parentRel(rel));
       void get().refreshGit();

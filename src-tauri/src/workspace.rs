@@ -115,13 +115,15 @@ fn sort_entries(entries: &mut [WorkspaceEntry]) {
     });
 }
 
-/// Immediate children of a folder inside the project.
+/// Immediate children of a folder inside the project. `None` means the path is
+/// no longer a folder (deleted, moved, or replaced by a file), so the frontend
+/// can forget its listing instead of asking again and again.
 #[tauri::command]
 pub async fn workspace_list(
     root: String,
     rel: String,
     show_hidden: bool,
-) -> Result<Vec<WorkspaceEntry>, String> {
+) -> Result<Option<Vec<WorkspaceEntry>>, String> {
     crate::blocking::run(move || workspace_list_blocking(root, rel, show_hidden)).await
 }
 
@@ -129,13 +131,18 @@ fn workspace_list_blocking(
     root: String,
     rel: String,
     show_hidden: bool,
-) -> Result<Vec<WorkspaceEntry>, String> {
+) -> Result<Option<Vec<WorkspaceEntry>>, String> {
     let root = crate::roots::require(&root)?;
-    let dir = resolve_existing(&root, &rel)?;
-    if !dir.is_dir() {
-        return Err(format!("{} is not a folder", dir.display()));
-    }
     let rel_base = normalize_rel(&rel)?;
+    let joined = if rel_base.as_os_str().is_empty() {
+        root.clone()
+    } else {
+        root.join(&rel_base)
+    };
+    if !joined.is_dir() {
+        return Ok(None);
+    }
+    let dir = resolve_existing(&root, &rel)?;
     let mut entries = Vec::new();
     let reader = fs::read_dir(&dir).map_err(|err| err.to_string())?;
     for entry in reader.filter_map(Result::ok) {
@@ -166,7 +173,7 @@ fn workspace_list_blocking(
         });
     }
     sort_entries(&mut entries);
-    Ok(entries)
+    Ok(Some(entries))
 }
 
 /// UTF-8 text, or a binary flag. Truncates huge files rather than loading them.
@@ -500,7 +507,8 @@ mod tests {
             String::new(),
             false,
         ))
-        .expect("list root");
+        .expect("list root")
+        .expect("the repo root exists");
         assert!(
             entries
                 .iter()
@@ -515,6 +523,29 @@ mod tests {
         );
         assert!(!entries.iter().any(|entry| entry.name == ".git"));
         assert!(!entries.iter().any(|entry| entry.name == "node_modules"));
+    }
+
+    #[test]
+    fn listing_a_vanished_folder_is_none() {
+        let dir = Scratch::new("vanished");
+        fs::create_dir_all(dir.0.join("src")).unwrap();
+        fs::write(dir.0.join("src/a.ts"), "a").unwrap();
+        let root = dir.root_str();
+        let listed =
+            tauri::async_runtime::block_on(workspace_list(root.clone(), "src".into(), false))
+                .expect("list src");
+        assert_eq!(listed.map(|entries| entries.len()), Some(1));
+
+        fs::remove_dir_all(dir.0.join("src")).unwrap();
+        let gone =
+            tauri::async_runtime::block_on(workspace_list(root.clone(), "src".into(), false))
+                .expect("list a deleted folder");
+        assert!(gone.is_none());
+
+        fs::write(dir.0.join("plain.txt"), "x").unwrap();
+        let file = tauri::async_runtime::block_on(workspace_list(root, "plain.txt".into(), false))
+            .expect("list a file");
+        assert!(file.is_none());
     }
 
     #[test]
