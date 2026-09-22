@@ -355,7 +355,6 @@ function openEditor(
     ? {
         activeEditor: id,
         selectedRel: rel,
-        ...(tab.kind === "diff" ? { tab: "git" as const } : {}),
       }
     : {};
   if (existing && (
@@ -707,6 +706,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     if (root) stashedDocs.delete(root);
     set({
       root,
+      tab: "files",
       tree: {},
       expanded: {},
       selectedRel: null,

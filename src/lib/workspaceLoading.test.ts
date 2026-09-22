@@ -64,6 +64,14 @@ it("does not request folded metadata when selecting Git", async () => {
   assert.deepEqual(calls, []);
 });
 
+it("opens every project on the files tab, and a diff does not take it away", async () => {
+  state().setTab("git");
+  state().setRoot("project-b");
+  assert.equal(state().tab, "files");
+  await state().openDiff("a.ts", false);
+  assert.equal(state().tab, "files");
+});
+
 it("publishes branches and history while pull requests are still pending", async () => {
   const pending = deferred<PrList>();
   mockIPC((cmd) => {
