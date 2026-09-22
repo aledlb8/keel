@@ -4,9 +4,9 @@
  * The stage along the top draws every terminal you have queued, lit in its
  * agent's colour, in the grid it will open as. Under it sits one key per agent.
  * Click a key or press its number to drop a pane onto the stage; click a pane,
- * or right-click a key, to take one back out. Enter opens them as one group
- * beside whatever the deck already holds, and a pane's header can be dragged
- * to rearrange from there.
+ * or right-click a key, to take one back out. Enter arranges new and existing
+ * panes together in a balanced grid. A pane's header can be dragged to rearrange
+ * from there.
  */
 
 import {
@@ -38,7 +38,7 @@ import { listSubdirectories } from "@/lib/backend";
 import { KEEL_AGENT_FALLBACK, agentAccent } from "@/lib/tokens";
 import { gridRows, listPanes } from "@/lib/tree";
 import { cn } from "@/lib/utils";
-import type { Agent, Project } from "@/lib/types";
+import type { Agent, Pane, Project } from "@/lib/types";
 import { activeDeck, useKeel, type PaneSpec } from "@/state/store";
 
 /** Stands in for "no agent, just a shell" wherever an agent id is expected. */
@@ -160,7 +160,10 @@ export function LaunchDialog({
   }
 
   const deck = activeDeck(project);
-  const alreadyOpen = listPanes(deck?.tree ?? null).length;
+  const existing = listPanes(deck?.tree ?? null).flatMap((paneId) => {
+    const pane = deck?.panes[paneId];
+    return pane ? [pane] : [];
+  });
 
   const cwd =
     folder === ROOT
@@ -235,8 +238,8 @@ export function LaunchDialog({
   let placeholder = "Add a project folder first. Its terminals open here.";
   if (project) {
     placeholder =
-      alreadyOpen > 0
-        ? `Pick an agent below, or press its number. New terminals open beside the ${alreadyOpen} already in ${deck?.name ?? "this deck"}.`
+      existing.length > 0
+        ? "Pick an agent below, or press its number. New terminals will join the existing panes in a balanced grid."
         : "Pick an agent below, or press its number.";
   }
 
@@ -293,6 +296,7 @@ export function LaunchDialog({
 
         <div className="px-3">
           <Stage
+            existing={existing}
             picks={queued}
             growingUid={growing}
             onRemove={remove}
@@ -363,26 +367,32 @@ export function LaunchDialog({
 }
 
 /**
- * The new terminals in miniature. Rows come from `gridRows`, the same chunking
- * `gridOf` lays the batch out with, so what you see is the group you get.
+ * The resulting deck in miniature. Rows come from `gridRows`, the same chunking
+ * `gridOf` uses when the queued terminals join the existing panes.
  */
 function Stage({
+  existing,
   picks,
   growingUid,
   onRemove,
   placeholder,
 }: {
+  existing: Pane[];
   picks: Pick[];
   growingUid: number | null;
   onRemove: (uid: number) => void;
   placeholder: string;
 }) {
   const newest = picks.length > 0 ? picks[picks.length - 1]?.uid ?? null : null;
+  const tiles: ({ kind: "existing"; pane: Pane } | { kind: "new"; pick: Pick })[] = [
+    ...existing.map((pane) => ({ kind: "existing" as const, pane })),
+    ...picks.map((pick) => ({ kind: "new" as const, pick })),
+  ];
 
   return (
     <div
       role="group"
-      aria-label="Terminals to open"
+      aria-label="Layout after opening terminals"
       className="flex h-[min(40vh,320px)] flex-col gap-1.5 rounded-[var(--keel-r-window)] bg-[color:var(--keel-void)] p-1.5 shadow-[inset_0_0_0_1px_var(--keel-line)]"
     >
       {picks.length === 0 ? (
@@ -390,25 +400,39 @@ function Stage({
           {placeholder}
         </div>
       ) : (
-        gridRows(picks).map((row, index) => (
+        gridRows(tiles).map((row, index) => (
           <div
             // By index: a row stays mounted while the panes in it change.
             key={index}
             className={cn(
               "flex min-h-0 flex-1 gap-1.5",
               // A row that only just came into being grows in with its pane.
-              row.length === 1 && row[0]?.uid === growingUid && "k-pane-in",
+              row.length === 1 &&
+                row[0]?.kind === "new" &&
+                row[0].pick.uid === growingUid &&
+                "k-pane-in",
             )}
           >
-            {row.map((pick) => (
-              <StageTile
-                key={pick.uid}
-                pick={pick}
-                growing={pick.uid === growingUid}
-                caret={pick.uid === newest}
-                onRemove={() => onRemove(pick.uid)}
-              />
-            ))}
+            {row.map((tile) =>
+              tile.kind === "existing" ? (
+                <div
+                  key={tile.pane.id}
+                  title={`${tile.pane.title} (already open)`}
+                  className="flex min-w-0 flex-1 flex-col justify-center overflow-hidden rounded-[7px] border border-line bg-veil-2 px-2 text-small text-faint"
+                >
+                  <span className="truncate text-dim">{tile.pane.title}</span>
+                  <span className="truncate">Already open</span>
+                </div>
+              ) : (
+                <StageTile
+                  key={tile.pick.uid}
+                  pick={tile.pick}
+                  growing={tile.pick.uid === growingUid}
+                  caret={tile.pick.uid === newest}
+                  onRemove={() => onRemove(tile.pick.uid)}
+                />
+              ),
+            )}
           </div>
         ))
       )}

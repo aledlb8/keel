@@ -452,8 +452,7 @@ export function dockAtEdge(
 
 /**
  * Two layouts side by side, each given width in proportion to how many panes
- * it holds. A batch of new terminals joins a deck this way, so the panes you
- * already arranged keep their arrangement.
+ * it holds, preserving each layout's internal arrangement.
  */
 export function besideTree(left: LayoutNode, right: LayoutNode): LayoutNode {
   const leftCount = listPanes(left).length;
@@ -481,15 +480,22 @@ function findSplit(
 }
 
 /**
- * How a flat list is chunked into a balanced grid: `ceil(sqrt(n))` columns,
- * filled left to right. `gridOf` builds its tree from this, and anything that
+ * How a flat list is chunked into a balanced grid: at most `ceil(sqrt(n))`
+ * columns, with row lengths differing by at most one. `gridOf` and anything that
  * previews a grid should draw from it too, so the two cannot drift apart.
  */
 export function gridRows<T>(items: readonly T[]): T[][] {
+  if (items.length === 0) return [];
   const columns = Math.ceil(Math.sqrt(items.length));
+  const rowCount = Math.ceil(items.length / columns);
+  const perRow = Math.floor(items.length / rowCount);
+  const extra = items.length % rowCount;
   const rows: T[][] = [];
-  for (let index = 0; index < items.length; index += columns) {
-    rows.push(items.slice(index, index + columns));
+  let offset = 0;
+  for (let index = 0; index < rowCount; index += 1) {
+    const length = perRow + (index < extra ? 1 : 0);
+    rows.push(items.slice(offset, offset + length));
+    offset += length;
   }
   return rows;
 }

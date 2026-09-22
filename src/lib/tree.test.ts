@@ -52,6 +52,39 @@ describe("relabelPanes", () => {
 });
 
 describe("gridOf", () => {
+  it("puts three panes in two rows and four panes in four corners", () => {
+    assert.deepEqual(shape(gridOf(["a", "b", "c"])), {
+      column: [{ row: ["a", "b"] }, "c"],
+    });
+    assert.deepEqual(shape(gridOf(["a", "b", "c", "d"])), {
+      column: [{ row: ["a", "b"] }, { row: ["c", "d"] }],
+    });
+  });
+
+  it("covers the canvas without overlap, gaps, or increasingly deep splits", () => {
+    function verify(node: LayoutNode, area: number, depth: number): number {
+      assert.ok(depth <= 2);
+      if (node.kind === "pane") {
+        assert.ok(area > 0);
+        return area;
+      }
+      assert.ok(node.children.length >= 2);
+      assert.equal(node.children.length, node.sizes.length);
+      assert.ok(node.sizes.every((size) => Number.isFinite(size) && size > 0));
+      assert.ok(Math.abs(node.sizes.reduce((sum, size) => sum + size, 0) - 1) < 1e-12);
+      return node.children.reduce((sum, child, index) =>
+        sum + verify(child, area * node.sizes[index]!, depth + 1), 0);
+    }
+
+    for (let count = 1; count <= 128; count += 1) {
+      const ids = Array.from({ length: count }, (_, index) => `pane-${index}`);
+      const tree = gridOf(ids)!;
+      assert.deepEqual(listPanes(tree), ids);
+      assert.ok(Math.abs(verify(tree, 1, 0) - 1) < 1e-12);
+    }
+    assert.equal(gridOf([]), null);
+  });
+
   it("lays six panes out as two rows of three", () => {
     assert.deepEqual(shape(gridOf(SIX)), {
       column: [{ row: ["a", "b", "c"] }, { row: ["d", "e", "f"] }],
@@ -122,11 +155,33 @@ describe("besideTree", () => {
 });
 
 describe("gridRows", () => {
-  it("fills ceil(sqrt(n)) columns and leaves the remainder on the last row", () => {
+  it("puts the longer rows first while preserving reading order", () => {
     assert.deepEqual(gridRows(["a", "b", "c", "d", "e"]), [
       ["a", "b", "c"],
       ["d", "e"],
     ]);
+  });
+
+  it("distributes incomplete rows instead of leaving one oversized pane", () => {
+    assert.deepEqual(gridRows([1, 2, 3, 4, 5, 6, 7]), [
+      [1, 2, 3], [4, 5], [6, 7],
+    ]);
+    assert.deepEqual(gridRows([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]), [
+      [1, 2, 3, 4], [5, 6, 7], [8, 9, 10],
+    ]);
+  });
+
+  it("keeps rows balanced and preserves every item without mutating the input", () => {
+    for (let count = 1; count <= 128; count += 1) {
+      const items = Object.freeze(Array.from({ length: count }, (_, index) => index));
+      const rows = gridRows(items);
+      const lengths = rows.map((row) => row.length);
+      assert.deepEqual(rows.flat(), items);
+      assert.ok(Math.max(...lengths) - Math.min(...lengths) <= 1);
+      assert.ok(lengths.every((length) => length > 0));
+      assert.ok(Math.abs(rows.length - Math.max(...lengths)) <= 1);
+      assert.deepEqual(lengths, [...lengths].sort((left, right) => right - left));
+    }
   });
 
   it("has no rows for nothing", () => {

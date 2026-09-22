@@ -42,7 +42,6 @@ import { killPty } from "../lib/pty.ts";
 import { pathWithin } from "../lib/terminalCwd.ts";
 import {
   balance,
-  besideTree,
   closePane as closeInTree,
   dockAtEdge,
   dockPane,
@@ -2015,7 +2014,9 @@ export const useKeel = create<KeelState>((set, get) => {
           title: spec.title ?? defaultTitle(agents, spec.agentId),
           cwd: spec.cwd ?? null,
         };
-        const beside = placement.beside ?? current.focused;
+        const beside =
+          placement.beside ??
+          (placement.direction ? current.focused : null);
         const tree = !current.tree
           ? paneLeaf(paneId)
           : beside && listPanes(current.tree).includes(beside)
@@ -2055,13 +2056,9 @@ export const useKeel = create<KeelState>((set, get) => {
             cwd: spec.cwd ?? null,
           };
         }
-        const batch = gridOf(ids);
-        // Several at once means a batch launch — lay them out as a grid.
         return {
           ...current,
-          // Beside what is already there, never re-gridded into it: the panes
-          // the user arranged stay where they put them.
-          tree: current.tree && batch ? besideTree(current.tree, batch) : batch,
+          tree: gridOf([...listPanes(current.tree), ...ids]),
           panes,
           focused: ids[0] ?? current.focused,
           zoomed: null,
