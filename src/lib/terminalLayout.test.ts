@@ -122,6 +122,27 @@ describe("automatic terminal placement", () => {
     }
   });
 
+  it("opens a default shell beside an agent pane instead of copying it", () => {
+    const project = state().addProject("C:/code/layout");
+    const agent = state().addPane(project.id, {
+      agentId: "claude",
+      accountId: "work",
+      cwd: "C:/code/layout/src",
+    })!;
+    state().duplicatePane(project.id, agent, "row");
+    const deck = currentDeck();
+    const split = listPanes(deck.tree).find((id) => id !== agent);
+    assert.ok(split);
+    const pane = deck.panes[split];
+    assert.ok(pane);
+    assert.equal(pane.agentId, null);
+    assert.equal(pane.accountId, null);
+    assert.equal(pane.resumeAgent, false);
+    assert.equal(pane.title, "Shell");
+    assert.equal(pane.cwd, "C:/code/layout/src");
+    assert.equal(deck.focused, split);
+  });
+
   it("reflows the active deck, reveals new panes, and leaves other decks alone", () => {
     const project = state().addProject("C:/code/layout");
     state().addPanes(project.id, [shell, shell]);

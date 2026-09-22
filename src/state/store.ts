@@ -2099,13 +2099,11 @@ export const useKeel = create<KeelState>((set, get) => {
         return;
       }
 
+      // A terminal split opens the default shell in the folder the pane is in,
+      // rather than a second copy of whatever runs there.
       get().addPane(
         projectId,
-        {
-          agentId: source.agentId,
-          accountId: source.accountId,
-          cwd: source.cwd,
-        },
+        { agentId: null, cwd: source.cwd },
         { beside: paneId, direction },
       );
     },
