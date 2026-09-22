@@ -80,6 +80,8 @@ pnpm test:rust
 
 Add a folder to create a project, then open terminals or agent sessions inside it. Related projects can be grouped into a workspace so they sit together in the sidebar; dissolving a workspace never deletes its projects. Projects can contain multiple decks: independent pane layouts whose processes continue running while another deck is visible. The overview (`Ctrl+O`) shows every deck and lets you move running terminals between them.
 
+Adding terminals arranges the current deck in a balanced grid: three panes form two above one, four form a 2×2 grid, and larger groups spread evenly across rows. The launch preview includes existing panes. Running sessions and editor tabs stay open; explicit horizontal and vertical splits still divide the pane you choose. See [terminal layout](docs/terminal-layout.md) for the placement rules.
+
 Common shortcuts:
 
 | Shortcut | Action |
