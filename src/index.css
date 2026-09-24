@@ -118,8 +118,9 @@
     --keel-void: #0a0a0a;
     /* Opaque. Translucent chrome + backdrop-filter sampled the canvas (and
      * the black outside the window) so the footer went darker at the bottom
-     * edge and the whole frame flashed when a deck switched. Mirrored as the
-     * window `backgroundColor` in tauri.conf.json. */
+     * edge and the whole frame flashed when a deck switched. The window is
+     * transparent now — see `--keel-idle-opacity` — but the chrome still
+     * paints its own solid ground. */
     --keel-chrome: #161616;
     --keel-chrome-strong: #1b1b1b;
 
@@ -144,6 +145,13 @@
      */
     --keel-sheen: rgba(255, 255, 255, 0.07);
     --keel-scrim: rgba(0, 0, 0, 0.62);
+    /*
+     * What is left of the shell while you are working in another window. The
+     * window itself is transparent, so this opacity is the only thing between
+     * the app and the desktop behind it — thin enough to see what you switched
+     * to, opaque enough that agents left running stay readable.
+     */
+    --keel-idle-opacity: 0.8;
 
     /* ---- Type ---------------------------------------------------------- */
     /*
@@ -308,13 +316,25 @@
 
     html {
         @apply font-sans;
-        background: var(--keel-void);
+        /*
+         * No ground on the html or the body: the shell's ground lives on
+         * #root, and the window itself is transparent. Anything opaque behind
+         * #root would sit under the unfocused fade and never let the desktop
+         * through. Mirrored by the pre-React paint in index.html.
+         */
+        background: transparent;
     }
 
     body {
-        @apply bg-background text-foreground;
+        @apply text-foreground;
+        background: transparent;
         margin: 0;
         overflow: hidden;
+        /* Refocusing is a quick step back up; leaving is the slower ease in
+         * the rule below, because nothing is waiting on it. On the body
+         * rather than #root so an open dialog, which portals to the body,
+         * fades with everything else. */
+        transition: opacity 120ms ease-out;
         /* The whole app is one fixed surface; nothing outside a pane scrolls. */
         overscroll-behavior: none;
         font-size: var(--keel-type-row);
@@ -345,6 +365,16 @@
             );
         background-blend-mode: overlay, normal;
         background-size: 180px 180px, auto;
+    }
+
+    /*
+     * In the background, the window's contents fade so the desktop shows
+     * through — the window is transparent, and this one opacity is what lets
+     * it. The attribute is written by `lib/windowFocus.ts`.
+     */
+    html[data-window-inactive] body {
+        opacity: var(--keel-idle-opacity);
+        transition: opacity 240ms ease;
     }
 
     /* Chrome is not prose — dragging it should move the window, not select it. */

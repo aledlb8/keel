@@ -59,6 +59,7 @@ import {
 } from "@/lib/keymap";
 import { onPtyAgentExit, onPtyAgentStart, onPtyExit } from "@/lib/pty";
 import { pruneRecent } from "@/lib/recentFiles";
+import { startWindowFocusTracking } from "@/lib/windowFocus";
 import {
   isWatching,
   onWorkspaceChanged,
@@ -200,6 +201,7 @@ export default function App() {
     void useKeel.getState().init();
     const stopTracking = startAttentionTracking();
     const stopAudio = startChimeAudio();
+    const stopFocus = startWindowFocusTracking();
     const unlisten = onPtyExit((paneId, generation) => {
       useKeel.getState().notePaneExit(paneId, generation);
     });
@@ -218,6 +220,7 @@ export default function App() {
     return () => {
       stopTracking();
       stopAudio();
+      stopFocus();
       stopHost();
       stopClose();
       window.removeEventListener("contextmenu", blockNativeMenu);
