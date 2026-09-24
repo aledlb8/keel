@@ -34,8 +34,17 @@ export interface Pane {
    * Type the agent command when this pane's shell starts. Cleared once that
    * process exits, so a reopen continues from the shell you were already in
    * rather than launching the agent again. Restart arms it.
+   *
+   * Also set while a CLI the user started by hand is still running. When that
+   * process exits, a pane that was a shell goes back to being a shell.
    */
   resumeAgent: boolean;
+  /**
+   * Who this pane was before a CLI started inside an already-open shell.
+   * Restored when that process exits. Absent when the pane was opened as the
+   * agent, and absent again once the shell is idle.
+   */
+  agentHome?: AgentHome | undefined;
   /**
    * Conversation this pane owns, once captured from the agent. `null` until
    * then. Leftover generated UUIDs from older builds are ignored until
@@ -211,6 +220,21 @@ export interface Agent extends AgentSpec {
 }
 
 import type { KeybindingOverrides } from "./keymap";
+
+/**
+ * The pane's identity before the user ran a CLI in its shell.
+ *
+ * `resumeAgent` here is the at-rest flag, not "a process is live". Quitting
+ * the CLI puts these fields back on the pane.
+ */
+export interface AgentHome {
+  agentId: string | null;
+  accountId: string | null;
+  resumeAgent: boolean;
+  sessionId: string | null;
+  sessionReady: boolean;
+  title: string;
+}
 
 /** A named login slot. Credentials stay in the agent's own isolated config dir. */
 export interface AgentAccount {

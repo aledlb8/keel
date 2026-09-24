@@ -206,8 +206,8 @@ export default function App() {
     const unlistenAgent = onPtyAgentExit((paneId, generation) => {
       useKeel.getState().releaseAgent(paneId, generation);
     });
-    const unlistenStart = onPtyAgentStart((paneId, generation) => {
-      void useKeel.getState().captureSession(paneId, generation);
+    const unlistenStart = onPtyAgentStart((paneId, generation, agentId, startedMs) => {
+      useKeel.getState().noteRunningAgent(paneId, generation, agentId, startedMs);
     });
     const stopHost = onHostLost(() => useKeel.getState().noteHostLost());
     const stopClose = startCloseGuard();

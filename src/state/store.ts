@@ -59,6 +59,7 @@ import {
 import type {
   Agent,
   AgentAccount,
+  AgentHome,
   AgentSpec,
   Deck,
   Direction,
@@ -103,6 +104,12 @@ export type RestoreStatus = "idle" | "restoring" | "partial" | "failed";
  * writes hundreds of times a second and none of that should re-render React.
  */
 const activity = new Map<string, AgentActivity>();
+/**
+ * Account the live shell process was spawned with. A CLI typed later inherits
+ * that environment, so the pane must show the same login — and only for the
+ * agent whose variable was set.
+ */
+const shellSpawn = new Map<string, { agentId: string | null; accountId: string | null }>();
 // OpenCode may create its session well after Enter (startup, plugins, or a
 // busy database). Keep the original capture boundary across later prompts.
 const sessionCaptures = new WeakMap<AgentActivity, {
@@ -206,6 +213,26 @@ export interface KeelState {
   notePaneCwd: (paneId: string, dir: string) => void;
   /** Agent process left the shell; the next spawn should not type the command. */
   releaseAgent: (paneId: string, generation?: number) => void;
+  /**
+   * A catalogue CLI is running in this shell (`agentId`), or the shell is idle
+   * again (`null`). A shell the user opened becomes that agent for activity,
+   * profiles, and session capture, and returns to a shell when the process exits.
+   */
+  noteRunningAgent: (
+    paneId: string,
+    generation: number | undefined,
+    agentId: string | null,
+    startedMs?: number,
+  ) => void;
+  /**
+   * Record the login this shell process was actually given. Called when the
+   * PTY starts, before any CLI the user types into it.
+   */
+  noteShellSpawn: (
+    paneId: string,
+    agentId: string | null,
+    accountId: string | null,
+  ) => void;
   /** First successful spawn: later launches should resume this conversation. */
   markSessionReady: (paneId: string) => void;
   /** Bind this pane to the conversation that actually started in it. */
@@ -410,6 +437,42 @@ function defaultTitle(agents: Agent[], agentId: string | null): string {
   return agents.find((agent) => agent.id === agentId)?.name ?? agentId;
 }
 
+/** Identity to restore when a CLI the user started in this shell exits. */
+function atRestHome(pane: Pane): AgentHome {
+  return {
+    agentId: pane.agentId,
+    accountId: pane.accountId,
+    resumeAgent: false,
+    sessionId: pane.sessionId,
+    sessionReady: pane.sessionReady,
+    title: pane.title,
+  };
+}
+
+/**
+ * A saved home is the at-rest pane, never a live process. A document that
+ * cannot name that pane drops the field.
+ */
+function readAgentHome(pane: Pane): { agentHome?: AgentHome | undefined } {
+  const raw = pane.agentHome;
+  if (!raw || typeof raw !== "object") return { agentHome: undefined };
+  const agentId = raw.agentId === null || typeof raw.agentId === "string" ? raw.agentId : undefined;
+  if (agentId === undefined) return { agentHome: undefined };
+  const sessionId =
+    typeof raw.sessionId === "string" && isSessionId(raw.sessionId) ? raw.sessionId : null;
+  const title = typeof raw.title === "string" && raw.title.trim() ? raw.title : "Shell";
+  return {
+    agentHome: {
+      agentId,
+      accountId: typeof raw.accountId === "string" ? raw.accountId : null,
+      resumeAgent: false,
+      sessionId,
+      sessionReady: sessionId !== null && raw.sessionReady === true,
+      title,
+    },
+  };
+}
+
 /** An editor pane with nothing in it yet. */
 function blankEditorPane(paneId: string): Pane {
   return {
@@ -520,6 +583,7 @@ function normalizeProjects(projects: Project[]): Project[] {
             resumeAgent: pane.resumeAgent ?? pane.agentId !== null,
             sessionId: pane.sessionId ?? null,
             sessionReady: pane.sessionReady ?? false,
+            ...readAgentHome(pane),
             muted: pane.muted === true ? true : undefined,
             ...(pane.editor ? { editor: normalizeEditor(pane.editor) } : {}),
           },
@@ -887,6 +951,64 @@ export const useKeel = create<KeelState>((set, get) => {
     });
   }
 
+  /** Wall time of the process, pulled back a second so a session file written as it starts still counts. */
+  function armActivity(paneId: string, startedMs: number) {
+    const spawnedAt = startedMs > 0 ? Math.max(0, startedMs - 1000) : Date.now() - 1500;
+    activity.set(paneId, new AgentActivity(spawnedAt));
+    set((state) => {
+      const doneAt = { ...state.doneAt };
+      delete doneAt[paneId];
+      return { status: { ...state.status, [paneId]: "idle" }, doneAt };
+    });
+  }
+
+  function finishRunningAgent(paneId: string, pane: Pane) {
+    const state = get();
+    const live = Boolean(pane.agentId && pane.resumeAgent);
+    if (
+      live &&
+      !(paneId in state.closing) &&
+      !(paneId in state.exited) &&
+      !state.hostLost
+    ) {
+      const project = state.projects.find((item) => deckOfPane(item, paneId));
+      notifyAgent(
+        paneAlert(pane, project?.name ?? "", "exited", state.restoreStatus === "restoring"),
+      );
+    }
+    if (!live && !pane.agentHome) return;
+
+    activity.delete(paneId);
+    acknowledge(paneId);
+    set((current) => ({ status: { ...current.status, [paneId]: "idle" } }));
+
+    if (!pane.agentHome) {
+      patchPane(paneId, (current) => ({ ...current, resumeAgent: false }), true);
+      return;
+    }
+    const home = pane.agentHome;
+    const running = state.agents.find((entry) => entry.id === pane.agentId) ?? null;
+    const title =
+      pane.titleLocked || !isGenericLabel(pane.title, running) ? pane.title : home.title;
+    const sessionId = home.sessionId && isSessionId(home.sessionId) ? home.sessionId : null;
+    patchPane(
+      paneId,
+      (current) => {
+        const { agentHome: _home, ...rest } = current;
+        return {
+          ...rest,
+          agentId: home.agentId,
+          accountId: home.accountId,
+          resumeAgent: false,
+          sessionId,
+          sessionReady: sessionId !== null && home.sessionReady,
+          title,
+        };
+      },
+      true,
+    );
+  }
+
   return {
     ready: false,
     agents: [],
@@ -1023,6 +1145,7 @@ export const useKeel = create<KeelState>((set, get) => {
           for (const paneId of Object.keys(deck.panes)) {
             void killPty(paneId).catch(() => {});
             activity.delete(paneId);
+            shellSpawn.delete(paneId);
           }
         }
       }
@@ -1195,10 +1318,11 @@ export const useKeel = create<KeelState>((set, get) => {
             Object.entries(deck.panes).map(([id, pane]) => {
               if (!pane.agentId || known.has(pane.agentId)) return [id, pane];
               touched = true;
+              const { agentHome: _home, ...rest } = pane;
               return [
                 id,
                 {
-                  ...pane,
+                  ...rest,
                   agentId: null,
                   accountId: null,
                   resumeAgent: false,
@@ -1259,18 +1383,69 @@ export const useKeel = create<KeelState>((set, get) => {
     },
 
     releaseAgent(paneId, generation) {
+      get().noteRunningAgent(paneId, generation, null, 0);
+    },
+
+    noteRunningAgent(paneId, generation, agentId, startedMs = 0) {
       if (generation !== undefined && (get().generations[paneId] ?? 0) !== generation) return;
       const pane = findPane(paneId);
-      if (!pane?.agentId || !pane.resumeAgent) return;
-      const state = get();
-      if (!(paneId in state.closing) && !(paneId in state.exited) && !state.hostLost) {
-        const project = state.projects.find((item) => deckOfPane(item, paneId));
-        notifyAgent(paneAlert(pane, project?.name ?? "", "exited", state.restoreStatus === "restoring"));
+      if (!pane || pane.editor) return;
+      const nextId = agentId?.trim() ? agentId.trim() : null;
+      if (!nextId) {
+        finishRunningAgent(paneId, pane);
+        return;
       }
-      activity.delete(paneId);
-      acknowledge(paneId);
-      set((state) => ({ status: { ...state.status, [paneId]: "idle" } }));
-      patchPane(paneId, (current) => ({ ...current, resumeAgent: false }), true);
+      // Already this live CLI. Capture if the conversation is not bound yet;
+      // do not reset the detector or the session underneath a running turn.
+      if (pane.agentId === nextId && pane.resumeAgent) {
+        void get().captureSession(paneId, generation);
+        return;
+      }
+
+      const agents = get().agents;
+      const currentAgent = agents.find((entry) => entry.id === pane.agentId) ?? null;
+      const nextAgent = agents.find((entry) => entry.id === nextId) ?? null;
+      // A shell, or a different agent that had already exited, is what we return to.
+      // The same agent typed again keeps its own identity and just starts a new chat.
+      const home = pane.agentHome ?? (pane.agentId !== nextId ? atRestHome(pane) : undefined);
+      const spawned = shellSpawn.get(paneId);
+      const spawnedAccount =
+        spawned?.agentId === nextId ? (spawned.accountId ?? null) : null;
+      const inherited =
+        spawnedAccount &&
+        get().accounts.some(
+          (account) => account.id === spawnedAccount && account.agentId === nextId,
+        )
+          ? spawnedAccount
+          : null;
+      const sameAgent = pane.agentId === nextId;
+      const title =
+        pane.titleLocked || sameAgent || !isGenericLabel(pane.title, currentAgent)
+          ? pane.title
+          : (nextAgent?.name ?? pane.title);
+
+      patchPane(
+        paneId,
+        (current) => ({
+          ...current,
+          agentId: nextId,
+          // Same CLI keeps the profile already on the pane. A different CLI
+          // inherits a profile only when this shell was spawned with that
+          // agent's own variable; otherwise it is the default login.
+          accountId: sameAgent ? current.accountId : inherited,
+          resumeAgent: true,
+          ...unboundSession(),
+          title,
+          ...(home ? { agentHome: home } : {}),
+        }),
+        true,
+      );
+      armActivity(paneId, startedMs);
+      void get().captureSession(paneId, generation);
+    },
+
+    noteShellSpawn(paneId, agentId, accountId) {
+      shellSpawn.set(paneId, { agentId, accountId });
     },
 
     markSessionReady(_paneId) {
@@ -1354,7 +1529,7 @@ export const useKeel = create<KeelState>((set, get) => {
             // Never wait for a leftover generated UUID. Fresh launches do not
             // pass `--session-id`, so the process creates its own conversation.
             mintedId: null,
-            recent,
+            recent: Array.isArray(recent) ? recent : [],
             claimed: claimedSessionIds(paneId, current),
             spawnedAt,
           });
@@ -1794,6 +1969,7 @@ export const useKeel = create<KeelState>((set, get) => {
           get().settleRestore(paneId, true);
           void killPty(paneId).catch(() => {});
           activity.delete(paneId);
+          shellSpawn.delete(paneId);
         }
       }
       const { workspaces, sidebar } = layoutOf();
@@ -1930,6 +2106,7 @@ export const useKeel = create<KeelState>((set, get) => {
         get().settleRestore(paneId, true);
         void killPty(paneId).catch(() => {});
         activity.delete(paneId);
+        shellSpawn.delete(paneId);
       }
 
       updateProject(projectId, (current) => {
@@ -2118,6 +2295,7 @@ export const useKeel = create<KeelState>((set, get) => {
       get().settleRestore(paneId, true);
       void killPty(paneId).catch(() => {});
       activity.delete(paneId);
+      shellSpawn.delete(paneId);
       updateDeckOfPane(projectId, paneId, (deck) => {
         const tree = closeInTree(deck.tree, paneId);
         const panes = { ...deck.panes };
@@ -2436,6 +2614,7 @@ export const useKeel = create<KeelState>((set, get) => {
         (get().generations[paneId] ?? 0) !== generation) || paneId in get().exited) return;
       const project = get().projects.find((item) => deckOfPane(item, paneId));
       activity.delete(paneId);
+      shellSpawn.delete(paneId);
       acknowledge(paneId);
       set((state) => ({
         exited: { ...state.exited, [paneId]: true },
@@ -2548,6 +2727,9 @@ export function startAttentionTracking(): () => void {
 
     for (const paneId of activity.keys()) {
       if (!(paneId in next)) activity.delete(paneId);
+    }
+    for (const paneId of shellSpawn.keys()) {
+      if (!(paneId in next)) shellSpawn.delete(paneId);
     }
 
     if (

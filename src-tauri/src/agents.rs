@@ -234,6 +234,14 @@ fn builtin_catalogue() -> Vec<AgentSpec> {
     serde_json::from_str(BUILTIN_CATALOGUE).expect("builtin agent catalogue is valid json")
 }
 
+/// Executable stems the process watcher matches against a live shell's children.
+pub(crate) fn agent_needles(app: &AppHandle) -> Vec<crate::procs::AgentNeedle> {
+    catalogue(app)
+        .into_iter()
+        .filter_map(|spec| crate::procs::needle_for(&spec.id, &spec.bins, &spec.command))
+        .collect()
+}
+
 fn detect_agents_blocking(app: &AppHandle) -> Vec<DetectedAgent> {
     let builtin = builtin_catalogue();
     catalogue(app)

@@ -48,13 +48,20 @@ pub struct PtySession {
     _job: Option<procs::KillOnCloseJob>,
 }
 
-/// Watches a pane whose shell had an agent typed into it, until that agent
-/// process tree is gone and the shell is sitting at a prompt again.
+/// Watches a shell for a catalogue CLI among its descendants.
+///
+/// Every pane is watched, not only ones Keel typed a command into. The user
+/// can start Claude, quit back to the prompt, and start Codex in the same
+/// shell; each of those is a different child process of this pid.
 struct AgentWatch {
     shell_pid: u32,
     generation: u64,
     alive: Arc<AtomicBool>,
-    saw_agent: bool,
+    /// Catalogue id currently attributed to this shell. `None` is an idle prompt.
+    agent_id: Option<String>,
+    /// Agent Keel typed at launch. Used only until the first time that process
+    /// is gone, and only when its executable is not one we can name.
+    expected: Option<String>,
 }
 
 #[derive(Default)]
@@ -95,6 +102,10 @@ pub struct SpawnOptions {
     /// Typed into the shell once it is up — this is how agents get launched.
     #[serde(default)]
     pub command: Option<String>,
+    /// Catalogue id of `command`, when Keel typed it. A shell the user opened
+    /// leaves this empty; a CLI they start later is recognised by process name.
+    #[serde(default)]
+    pub agent_id: Option<String>,
     /// CLI-specific variable that relocates user/auth storage for a named account.
     #[serde(default)]
     pub account_env: Option<String>,
@@ -112,6 +123,17 @@ pub struct SpawnOptions {
 pub struct PtyExit {
     pub id: String,
     pub generation: u64,
+}
+
+/// A catalogue CLI appeared in a shell that was idle, or replaced another one.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PtyAgent {
+    pub id: String,
+    pub generation: u64,
+    pub agent_id: String,
+    /// Unix milliseconds when that process was created. `0` if unknown.
+    pub started_ms: u64,
 }
 
 /// The default contents of `shell-init.ps1`.
@@ -543,28 +565,32 @@ pub fn pty_spawn(
     let typed_command = options
         .command
         .as_ref()
-        .filter(|command| !command.trim().is_empty());
-    if let Some(command) = typed_command {
+        .filter(|command| !command.trim().is_empty())
+        .cloned();
+    if let Some(command) = typed_command.as_deref() {
         let line = format!("{command}\r");
         let mut guard = lock_writer(&writer)?;
         write_pty_bytes(&mut **guard, line.as_bytes())
             .map_err(|err| format!("could not send the startup command: {err}"))?;
     }
-    let typed_command = typed_command.is_some();
-
-    // A pane that launched an agent should reopen as a shell once that agent
-    // has exited — otherwise Ctrl+C, close, reopen types `grok` again.
-    if typed_command {
-        if let Some(pid) = shell_pid {
-            watch_agent(
-                &manager,
-                &app,
-                options.id.clone(),
-                options.generation,
-                pid,
-                alive,
-            );
-        }
+    // Every shell is watched. A command Keel typed is remembered so an unnamed
+    // wrapper still counts as that agent until it exits; after that, only a
+    // recognised executable promotes the pane.
+    if let Some(pid) = shell_pid {
+        let expected = options
+            .agent_id
+            .as_deref()
+            .filter(|id| typed_command.is_some() && is_agent_id(id))
+            .map(str::to_string);
+        watch_agent(
+            &manager,
+            &app,
+            options.id.clone(),
+            options.generation,
+            pid,
+            alive,
+            expected,
+        );
     }
 
     Ok(())
@@ -573,6 +599,14 @@ pub fn pty_spawn(
 /// How often we look at the process tree for typed-in agents that have exited.
 const AGENT_WATCH_MS: u64 = 400;
 
+fn is_agent_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+}
+
 fn watch_agent(
     manager: &PtyManager,
     app: &AppHandle,
@@ -580,6 +614,7 @@ fn watch_agent(
     generation: u64,
     shell_pid: u32,
     alive: Arc<AtomicBool>,
+    expected: Option<String>,
 ) {
     if let Ok(mut watches) = manager.watches.lock() {
         watches.insert(
@@ -588,11 +623,17 @@ fn watch_agent(
                 shell_pid,
                 generation,
                 alive,
-                saw_agent: false,
+                agent_id: None,
+                expected,
             },
         );
     }
     start_agent_watcher(app.clone());
+}
+
+enum AgentChange {
+    Started(PtyAgent),
+    Stopped(PtyExit),
 }
 
 fn start_agent_watcher(app: AppHandle) {
@@ -600,75 +641,108 @@ fn start_agent_watcher(app: AppHandle) {
     if STARTED.swap(true, Ordering::SeqCst) {
         return;
     }
-    let _ = std::thread::Builder::new()
-        .name("keel-pty-watch".into())
-        .spawn(move || loop {
-            std::thread::sleep(Duration::from_millis(AGENT_WATCH_MS));
-            let (started, finished) = collect_agent_events(&app);
-            for event in started {
-                let _ = app.emit("pty:agent-start", event);
-            }
-            for event in finished {
-                // A restart under the same pane id inserts a new watch before
-                // we emit; that spawn is a fresh agent and must not be released.
-                let replaced = app
-                    .state::<PtyManager>()
-                    .watches
-                    .lock()
-                    .map(|watches| watches.contains_key(&event.id))
-                    .unwrap_or(true);
-                if replaced {
-                    continue;
+    let _ =
+        std::thread::Builder::new()
+            .name("keel-pty-watch".into())
+            .spawn(move || {
+                let mut needles = Vec::new();
+                let mut fetched: Option<std::time::Instant> = None;
+                loop {
+                    std::thread::sleep(Duration::from_millis(AGENT_WATCH_MS));
+                    let refresh = match fetched {
+                        Some(at) => at.elapsed() >= Duration::from_secs(2),
+                        None => true,
+                    };
+                    if refresh {
+                        needles = crate::agents::agent_needles(&app);
+                        fetched = Some(std::time::Instant::now());
+                    }
+                    for event in collect_agent_events(&app, &needles) {
+                        match event {
+                            AgentChange::Started(start) => {
+                                let _ = app.emit("pty:agent-start", start);
+                            }
+                            AgentChange::Stopped(exit) => {
+                                // A restart under the same pane id replaces the watch
+                                // before we emit. That generation is a new shell and
+                                // must not be told the previous CLI exited.
+                                let current =
+                                    app.state::<PtyManager>().watches.lock().ok().and_then(
+                                        |watches| {
+                                            watches.get(&exit.id).map(|watch| watch.generation)
+                                        },
+                                    );
+                                if current.is_some_and(|generation| generation != exit.generation) {
+                                    continue;
+                                }
+                                let _ = app.emit("pty:agent-exit", exit);
+                            }
+                        }
+                    }
                 }
-                let _ = app.emit("pty:agent-exit", event);
-            }
-        });
+            });
 }
 
-fn collect_agent_events(app: &AppHandle) -> (Vec<PtyExit>, Vec<PtyExit>) {
+fn collect_agent_events(app: &AppHandle, needles: &[procs::AgentNeedle]) -> Vec<AgentChange> {
     let manager = app.state::<PtyManager>();
     let mut watches = match manager.watches.lock() {
         Ok(guard) => guard,
-        Err(_) => return (Vec::new(), Vec::new()),
+        Err(_) => return Vec::new(),
     };
     if watches.is_empty() {
-        return (Vec::new(), Vec::new());
+        return Vec::new();
     }
-    let parents = procs::process_parents();
-    if parents.is_empty() {
-        return (Vec::new(), Vec::new());
+    let rows = procs::process_snapshot();
+    // A failed snapshot must not look like every CLI just exited.
+    if rows.is_empty() {
+        return Vec::new();
     }
+    let alive: std::collections::HashSet<u32> = rows.iter().map(|row| row.pid).collect();
 
-    let mut started = Vec::new();
-    let mut finished = Vec::new();
+    let mut events = Vec::new();
     watches.retain(|id, watch| {
         if !watch.alive.load(Ordering::SeqCst) {
             return false;
         }
-        if !parents.contains_key(&watch.shell_pid) {
+        if !alive.contains(&watch.shell_pid) {
             // The shell itself is gone; `pty:exit` is the event that matters.
             return false;
         }
-        if procs::has_descendants(&parents, watch.shell_pid) {
-            if !watch.saw_agent {
-                started.push(PtyExit {
+        let found = procs::attribute_agent(
+            &rows,
+            watch.shell_pid,
+            needles,
+            watch.agent_id.as_deref(),
+            watch.expected.as_deref(),
+            procs::command_args,
+        );
+        let next = found.as_ref().map(|agent| agent.id.clone());
+        if next != watch.agent_id {
+            // Exit first, then start, so a shell that left Claude and entered
+            // Codex is idle for one step and then Codex — not the other way round.
+            if watch.agent_id.is_some() {
+                events.push(AgentChange::Stopped(PtyExit {
                     id: id.clone(),
                     generation: watch.generation,
-                });
+                }));
             }
-            watch.saw_agent = true;
-            true
-        } else if watch.saw_agent {
-            finished.push(PtyExit {
-                id: id.clone(),
-                generation: watch.generation,
-            });
-            false
-        } else {
-            true
+            if let Some(agent) = found {
+                let started_ms = agent.pid.and_then(procs::process_started_ms).unwrap_or(0);
+                events.push(AgentChange::Started(PtyAgent {
+                    id: id.clone(),
+                    generation: watch.generation,
+                    agent_id: agent.id,
+                    started_ms,
+                }));
+            } else {
+                // The launched CLI has gone. A later `git` must not count as it.
+                watch.expected = None;
+            }
+            watch.agent_id = next;
         }
+        true
     });
-    (started, finished)
+    events
 }
 
 #[tauri::command(async)]

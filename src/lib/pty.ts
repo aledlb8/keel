@@ -17,6 +17,8 @@ export interface SpawnOptions {
   cwd?: string | null | undefined;
   /** Typed into the shell once it is up. This is how an agent gets launched. */
   command?: string | null | undefined;
+  /** Catalogue id of `command`, when Keel is the one typing it. */
+  agentId?: string | null | undefined;
   accountEnv?: string | null | undefined;
   accountId?: string | null | undefined;
   env?: Record<string, string> | undefined;
@@ -81,11 +83,26 @@ export function onPtyAgentExit(
   );
 }
 
-/** Fires when the typed-in agent process has actually appeared. */
+/** Fires when a catalogue CLI has appeared in this shell. */
 export function onPtyAgentStart(
-  handler: (id: string, generation: number) => void,
+  handler: (
+    id: string,
+    generation: number,
+    agentId: string,
+    startedMs: number,
+  ) => void,
 ): Promise<() => void> {
-  return listen<{ id: string; generation: number }>("pty:agent-start", (event) =>
-    handler(event.payload.id, event.payload.generation),
+  return listen<{
+    id: string;
+    generation: number;
+    agentId: string;
+    startedMs: number;
+  }>("pty:agent-start", (event) =>
+    handler(
+      event.payload.id,
+      event.payload.generation,
+      event.payload.agentId,
+      event.payload.startedMs,
+    ),
   );
 }

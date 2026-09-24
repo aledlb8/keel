@@ -289,6 +289,7 @@ export const PaneView = memo(function PaneView({
                       })
                     : null
                 }
+                launchAgentId={pane.resumeAgent ? pane.agentId : null}
                 accountEnv={agent?.accountEnv ?? null}
                 accountId={pane.accountId}
                 generation={generation}

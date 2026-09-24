@@ -53,6 +53,7 @@ winapi = { version = "0.3", features = [
     "winbase",
     "namedpipeapi",
     "processthreadsapi",
+    "minwindef",
     "winnt",
     "winsvc",
     "shellapi",

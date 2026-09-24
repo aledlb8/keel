@@ -182,6 +182,29 @@ it("an old ready snapshot cannot finish a new running generation", () => {
   assert.equal(state().status.agent, "working");
 });
 
+it("a shell that becomes claude tracks the next turn, and quitting clears it", () => {
+  useKeel.setState({
+    agents: [{
+      id: "claude", name: "Claude Code", command: "claude", short: "CC", accent: "",
+      bins: ["claude"], paths: [], path: "claude", installed: true, builtin: true,
+    }],
+    projects: [project("shell", null)],
+  });
+  state().noteRunningAgent("shell", 0, "claude", 1_000_000);
+  assert.equal(state().projects[0]?.decks[0]?.panes.shell?.agentId, "claude");
+  assert.equal(state().projects[0]?.decks[0]?.panes.shell?.resumeAgent, true);
+  render(ready, "shell");
+  state().noteActivity("shell", "input", "\r");
+  render(busy, "shell");
+  tick();
+  assert.equal(state().status.shell, "working");
+  state().noteRunningAgent("shell", 0, null, 0);
+  assert.equal(state().projects[0]?.decks[0]?.panes.shell?.agentId, null);
+  tick(10_000);
+  assert.equal(state().status.shell, "idle");
+  assert.deepEqual(state().doneAt, {});
+});
+
 it("shell/agent exits clear activity without announcing completion", () => {
   startTurn();
   state().releaseAgent("agent", 0);

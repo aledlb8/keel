@@ -279,6 +279,11 @@ export interface TerminalSurfaceProps {
   cwd: string | null;
   /** Typed into the shell once. Changing it does nothing until a restart. */
   command: string | null;
+  /**
+   * Catalogue id of `command` when Keel typed it. A plain shell passes null;
+   * a CLI started later is recognised from the process, not from this prop.
+   */
+  launchAgentId?: string | null | undefined;
   /** CLI-specific config-home variable and the selected isolated profile. */
   accountEnv?: string | null | undefined;
   accountId?: string | null | undefined;
@@ -307,6 +312,7 @@ export const TerminalSurface = memo(function TerminalSurface({
   paneId,
   cwd,
   command,
+  launchAgentId = null,
   accountEnv,
   accountId,
   generation,
@@ -368,6 +374,8 @@ export const TerminalSurface = memo(function TerminalSurface({
   const actions = useRef({ refit: () => {}, syncPty: () => {} });
   /** The size the PTY was last told about, and whether there is a PTY to tell. */
   const pty = useRef({ ready: false, cols: 0, rows: 0 });
+  /** Last command string sampled, so adopting a CLI can read the screen already painted. */
+  const seenCommand = useRef(command);
   const promptDraft = useRef(createPromptDraft());
   // Latest callbacks without re-running the setup effect.
   const handlers = useRef({
@@ -778,6 +786,11 @@ export const TerminalSurface = memo(function TerminalSurface({
 
     const start = async () => {
       pty.current.ready = false;
+      useKeel.getState().noteShellSpawn(
+        paneId,
+        command ? launchAgentId : null,
+        accountId ?? null,
+      );
       handlers.current.onActivity?.(paneId, "spawn");
       // Size the PTY from the real grid, not whatever xterm defaulted to.
       actions.current.refit();
@@ -790,6 +803,7 @@ export const TerminalSurface = memo(function TerminalSurface({
             generation,
             cwd,
             command,
+            agentId: command ? launchAgentId : null,
             accountEnv,
             accountId,
             cols,
@@ -838,6 +852,24 @@ export const TerminalSurface = memo(function TerminalSurface({
     // Spawn inputs are read at restart time; generation is the explicit trigger.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paneId, generation, canStart]);
+
+  // A CLI typed into an already-open shell paints before the pane is bound to
+  // it. Output that arrived while this was still a shell was not sampled, so
+  // read the grid once when the command identity changes. A restart flips the
+  // generation and clears `pty.ready` first; that screen belongs to the old process.
+  useEffect(() => {
+    const previous = seenCommand.current;
+    seenCommand.current = command;
+    if (!command || command === previous) return;
+    if (!pty.current.ready || startedGeneration.current !== generation) return;
+    const term = termRef.current;
+    if (!term) return;
+    useKeel.getState().noteScreen(
+      paneId,
+      generation,
+      readAgentScreen(term.buffer.active, term.rows),
+    );
+  }, [command, generation, paneId]);
 
   // 4. Focus follows the layout, so keystrokes land where the border says.
   // Leave the caret in the find field if that is what just received the click.
