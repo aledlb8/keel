@@ -1302,7 +1302,9 @@ export const useKeel = create<KeelState>((set, get) => {
       if (!project) return;
       const agent = get().agents.find((entry) => entry.id === pane.agentId);
       const store = agent?.session?.store;
-      if (store !== "grok" && store !== "claude" && store !== "opencode") return;
+      if (store !== "grok" && store !== "claude" && store !== "opencode" && store !== "codex") {
+        return;
+      }
       // opencode creates its conversation when the first prompt is submitted,
       // so a capture armed at spawn would have nothing to find — and could
       // bind a neighbour's chat. Only the submit path arms it.
@@ -1323,7 +1325,10 @@ export const useKeel = create<KeelState>((set, get) => {
       const spawnedAt = capture?.since ?? since ?? capturedActivity.spawnedAt;
 
       try {
-        for (let attempt = 0; attempt < (store === "opencode" ? 1 : 6); attempt += 1) {
+        // Codex writes the thread row as the TUI comes up, which can lag the
+        // process-start event by a few seconds.
+        const attempts = store === "opencode" ? 1 : store === "codex" ? 15 : 6;
+        for (let attempt = 0; attempt < attempts; attempt += 1) {
           if (attempt > 0) {
             await new Promise((resolve) => setTimeout(resolve, 400));
           }

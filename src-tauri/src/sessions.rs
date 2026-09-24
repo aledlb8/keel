@@ -1,8 +1,8 @@
 //! Where coding CLIs keep their conversations, so a pane can reopen *its* chat
 //! rather than whatever happened to run last in this folder.
 //!
-//! `grok` and `claude` write one file per conversation. `opencode` writes rows
-//! into a single SQLite database, which is opened read-only — Keel never writes
+//! `grok` and `claude` write one file per conversation. `opencode` and `codex`
+//! write rows into SQLite, which is opened read-only — Keel never writes
 //! another tool's storage.
 
 use std::ffi::OsStr;
@@ -18,7 +18,7 @@ use crate::pty::home_dir;
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionProbe {
-    /// `grok`, `claude` or `opencode` — each CLI lays its work out differently.
+    /// `grok`, `claude`, `opencode`, or `codex` — each CLI lays its work out differently.
     pub store: String,
     pub cwd: String,
     #[serde(default)]
@@ -138,6 +138,7 @@ fn session_root(app: &AppHandle, probe: &SessionProbe) -> Option<PathBuf> {
         "grok" => Some(home.join(".grok")),
         "claude" => Some(home.join(".claude")),
         "opencode" => Some(opencode_data_home()?.join("opencode")),
+        "codex" => Some(home.join(".codex")),
         _ => None,
     }
 }
@@ -241,6 +242,117 @@ fn list_opencode_ids(data_dir: &Path, cwd: &str) -> Vec<(String, SystemTime)> {
             )
         })
         .collect()
+}
+
+/// Codex 0.155 stores one row per thread in `state_5.sqlite`. The cwd is the
+/// Windows verbatim form (`\\?\C:\...`). Only CLI threads count: a subagent
+/// row would resume the wrong conversation.
+const CODEX_THREADS: &str = "
+    SELECT id, cwd,
+           CASE
+             WHEN created_at_ms > 100000000000 THEN created_at_ms
+             WHEN created_at > 100000000000 THEN created_at
+             ELSE created_at * 1000
+           END
+    FROM threads
+    WHERE archived = 0
+      AND source = 'cli'
+      AND id NOT IN (SELECT child_thread_id FROM thread_spawn_edges)
+    ORDER BY 3 DESC
+    LIMIT 256";
+
+const CODEX_THREADS_NO_EDGES: &str = "
+    SELECT id, cwd,
+           CASE
+             WHEN created_at_ms > 100000000000 THEN created_at_ms
+             WHEN created_at > 100000000000 THEN created_at
+             ELSE created_at * 1000
+           END
+    FROM threads
+    WHERE archived = 0
+      AND source = 'cli'
+    ORDER BY 3 DESC
+    LIMIT 256";
+
+/// `CODEX_SQLITE_HOME` when this is the default install; otherwise the Codex
+/// home itself, then `sqlite/state_5.sqlite` for a home that keeps the
+/// database one directory down.
+fn codex_state_db(home: &Path, isolated_account: bool) -> Option<PathBuf> {
+    if !isolated_account {
+        if let Some(sqlite_home) =
+            std::env::var_os("CODEX_SQLITE_HOME").filter(|value| !value.is_empty())
+        {
+            let path = PathBuf::from(sqlite_home).join("state_5.sqlite");
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+    }
+    let direct = home.join("state_5.sqlite");
+    if direct.is_file() {
+        return Some(direct);
+    }
+    let nested = home.join("sqlite").join("state_5.sqlite");
+    nested.is_file().then_some(nested)
+}
+
+fn codex_cwd_key(path: &str) -> String {
+    let slash = path.replace('/', "\\");
+    let stripped = if let Some(rest) = slash.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = slash.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        slash
+    };
+    let trimmed = stripped.trim_end_matches('\\');
+    let text = if trimmed.len() == 2 && trimmed.as_bytes().get(1) == Some(&b':') {
+        format!("{trimmed}\\")
+    } else {
+        trimmed.to_string()
+    };
+    text.to_lowercase()
+}
+
+fn list_codex_ids(db: &Path, cwd: &str) -> Vec<(String, SystemTime)> {
+    if !db.is_file() {
+        return Vec::new();
+    }
+    let Ok(connection) = Connection::open_with_flags(
+        db,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) else {
+        return Vec::new();
+    };
+    let _ = connection.busy_timeout(Duration::from_millis(500));
+    let Some(rows) = codex_thread_rows(&connection, CODEX_THREADS)
+        .or_else(|| codex_thread_rows(&connection, CODEX_THREADS_NO_EDGES))
+    else {
+        return Vec::new();
+    };
+    let wanted = codex_cwd_key(cwd);
+    rows.into_iter()
+        .filter(|(id, path, _)| is_session_id(id) && codex_cwd_key(path) == wanted)
+        .map(|(id, _, created)| {
+            (
+                id,
+                SystemTime::UNIX_EPOCH + Duration::from_millis(created.max(0) as u64),
+            )
+        })
+        .collect()
+}
+
+fn codex_thread_rows(connection: &Connection, sql: &str) -> Option<Vec<(String, String, i64)>> {
+    let mut statement = connection.prepare(sql).ok()?;
+    let rows = statement
+        .query_map([], |row| {
+            let id: String = row.get(0)?;
+            let cwd: String = row.get(1)?;
+            let created: i64 = row.get(2)?;
+            Ok((id, cwd, created))
+        })
+        .ok()?;
+    Some(rows.flatten().collect())
 }
 
 fn is_session_id(id: &str) -> bool {
@@ -368,6 +480,13 @@ fn session_recent_inner(app: &AppHandle, probe: &SessionProbe) -> Result<Vec<Ses
             list_jsonl_ids(&root.join("projects").join(encoded))
         }
         "opencode" => list_opencode_ids(&root, &probe.cwd),
+        "codex" => {
+            let isolated = probe.account_id.is_some() && probe.account_env.is_some();
+            let Some(db) = codex_state_db(&root, isolated) else {
+                return Ok(Vec::new());
+            };
+            list_codex_ids(&db, &probe.cwd)
+        }
         _ => Vec::new(),
     };
     Ok(to_hits(ids))
@@ -385,8 +504,8 @@ pub async fn session_recent(
 #[cfg(test)]
 mod tests {
     use super::{
-        claude_slug, cwd_is_listable, is_encoded_segment, is_session_id, list_jsonl_ids,
-        list_opencode_ids, opencode_db, percent_encode, to_hits,
+        claude_slug, codex_cwd_key, cwd_is_listable, is_encoded_segment, is_session_id,
+        list_codex_ids, list_jsonl_ids, list_opencode_ids, opencode_db, percent_encode, to_hits,
     };
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -598,5 +717,126 @@ mod tests {
         fs::write(&channel, b"").unwrap();
         assert_eq!(opencode_db(&dir, None), Some(channel));
         fs::remove_dir_all(&dir).ok();
+    }
+
+    fn codex_db_with(dir: &Path, rows: &[(&str, &str, i64, i64, &str)]) -> PathBuf {
+        let db = dir.join("state_5.sqlite");
+        let connection = rusqlite::Connection::open(&db).expect("open db");
+        connection
+            .execute_batch(
+                "CREATE TABLE threads (
+                    id TEXT PRIMARY KEY,
+                    cwd TEXT,
+                    created_at INTEGER,
+                    created_at_ms INTEGER,
+                    archived INTEGER,
+                    source TEXT
+                );
+                CREATE TABLE thread_spawn_edges (
+                    parent_thread_id TEXT,
+                    child_thread_id TEXT,
+                    status TEXT
+                );",
+            )
+            .expect("schema");
+        for (id, cwd, created_ms, archived, source) in rows {
+            connection
+                .execute(
+                    "INSERT INTO threads (id, cwd, created_at, created_at_ms, archived, source)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    rusqlite::params![id, cwd, created_ms / 1000, created_ms, archived, source],
+                )
+                .expect("insert");
+        }
+        connection
+            .execute(
+                "INSERT INTO thread_spawn_edges (parent_thread_id, child_thread_id, status)
+                 VALUES ('parent-thread', 'child-thread', 'running')",
+                [],
+            )
+            .expect("edge");
+        db
+    }
+
+    #[test]
+    fn codex_cwd_key_strips_the_verbatim_prefix_and_ignores_case() {
+        assert_eq!(
+            codex_cwd_key(r"\\?\C:\Users\Developer\Code\Keel"),
+            r"c:\users\developer\code\keel"
+        );
+        assert_eq!(
+            codex_cwd_key("C:/Users/Developer/Code/Keel/"),
+            r"c:\users\developer\code\keel"
+        );
+        assert_eq!(codex_cwd_key(r"C:\"), r"c:\");
+    }
+
+    #[test]
+    fn codex_lists_cli_threads_for_this_folder_newest_first() {
+        let dir = temp_dir();
+        let subagent = r#"{"subagent":{"thread_spawn":{"parent_thread_id":"old-thread"}}}"#;
+        codex_db_with(
+            &dir,
+            &[
+                (
+                    "old-thread",
+                    r"\\?\C:\Users\developer\code\keel",
+                    1_000,
+                    0,
+                    "cli",
+                ),
+                (
+                    "new-thread",
+                    r"\\?\C:\Users\Developer\Code\Keel\",
+                    3_000,
+                    0,
+                    "cli",
+                ),
+                (
+                    "other-thread",
+                    r"\\?\C:\Users\developer\code\other",
+                    4_000,
+                    0,
+                    "cli",
+                ),
+                (
+                    "vscode-thread",
+                    r"C:\Users\developer\code\keel",
+                    5_000,
+                    0,
+                    "vscode",
+                ),
+                (
+                    "archived-thread",
+                    r"C:\Users\developer\code\keel",
+                    6_000,
+                    1,
+                    "cli",
+                ),
+                (
+                    "child-thread",
+                    r"C:\Users\developer\code\keel",
+                    7_000,
+                    0,
+                    "cli",
+                ),
+                ("bad id", r"C:\Users\developer\code\keel", 8_000, 0, "cli"),
+                (
+                    "spawned-thread",
+                    r"C:\Users\developer\code\keel",
+                    9_000,
+                    0,
+                    subagent,
+                ),
+            ],
+        );
+        let hits = to_hits(list_codex_ids(
+            &dir.join("state_5.sqlite"),
+            r"C:\Users\developer\code\keel",
+        ));
+        let ids: Vec<_> = hits.iter().map(|hit| hit.id.as_str()).collect();
+        fs::remove_dir_all(&dir).ok();
+        assert_eq!(ids, vec!["new-thread", "old-thread"]);
+        assert_eq!(hits[0].mtime_ms, 3_000);
     }
 }

@@ -26,7 +26,8 @@
     "command": "codex",
     "session": {
       "kind": "subcommand",
-      "resume": "resume {id}"
+      "resume": "resume {id}",
+      "store": "codex"
     },
     "accountEnv": "CODEX_HOME",
     "short": "CX",

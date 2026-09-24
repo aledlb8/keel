@@ -173,7 +173,7 @@ export interface SessionSpec {
   resume: string;
   /** `subcommand` inserts after the binary (`codex resume {id}`). */
   kind?: "args" | "subcommand" | undefined;
-  store?: "grok" | "claude" | "opencode" | undefined;
+  store?: "grok" | "claude" | "opencode" | "codex" | undefined;
 }
 
 /** One entry of the agent catalogue, exactly as it is saved. */
