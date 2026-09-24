@@ -244,6 +244,33 @@ describe("parsed agent screen", () => {
     assert.equal(agentSignal("grok", { ...grokReady, truncated: true }), "ready");
   });
 
+  it("recognises Claude 2.1.281's welcome screen, live spinner, and finished duration row", () => {
+    // Captured from Claude Code 2.1.281. The box row is wrap-joined onto ❯.
+    const welcome: AgentScreen = {
+      lines: [
+        " ▐▛███▛█   Claude Code v2.1.281",
+        "▝▜██████▀  Opus 5.5 with high effort · Claude Pro",
+        "  ▝▝ ▝▝    ~\\Documents\\code\\keel",
+        "▎ ※ You’ve been gifted a one-time $100 credit for cloud sessions · /claim-credit",
+        "                                                                                            ● high · /effort",
+        "──────────────────────────────────────────────────────────────────────────────────────────────────────────────❯ ",
+        "──────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+        "  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents",
+      ],
+      cursorLine: 5,
+      truncated: true,
+    };
+    assert.equal(agentSignal("claude", welcome), "ready");
+    assert.equal(agentSignal("claude", { lines: ["keel ❯"], cursorLine: 0 }), "unknown");
+    for (const live of ["✻ Cogitating…", "* Cogitating…", "· Thinking…", "● Cogitating…"]) {
+      assert.equal(agentSignal("claude", { ...welcome, lines: [live, ...welcome.lines] }), "busy");
+    }
+    // showTurnDuration leaves this row above the composer after the turn.
+    for (const done of ["✻ Cogitated for 4s", "✻ Worked for 12s", "✻ Baked for 1m 2s · done 3:40pm"]) {
+      assert.equal(agentSignal("claude", { ...welcome, lines: [done, ...welcome.lines] }), "ready");
+    }
+  });
+
   it("recognises Claude 2.1 fullscreen with a custom status line and wrap-joined box", () => {
     // statusLine hides "? for shortcuts" / "esc to interrupt"; mode badges stay.
     // Full-width ─ rows are wrap-joined onto the prompt, so ❯ is mid-line.
@@ -400,6 +427,7 @@ describe("agent turn lifecycle", () => {
 
   it("announces a Claude turn that used a custom status line and no interrupt hint", () => {
     const activity = new AgentActivity(0);
+    activity.screen("ready", 0, "prompt");
     activity.input("fix it", 0);
     activity.input("\r", 1);
     activity.screen("busy", 50, "✻ Cogitating… (14s · ↓ 800 tokens)");
@@ -411,6 +439,7 @@ describe("agent turn lifecycle", () => {
 
   it("announces an opencode turn once its composer settles", () => {
     const activity = new AgentActivity(0);
+    activity.screen("ready", 0, "composer");
     assert.equal(activity.input("list the files", 0), "input");
     assert.equal(activity.input("\r", 1), "submit");
     activity.screen("busy", 50, "running");
@@ -424,6 +453,7 @@ describe("agent turn lifecycle", () => {
 
   it("keeps an opencode permission or question wait working, never done", () => {
     const activity = new AgentActivity(0);
+    activity.screen("ready", 0, "composer");
     activity.input("\r", 1);
     activity.screen("blocked", 100, "permission");
     assert.equal(activity.status("idle", 3_600_000, false), "working");
@@ -474,6 +504,7 @@ describe("agent turn lifecycle", () => {
 
   it("reports the submit that the turn hangs off, but not a paste newline", () => {
     const activity = new AgentActivity(0);
+    activity.screen("ready", 0, "prompt");
     assert.equal(activity.input("fix it", 0), "input");
     assert.equal(activity.input("\r", 1), "submit");
     activity.input("\x1b[200~pasted\r\nlines", 2);
@@ -485,10 +516,48 @@ describe("agent turn lifecycle", () => {
   it("does not manufacture completions for empty submissions, slash menus or unknown layouts", () => {
     for (const signal of ["ready", "unknown"] as const) {
       const activity = new AgentActivity(0);
+      activity.screen("ready", 0, "prompt");
       activity.input("\r", 1);
       activity.screen(signal, 10, "screen");
       assert.equal(activity.status("working", 31_000, false), "idle");
     }
+  });
+
+  it("does not finish the enter that launches the CLI, even if startup looks busy", () => {
+    const activity = new AgentActivity(0);
+    activity.screen("unknown", 0, "keel ❯");
+    assert.equal(activity.input("\r", 10), "input");
+    activity.screen("busy", 50, "✻ Running hooks…");
+    activity.screen("ready", 2_000, "────────❯ \n⏵⏵ auto mode on");
+    assert.equal(activity.status("idle", 10_000, false), "idle");
+  });
+
+  it("finishes after a Claude duration row replaces the live spinner", () => {
+    const activity = new AgentActivity(0);
+    activity.screen("ready", 0, "prompt");
+    activity.input("\r", 1);
+    activity.screen("busy", 50, "✻ Cogitating…");
+    activity.screen("ready", 2_000, "✻ Cogitated for 4s\n❯ ");
+    assert.equal(activity.status("working", 2_500, false), "working");
+    assert.equal(activity.status("working", 4_001, false), "done");
+  });
+
+  it("lets Codex Astra sparkle change without postponing a finished turn", () => {
+    const activity = new AgentActivity(0);
+    activity.screen("ready", 0, "› ");
+    activity.input("\r", 1);
+    activity.screen("busy", 50, "Working (1s • esc to interrupt)");
+    activity.screen("ready", 2_000, "› \n⠁");
+    activity.screen("ready", 2_200, "› \n⠂");
+    activity.screen("ready", 3_900, "› \n⡀");
+    assert.equal(activity.status("working", 4_001, false), "done");
+    const noisy = new AgentActivity(0);
+    noisy.screen("ready", 0, "› ");
+    noisy.input("\r", 1);
+    noisy.screen("busy", 50, "Working");
+    noisy.screen("ready", 2_000, "answer");
+    noisy.screen("ready", 3_900, "answer grew");
+    assert.equal(noisy.status("working", 4_001, false), "working");
   });
 
   it("a new submission invalidates an already settling completion", () => {

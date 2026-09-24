@@ -173,6 +173,7 @@ it("clears done before restart, ignores old generations, and ignores restore rep
 it("an old ready snapshot cannot finish a new running generation", () => {
   state().restartPane("agent");
   state().noteActivity("agent", "spawn");
+  render(ready, "agent", 1);
   state().noteActivity("agent", "input", "\r");
   render(busy, "agent", 1);
   tick();
@@ -279,6 +280,7 @@ it("binds an opencode conversation only from the submitted prompt, never at spaw
   await state().captureSession("agent", 0);
   assert.equal(probes.length, 0, "a spawn-armed opencode capture has nothing to find");
 
+  render({ lines: ["tab agents"], cursorLine: 0 });
   state().noteActivity("agent", "input", "restore the terminals");
   state().noteActivity("agent", "input", "\r");
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -309,6 +311,7 @@ it("retries delayed OpenCode capture using the first submission even after anoth
     ];
   });
   state().noteActivity("agent", "spawn");
+  render({ lines: ["tab agents"], cursorLine: 0 });
   state().noteActivity("agent", "input", "\r");
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(reads, 1);
@@ -357,6 +360,7 @@ it("stops idle OpenCode capture polling and discards a read completed after rest
 
 it("finishes a Codex turn with the model/directory footer", () => {
   useKeel.setState({ projects: [project("agent", "codex")] });
+  render({ lines: ["› ", "gpt-6-astra high · ~\\code"], cursorLine: 0 });
   state().noteActivity("agent", "input", "\r");
   render({ lines: ["• Working (18s • esc to interrupt)", "› ", "gpt-6-astra high · ~\\code"], cursorLine: 1 });
   tick();

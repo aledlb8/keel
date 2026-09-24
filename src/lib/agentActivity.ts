@@ -42,9 +42,13 @@ const RETRY =
 const APPROVAL =
   /\b(?:do you want to (?:proceed|allow)|would you like to run|allow (?:once|always|for this)|approve (?:this|once|network)|waiting for (?:approval|permission)|yes, (?:allow|proceed|and don't ask again)|no, keep planning)\b/i;
 
-/** Claude 2.1 spinner byline: glyph + verb, or the elapsed/token clock. */
+/**
+ * Live Claude spinner. 2.1.281 cycles `· ✢ * ✶ ✻ ✽` (reduced motion uses `●`)
+ * and the verb ends in an ellipsis. A finished turn keeps `✻ Worked for 4s`
+ * in the transcript; that row has no ellipsis and must not stay busy.
+ */
 const CLAUDE_SPINNER =
-  /(?:^|\n|[─│]\s*)[✻✽✶✳✢◐◓◑◒]\s+\S/u;
+  /(?:^|\n|[─│]\s*)[✻✽✶✳✢·*●◐◓◑◒]\s+\S.*(?:…|\.{3})/u;
 const CLAUDE_SPINNER_CLOCK = /\(\d+\s*s\s*[·•]\s*↓/u;
 const CLAUDE_SPINNER_STATUS =
   /(?:^|\n)(?:deep in thought|picking the thought back up|almost done thinking|thinking some more|still thinking|compacting conversation|running precompact hooks|running postcompact hooks)\b/i;
@@ -90,8 +94,7 @@ export function agentSignal(agentId: string, screen: AgentScreen): AgentSignal {
       if (
         CLAUDE_SPINNER.test(body) ||
         CLAUDE_SPINNER_CLOCK.test(body) ||
-        CLAUDE_SPINNER_STATUS.test(body) ||
-        lines.some((line) => /^[✻✽✶✳✢·*◐◓◑◒]\s+\S.*(?:…|\.{3})/u.test(line))
+        CLAUDE_SPINNER_STATUS.test(body)
       ) return "busy";
       // Composer stays on screen while thinking. Custom statusLine hides
       // "? for shortcuts" and "esc to interrupt"; mode badges do not.
@@ -144,6 +147,14 @@ export function agentSignal(agentId: string, screen: AgentScreen): AgentSignal {
 const READY_MS = 2_000;
 const QUIET_MS = 1_000;
 
+/**
+ * Astra models paint braille stars over empty composer cells about every
+ * 150ms. They are decoration: a real text change still restarts the quiet timer.
+ */
+function quietFingerprint(text: string): string {
+  return text.replace(/[\u2800-\u28FF]/gu, "");
+}
+
 /** One process lifetime. Durations use a monotonic clock supplied by the caller. */
 export class AgentActivity {
   /** Wall time is used only by conversation capture, not detection. */
@@ -151,6 +162,8 @@ export class AgentActivity {
   private submitted = false;
   private running = false;
   private sawBusy = false;
+  /** A ready prompt has been on screen. The enter that launches the CLI is earlier. */
+  private promptSeen = false;
   private cancelRequested = false;
   private signal: AgentSignal = "unknown";
   private readySince: number | null = null;
@@ -185,6 +198,9 @@ export class AgentActivity {
     if (data.startsWith("\x1b")) return "report";
     // LF is commonly Ctrl+J/Shift+Enter (a multiline composer newline).
     if (data === "\r" || data === "\r\n") {
+      // The shell is given `claude\r` before the composer exists. That enter
+      // is not a prompt, and a startup spinner must not finish the launch.
+      if (!this.promptSeen) return "input";
       this.submitted = true;
       this.running = true;
       this.sawBusy = false;
@@ -205,10 +221,12 @@ export class AgentActivity {
 
   screen(signal: AgentSignal, now: number, fingerprint?: string): void {
     this.pendingOutput = false;
+    const quiet = fingerprint === undefined ? undefined : quietFingerprint(fingerprint);
     // Cursor blinking, title changes and identical redraws are not progress.
-    if (fingerprint === undefined || fingerprint !== this.fingerprint) this.lastOutput = now;
-    this.fingerprint = fingerprint;
+    if (quiet === undefined || quiet !== this.fingerprint) this.lastOutput = now;
+    this.fingerprint = quiet;
     this.signal = signal;
+    if (signal === "ready") this.promptSeen = true;
     if (signal !== "ready") this.readySince = null;
     else this.readySince ??= now;
     // Launch banners and restored conversations can contain arbitrarily many

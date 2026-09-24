@@ -32,10 +32,15 @@ prompt line — a `❯` may sit in the middle of a joined string, not at column 
 
 Current prompt adapters cover Claude Code, Codex, Gemini CLI, opencode, grok,
 Cursor Agent, Crush, Aider, and Goose. These are conservative UI heuristics,
-not an agent lifecycle protocol. Claude Code 2.1 keeps the composer visible
-while thinking; a custom `statusLine` hides `? for shortcuts` and
-`esc to interrupt`, so busy is the spinner/token clock and ready is the
-prompt plus a mode badge or box. opencode 1.18 also keeps the composer (and
+not an agent lifecycle protocol. Claude Code 2.1.281 keeps the composer
+visible while thinking. Its live spinner cycles `· ✢ * ✶ ✻ ✽` (reduced motion
+uses `●`) and the verb ends in an ellipsis; a finished turn leaves
+`✻ Worked for 4s` in the transcript, and that row is not busy. A custom
+`statusLine` hides `? for shortcuts`, so ready is the prompt plus a mode badge
+or box. The enter typed to launch the CLI is not a turn: a submission counts
+only after a ready prompt has been seen. Codex on an Astra model paints braille
+stars over the idle composer every 150ms; those cells do not restart the quiet
+timer. opencode 1.18 also keeps the composer (and
 its `╹▀` edge, or `tab agents` / `ctrl+p commands` when the theme paints that
 edge as spaces) while running; `esc interrupt` is what separates busy from
 ready, and permission/question dialogs replace the composer. Changed layouts,
