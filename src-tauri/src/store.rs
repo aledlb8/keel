@@ -41,7 +41,7 @@ fn unique_temp(file: &Path) -> PathBuf {
     file.with_file_name(format!("keel.{}.{stamp}.json.tmp", std::process::id()))
 }
 
-fn write_atomic(file: &Path, text: &str) -> Result<(), String> {
+pub(crate) fn write_atomic(file: &Path, text: &str) -> Result<(), String> {
     let temp = unique_temp(file);
     {
         let mut opts = OpenOptions::new();
@@ -93,7 +93,12 @@ fn load_from_disk(file: &Path) -> Result<Option<Value>, String> {
 pub async fn state_load(app: AppHandle) -> Result<Option<Value>, String> {
     crate::blocking::run(move || {
         let file = state_file(&app)?;
-        let loaded = load_from_disk(&file)?;
+        let mut loaded = load_from_disk(&file)?;
+        if let Some(value) = loaded.as_mut() {
+            crate::sessions::repair_imported_grok_panes(value, |id, cwd, account| {
+                crate::sessions::grok_session_exists(&app, id, cwd, account)
+            });
+        }
         if let Some(ref value) = loaded {
             crate::roots::ingest_loaded_document(value);
         }

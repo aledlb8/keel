@@ -5,6 +5,7 @@ import { startAttentionTracking, useKeel } from "../state/store.ts";
 import type { AgentScreen } from "./agentActivity.ts";
 import { forgetPaneAlerts, shouldAlert } from "./agentNotify.ts";
 import { applySession } from "./launch.ts";
+import type { AgentEventKind } from "./agentEvents.ts";
 import { ChimePlayer } from "./chime.ts";
 import type { Project } from "./types.ts";
 
@@ -47,6 +48,111 @@ function startTurn() {
   tick();
   assert.equal(state().status.agent, "working");
 }
+
+function hook(kind: AgentEventKind, sequence: number, sessionId = "chat-a", id = "agent", generation = 0) {
+  state().noteAgentEvent(id, generation, { agentId: "claude", sessionId, kind, sequence });
+}
+
+it("binds exact concurrent pane identities without reading recent sessions", () => {
+  const p = project();
+  p.decks[0]!.panes.other = { ...p.decks[0]!.panes.agent!, id: "other" };
+  useKeel.setState({ projects: [p] });
+  state().noteActivity("other", "spawn");
+  let probes = 0;
+  mockIPC((command) => { if (command === "session_recent") probes++; return null; });
+  hook("session", 1, "chat-b", "other");
+  hook("session", 1);
+  const panes = state().projects[0]!.decks[0]!.panes;
+  assert.equal(panes.agent!.sessionId, "chat-a");
+  assert.equal(panes.other!.sessionId, "chat-b");
+  assert.equal(panes.agent!.sessionReady, true);
+  assert.equal(applySession("claude", { resume: "--resume {id}" }, panes.agent!), 'claude --resume "chat-a"');
+  tick(60_000);
+  assert.equal(probes, 0);
+  assert.equal(state().status.agent, "idle");
+});
+
+it("finishes a hook turn without local Enter, a spinner, or visible terminal changes", () => {
+  hook("session", 1);
+  hook("working", 2);
+  hook("completed", 3);
+  hook("completed", 4); // Duplicate Stop before the attention timer must not lose completion.
+  tick();
+  assert.equal(state().status.agent, "done");
+  const doneAt = state().doneAt.agent;
+  hook("completed", 4);
+  render(busy);
+  tick(5_000);
+  assert.equal(state().status.agent, "done");
+  assert.equal(state().doneAt.agent, doneAt);
+});
+
+it("restored sessions and unmatched Stop never announce completed work", () => {
+  hook("session", 1);
+  hook("completed", 2);
+  render(busy);
+  render(ready);
+  tick(5_000);
+  assert.equal(state().status.agent, "idle");
+});
+
+it("waiting and long tool turns cannot finish from a ready-looking screen", () => {
+  hook("working", 1);
+  hook("waiting", 2);
+  render(ready);
+  tick(60_000);
+  assert.equal(state().status.agent, "working");
+  hook("progress", 3);
+  hook("completed", 4);
+  tick();
+  assert.equal(state().status.agent, "done");
+});
+
+it("compaction identity refresh preserves a running turn and leaves an idle session idle", () => {
+  hook("session", 1);
+  hook("identity", 2);
+  tick();
+  assert.equal(state().status.agent, "idle");
+  hook("working", 3);
+  hook("identity", 4);
+  tick();
+  assert.equal(state().status.agent, "working");
+  hook("completed", 5);
+  tick();
+  assert.equal(state().status.agent, "done");
+});
+
+it("rejects old-generation and out-of-order events before binding their IDs", () => {
+  hook("session", 2, "correct-chat");
+  hook("session", 1, "wrong-chat");
+  assert.equal(state().projects[0]!.decks[0]!.panes.agent!.sessionId, "correct-chat");
+  state().restartPane("agent");
+  state().noteActivity("agent", "spawn");
+  hook("working", 3, "old-process-chat");
+  hook("session", 1, "correct-chat", "agent", 1);
+  tick();
+  assert.equal(state().projects[0]!.decks[0]!.panes.agent!.sessionId, "correct-chat");
+  assert.equal(state().status.agent, "idle");
+});
+
+for (const end of ["cancelled", "failed", "ended"] as const) {
+  it(`does not announce success for a ${end} hook turn`, () => {
+    hook("working", 1);
+    hook(end, 2);
+    tick();
+    assert.equal(state().status.agent, "idle");
+    assert.deepEqual(state().doneAt, {});
+  });
+}
+
+it("suppresses completion after Ctrl+C even if a winding-down tool emits progress", () => {
+  hook("working", 1);
+  state().noteActivity("agent", "input", "\x03");
+  hook("progress", 2);
+  hook("completed", 3);
+  tick();
+  assert.equal(state().status.agent, "idle");
+});
 
 beforeEach(() => {
   forgetPaneAlerts("agent");
@@ -257,128 +363,6 @@ it("late events for removed panes do not recreate status entries", () => {
   tick(10_000);
   assert.deepEqual(state().status, {});
   assert.deepEqual(state().exited, {});
-});
-
-it("a session capture completed after restart cannot bind the old conversation", async () => {
-  useKeel.setState({ agents: [{
-    id: "claude", name: "Claude", command: "claude", short: "CC", accent: "",
-    bins: [], paths: [], path: "claude", installed: true, builtin: true,
-    session: { resume: "--resume {id}", store: "claude" },
-  }] });
-  let resolve!: (hits: { id: string; mtimeMs: number }[]) => void;
-  const pending = new Promise<{ id: string; mtimeMs: number }[]>((yes) => { resolve = yes; });
-  let reads = 0;
-  mockIPC((command) => {
-    if (command === "session_recent") { reads++; return pending; }
-    return null;
-  });
-  const capture = state().captureSession("agent", 0);
-  state().restartPane("agent");
-  state().noteActivity("agent", "spawn");
-  await state().captureSession("agent", 0);
-  assert.equal(reads, 1);
-  resolve([{ id: "old-chat", mtimeMs: Date.now() }]);
-  await capture;
-  assert.equal(state().projects[0]?.decks[0]?.panes.agent?.sessionReady, false);
-  assert.equal(state().projects[0]?.decks[0]?.panes.agent?.sessionId, null);
-});
-
-it("binds an opencode conversation only from the submitted prompt, never at spawn", async () => {
-  useKeel.setState({
-    agents: [{
-      id: "opencode", name: "opencode", command: "opencode", short: "OC", accent: "",
-      bins: [], paths: [], path: "opencode", installed: true, builtin: true,
-      session: { resume: "--session {id}", store: "opencode" },
-    }],
-    projects: [project("agent", "opencode")],
-  });
-  const probes: { store: string }[] = [];
-  mockIPC((command, payload) => {
-    if (command !== "session_recent") return null;
-    probes.push((payload as { probe: { store: string } }).probe);
-    return [{ id: "ses_new", mtimeMs: Date.now() }];
-  });
-
-  state().noteActivity("agent", "spawn");
-  await state().captureSession("agent", 0);
-  assert.equal(probes.length, 0, "a spawn-armed opencode capture has nothing to find");
-
-  render({ lines: ["tab agents"], cursorLine: 0 });
-  state().noteActivity("agent", "input", "restore the terminals");
-  state().noteActivity("agent", "input", "\r");
-  await new Promise((resolve) => setTimeout(resolve, 0));
-
-  assert.equal(probes.length, 1);
-  assert.equal(probes[0]?.store, "opencode");
-  assert.equal(state().projects[0]?.decks[0]?.panes.agent?.sessionId, "ses_new");
-  assert.equal(state().projects[0]?.decks[0]?.panes.agent?.sessionReady, true);
-});
-
-it("retries delayed OpenCode capture using the first submission even after another Enter", async () => {
-  useKeel.setState({
-    agents: [{
-      id: "opencode", name: "opencode", command: "opencode", short: "OC", accent: "",
-      bins: [], paths: [], path: "opencode", installed: true, builtin: true,
-      session: { resume: "--session {id}", store: "opencode" },
-    }],
-    projects: [project("agent", "opencode")],
-  });
-  const created = Date.now() + 500;
-  let reads = 0;
-  mockIPC((command) => {
-    if (command !== "session_recent") return null;
-    reads++;
-    return now < 6_000 ? [] : [
-      { id: "older-chat", mtimeMs: created - 1_000 },
-      { id: "ses_delayed", mtimeMs: created },
-    ];
-  });
-  state().noteActivity("agent", "spawn");
-  render({ lines: ["tab agents"], cursorLine: 0 });
-  state().noteActivity("agent", "input", "\r");
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.equal(reads, 1);
-  tick(3_000);
-  state().noteActivity("agent", "input", "\r");
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.equal(state().projects[0]?.decks[0]?.panes.agent?.sessionReady, false);
-  tick(3_000);
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.equal(state().projects[0]?.decks[0]?.panes.agent?.sessionId, "ses_delayed");
-  const pane = state().projects[0]!.decks[0]!.panes.agent!;
-  assert.equal(applySession("opencode", state().agents[0]!.session, pane), 'opencode --session "ses_delayed"');
-  const capturedReads = reads;
-  tick(10_000);
-  assert.equal(reads, capturedReads, "a bound chat stops polling");
-});
-
-it("stops idle OpenCode capture polling and discards a read completed after restart", async () => {
-  useKeel.setState({
-    agents: [{
-      id: "opencode", name: "opencode", command: "opencode", short: "OC", accent: "",
-      bins: [], paths: [], path: "opencode", installed: true, builtin: true,
-      session: { resume: "--session {id}", store: "opencode" },
-    }],
-    projects: [project("agent", "opencode")],
-  });
-  let reads = 0;
-  mockIPC((command) => {
-    if (command === "session_recent") { reads++; return []; }
-    return null;
-  });
-  state().noteActivity("agent", "spawn");
-  await state().captureSession("agent", 0, Date.now());
-  tick(61_000);
-  assert.equal(reads, 1);
-  let resolve!: (hits: { id: string; mtimeMs: number }[]) => void;
-  mockIPC((command) => command === "session_recent"
-    ? new Promise((done) => { resolve = done; }) : null);
-  const pending = state().captureSession("agent", 0, Date.now());
-  state().restartPane("agent");
-  state().noteActivity("agent", "spawn");
-  resolve([{ id: "ses_old_process", mtimeMs: Date.now() }]);
-  await pending;
-  assert.equal(state().projects[0]?.decks[0]?.panes.agent?.sessionId, null);
 });
 
 it("finishes a Codex turn with the model/directory footer", () => {

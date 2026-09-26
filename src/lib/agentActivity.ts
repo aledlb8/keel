@@ -1,4 +1,5 @@
 import type { PaneStatus } from "./types.ts";
+import type { AgentEventKind } from "./agentEvents.ts";
 
 /** Parsed cells, never raw ANSI bytes or the user's scrollback viewport. */
 export interface AgentScreen {
@@ -172,6 +173,36 @@ export class AgentActivity {
   private fingerprint: string | undefined;
   private lastSubmit = -Infinity;
   private pasting = false;
+  private protocol = false;
+  private protocolRunning = false;
+  private completion = false;
+  private sequence = 0;
+
+  /** Once live hooks arrive, screen decoration can no longer change authority. */
+  get usesProtocol(): boolean { return this.protocol; }
+
+  event(kind: AgentEventKind, sequence: number): boolean {
+    if (sequence <= this.sequence || !Number.isSafeInteger(sequence)) return false;
+    this.sequence = sequence;
+    this.protocol = true;
+    this.promptSeen = true;
+    if (kind === "identity") return true;
+    if (kind === "working" || kind === "progress" || kind === "waiting") {
+      this.protocolRunning = true;
+      this.completion = false;
+      if (kind === "working") this.cancelRequested = false;
+    } else if (kind === "completed") {
+      // SessionStart/restore is not a completed turn, and duplicate Stop is inert.
+      if (this.protocolRunning && !this.cancelRequested) this.completion = true;
+      this.protocolRunning = false;
+      this.cancelRequested = false;
+    } else {
+      this.protocolRunning = false;
+      this.completion = false;
+      this.cancelRequested = false;
+    }
+    return true;
+  }
 
   constructor(spawnedAt: number) {
     this.spawnedAt = spawnedAt;
@@ -189,7 +220,7 @@ export class AgentActivity {
       // An interrupt is only a request; tools may still be winding down, or
       // the key may have dismissed a menu. Keep working until the UI settles,
       // but do not celebrate a cancelled turn as completed work.
-      this.cancelRequested = this.running;
+      this.cancelRequested = this.protocol ? this.protocolRunning : this.running;
       if (!this.running) this.submitted = false;
       this.signal = "unknown";
       this.readySince = null;
@@ -201,6 +232,7 @@ export class AgentActivity {
       // The shell is given `claude\r` before the composer exists. That enter
       // is not a prompt, and a startup spinner must not finish the launch.
       if (!this.promptSeen) return "input";
+      if (this.protocol) return "submit";
       this.submitted = true;
       this.running = true;
       this.sawBusy = false;
@@ -214,12 +246,14 @@ export class AgentActivity {
   }
 
   output(now: number): void {
+    if (this.protocol) return;
     if (this.fingerprint === undefined) this.lastOutput = now;
     // An incomplete repaint must not leave a previously ready screen eligible.
     this.pendingOutput = true;
   }
 
   screen(signal: AgentSignal, now: number, fingerprint?: string): void {
+    if (this.protocol) return;
     this.pendingOutput = false;
     const quiet = fingerprint === undefined ? undefined : quietFingerprint(fingerprint);
     // Cursor blinking, title changes and identical redraws are not progress.
@@ -243,6 +277,14 @@ export class AgentActivity {
   }
 
   status(previous: PaneStatus, now: number, watching: boolean): PaneStatus {
+    if (this.protocol) {
+      if (this.protocolRunning) return "working";
+      if (this.completion) {
+        this.completion = false;
+        return watching ? "idle" : "done";
+      }
+      return previous === "done" ? "done" : "idle";
+    }
     if (!this.running) return previous === "done" ? "done" : "idle";
     const ready = !this.pendingOutput && this.signal === "ready" && this.readySince !== null &&
       now - this.readySince >= READY_MS && now - this.lastOutput >= QUIET_MS;

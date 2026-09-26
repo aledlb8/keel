@@ -27,6 +27,85 @@ pub struct SessionProbe {
     pub account_id: Option<String>,
 }
 
+/// Repair the old Claude-observer replay bug only when the saved ID actually
+/// exists in the original Grok account. Never choose a recent/nearby transcript.
+pub(crate) fn repair_imported_grok_panes(
+    document: &mut serde_json::Value,
+    mut exists: impl FnMut(&str, &str, Option<&str>) -> bool,
+) {
+    let Some(projects) = document.get_mut("projects").and_then(|v| v.as_array_mut()) else {
+        return;
+    };
+    for project in projects {
+        let path = project
+            .get("path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_owned();
+        let Some(decks) = project.get_mut("decks").and_then(|v| v.as_array_mut()) else {
+            continue;
+        };
+        for deck in decks {
+            let Some(panes) = deck.get_mut("panes").and_then(|v| v.as_object_mut()) else {
+                continue;
+            };
+            for pane in panes.values_mut() {
+                if pane["agentId"] != "claude"
+                    || pane["agentHome"]["agentId"] != "grok"
+                    || !pane["accountId"].is_null()
+                    || !pane["editor"].is_null()
+                {
+                    continue;
+                }
+                let Some(id) = pane["sessionId"].as_str().filter(|id| is_session_id(id)) else {
+                    continue;
+                };
+                let cwd = pane["cwd"].as_str().unwrap_or(&path);
+                let account = pane["agentHome"]["accountId"].as_str();
+                if !exists(id, cwd, account) {
+                    continue;
+                }
+                let home = pane["agentHome"].clone();
+                pane["agentId"] = "grok".into();
+                pane["accountId"] = home["accountId"].clone();
+                pane["sessionReady"] = true.into();
+                // Preserve a later /new chat ID; the saved home may be older.
+                if pane["titleLocked"] != true
+                    && matches!(pane["title"].as_str(), Some("Claude Code" | "claude"))
+                {
+                    pane["title"] = home["title"].clone();
+                }
+                if let Some(object) = pane.as_object_mut() {
+                    object.remove("agentHome");
+                }
+            }
+        }
+    }
+}
+
+pub(crate) fn grok_session_exists(
+    app: &AppHandle,
+    id: &str,
+    cwd: &str,
+    account: Option<&str>,
+) -> bool {
+    if !is_session_id(id) || !cwd_is_listable(cwd) {
+        return false;
+    }
+    let encoded = percent_encode(cwd);
+    if !is_encoded_segment(&encoded) {
+        return false;
+    }
+    let probe = SessionProbe {
+        store: "grok".into(),
+        cwd: cwd.into(),
+        account_env: Some("GROK_HOME".into()),
+        account_id: account.map(str::to_owned),
+    };
+    session_root(app, &probe)
+        .is_some_and(|root| root.join("sessions").join(encoded).join(id).is_dir())
+}
+
 fn percent_encode(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for byte in input.bytes() {
@@ -355,7 +434,7 @@ fn codex_thread_rows(connection: &Connection, sql: &str) -> Option<Vec<(String, 
     Some(rows.flatten().collect())
 }
 
-fn is_session_id(id: &str) -> bool {
+pub(crate) fn is_session_id(id: &str) -> bool {
     let n = id.len();
     (1..=128).contains(&n)
         && id
@@ -522,6 +601,41 @@ mod tests {
         ));
         fs::create_dir_all(&dir).expect("temp dir");
         dir
+    }
+
+    #[test]
+    fn repairs_imported_grok_identity_only_with_exact_session_evidence() {
+        use serde_json::json;
+        let bad = json!({
+            "agentId": "claude", "accountId": null, "sessionId": "new-grok-chat",
+            "sessionReady": true, "resumeAgent": true, "title": "Claude Code", "cwd": "/code",
+            "agentHome": {"agentId": "grok", "accountId": "work", "sessionId": "older-chat", "title": "Grok Build"}
+        });
+        let mut genuine = bad.clone();
+        genuine["sessionId"] = json!("real-claude-chat");
+        let mut named = bad.clone();
+        named["title"] = json!("fix auth");
+        named["titleLocked"] = json!(true);
+        let mut document = json!({"projects": [{"path": "/fallback", "decks": [{"panes": {
+            "bad": bad, "genuine": genuine.clone(), "named": named
+        }}]}]});
+        let confirm = |id: &str, cwd: &str, account: Option<&str>| {
+            assert_eq!(cwd, "/code");
+            assert_eq!(account, Some("work"));
+            id == "new-grok-chat"
+        };
+        super::repair_imported_grok_panes(&mut document, confirm);
+        let panes = &document["projects"][0]["decks"][0]["panes"];
+        assert_eq!(panes["bad"]["agentId"], "grok");
+        assert_eq!(panes["bad"]["accountId"], "work");
+        assert_eq!(panes["bad"]["sessionId"], "new-grok-chat");
+        assert_eq!(panes["bad"]["title"], "Grok Build");
+        assert!(panes["bad"].get("agentHome").is_none());
+        assert_eq!(panes["named"]["title"], "fix auth");
+        assert_eq!(panes["genuine"], genuine);
+        let repaired = document.clone();
+        super::repair_imported_grok_panes(&mut document, confirm);
+        assert_eq!(document, repaired);
     }
 
     /// A SQLite file shaped like the `session` table opencode writes.

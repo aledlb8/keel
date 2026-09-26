@@ -9,6 +9,7 @@ import { Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 import { invoke } from "./invoke.ts";
+import type { AgentEvent } from "./agentEvents.ts";
 
 export interface SpawnOptions {
   id: string;
@@ -29,6 +30,7 @@ export interface SpawnOptions {
 export async function spawnPty(
   options: SpawnOptions,
   onData: (bytes: Uint8Array) => void,
+  onAgentEvent: (event: AgentEvent) => void,
 ): Promise<void> {
   const channel = new Channel<ArrayBuffer>();
   channel.onmessage = (message) =>
@@ -38,7 +40,9 @@ export async function spawnPty(
         ? new Uint8Array(message)
         : new Uint8Array(message as unknown as number[]),
     );
-  await invoke("pty_spawn", { options, onData: channel });
+  const events = new Channel<AgentEvent>();
+  events.onmessage = onAgentEvent;
+  await invoke("pty_spawn", { options, onData: channel, onAgentEvent: events });
 }
 
 /** Matches the Rust writer chunk so a huge paste yields instead of one IPC stall. */

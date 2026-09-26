@@ -270,7 +270,6 @@ export function Canvas({
       const keel = useKeel.getState();
       if (ok) {
         keel.settleRestore(paneId, true);
-        keel.markSessionReady(paneId);
         return;
       }
 
@@ -683,4 +682,3 @@ function SplitSlots({
     </div>
   );
 }
-

@@ -43,6 +43,8 @@ pub struct PtySession {
     writer: PtyWriter,
     child: Box<dyn Child + Send + Sync>,
     alive: Arc<AtomicBool>,
+    /// Dropping the process revokes its hook capability, including delayed calls.
+    _hooks: Option<crate::agent_hooks::HookLease>,
     /// Windows job so the shell tree dies with the pane. Held for `Drop`.
     #[allow(dead_code)]
     _job: Option<procs::KillOnCloseJob>,
@@ -374,6 +376,7 @@ pub fn pty_spawn(
     manager: State<'_, PtyManager>,
     options: SpawnOptions,
     on_data: Channel<Response>,
+    on_agent_event: Channel<crate::agent_hooks::AgentEvent>,
 ) -> Result<(), String> {
     let pty_system = portable_pty::native_pty_system();
     let (cols, rows) = clamp_pty_dims(options.cols, options.rows);
@@ -447,6 +450,7 @@ pub fn pty_spawn(
             cmd.env(key, value);
         }
     }
+    let mut account_home = None;
     if let (Some(key), Some(account_id)) = (&options.account_env, &options.account_id) {
         let valid_key = is_env_name(key);
         let valid_id = account_id
@@ -462,7 +466,32 @@ pub fn pty_spawn(
             .join("accounts")
             .join(account_id);
         std::fs::create_dir_all(&account_dir).map_err(|err| err.to_string())?;
-        cmd.env(key, account_dir);
+        cmd.env(key, &account_dir);
+        account_home = Some(account_dir);
+    }
+    let hooks = crate::agent_hooks::register(on_agent_event.clone())?;
+    cmd.env("KEEL_HOOK_PORT", hooks.port.to_string());
+    cmd.env("KEEL_HOOK_TOKEN", hooks.token());
+    if let Some(agent) = options
+        .agent_id
+        .as_deref()
+        .filter(|id| crate::hook_config::supported(id))
+    {
+        let installed = crate::hook_config::install(agent, account_home.as_deref(), &options.env);
+        if let Err(error) = &installed {
+            eprintln!("Keel {agent} activity integration: {error}");
+        }
+        let _ = on_agent_event.send(crate::agent_hooks::AgentEvent {
+            agent_id: agent.into(),
+            session_id: String::new(),
+            kind: if installed.is_ok() {
+                "connected"
+            } else {
+                "unavailable"
+            }
+            .into(),
+            sequence: 0,
+        });
     }
     // Agents read these to decide how much colour they are allowed to use.
     cmd.env("TERM", "xterm-256color");
@@ -491,7 +520,11 @@ pub fn pty_spawn(
         .map_err(|err| format!("could not write to the pty: {err}"))?;
     let writer: PtyWriter = Arc::new(Mutex::new(writer));
 
-    let alive = Arc::new(AtomicBool::new(true));
+    let alive = hooks.alive.clone();
+    if let Some(shell_pid) = child.process_id() {
+        // Bind before typing the launch command; hooks can beat the watcher.
+        hooks.bind_process(shell_pid, crate::agents::agent_needles(&app));
+    }
     let job = child.process_id().and_then(procs::adopt_kill_on_close);
 
     {
@@ -545,6 +578,7 @@ pub fn pty_spawn(
         writer: Arc::clone(&writer),
         child,
         alive: Arc::clone(&alive),
+        _hooks: Some(hooks),
         _job: job,
     };
     let shell_pid = session.child.process_id();

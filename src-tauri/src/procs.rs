@@ -241,6 +241,54 @@ fn match_stem(stem: &str, agents: &[AgentNeedle]) -> Option<usize> {
         .position(|agent| agent.names.iter().any(|name| name == stem))
 }
 
+/// Hook labels are config names, not proof of which CLI invoked them. Require
+/// the sender to descend from this pane's identified agent, with no different
+/// agent between it and the sender (including imported hooks in nested CLIs).
+pub fn hook_source_matches(
+    rows: &[ProcessRow],
+    shell_pid: u32,
+    sender_pid: u32,
+    source: &str,
+    agents: &[AgentNeedle],
+    mut command_args: impl FnMut(u32) -> Option<Vec<String>>,
+) -> bool {
+    let Some(owner) = attribute_agent(rows, shell_pid, agents, None, None, &mut command_args)
+    else {
+        return false;
+    };
+    if owner.id != source {
+        return false;
+    }
+    let Some(owner_pid) = owner.pid else {
+        return false;
+    };
+    let by_pid: HashMap<_, _> = rows.iter().map(|row| (row.pid, row)).collect();
+    let mut seen = HashSet::new();
+    let mut pid = sender_pid;
+    // Hook shells and plugin runtimes can be deeper than the CLI detector.
+    for _ in 0..64 {
+        if pid == 0 || pid == shell_pid || !seen.insert(pid) {
+            return false;
+        }
+        let Some(row) = by_pid.get(&pid) else {
+            return false;
+        };
+        let named = match_stem(&executable_stem(&row.image), agents).or_else(|| {
+            is_interpreter(&row.image)
+                .then(|| command_args(pid).and_then(|args| match_script_args(&args, agents)))
+                .flatten()
+        });
+        if named.is_some_and(|index| agents[index].id != source) {
+            return false;
+        }
+        if pid == owner_pid {
+            return true;
+        }
+        pid = row.parent;
+    }
+    false
+}
+
 fn is_interpreter(image: &str) -> bool {
     let stem = executable_stem(image);
     INTERPRETERS.contains(&stem.as_str())
@@ -804,6 +852,137 @@ mod tests {
             parent,
             image: image.to_string(),
         }
+    }
+
+    fn catalogue_needles() -> Vec<AgentNeedle> {
+        let catalogue: Vec<crate::agents::AgentSpec> =
+            serde_json::from_str(include_str!("../agents.default.json")).unwrap();
+        catalogue
+            .iter()
+            .filter_map(|agent| needle_for(&agent.id, &agent.bins, &agent.command))
+            .collect()
+    }
+
+    #[test]
+    fn every_catalogue_agent_rejects_imported_hook_labels_from_other_providers() {
+        let mut agents = catalogue_needles();
+        agents.push(needle_for("devin", &["devin".into()], "devin").unwrap());
+        for owner in &agents {
+            let rows = vec![
+                row(10, 1, "pwsh.exe"),
+                row(20, 10, &format!("{}.exe", owner.names[0])),
+                row(30, 20, "powershell.exe"),
+                row(40, 30, "keel.exe"),
+            ];
+            for source in ["claude", "codex", "grok", "opencode"] {
+                assert_eq!(
+                    hook_source_matches(&rows, 10, 40, source, &agents, |_| None),
+                    owner.id == source,
+                    "owner={} hook={source}",
+                    owner.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn nested_other_agent_and_its_imported_hooks_cannot_steal_the_parent_pane() {
+        let agents = catalogue_needles();
+        for owner in &agents {
+            for nested in &agents {
+                if owner.id == nested.id {
+                    continue;
+                }
+                let rows = vec![
+                    row(10, 1, "pwsh.exe"),
+                    row(20, 10, &format!("{}.exe", owner.names[0])),
+                    row(30, 20, &format!("{}.exe", nested.names[0])),
+                    row(40, 30, "keel.exe"),
+                ];
+                for source in [owner.id.as_str(), nested.id.as_str()] {
+                    assert!(
+                        !hook_source_matches(&rows, 10, 40, source, &agents, |_| None),
+                        "owner={} nested={} hook={source}",
+                        owner.id,
+                        nested.id
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn hook_sender_must_belong_to_this_live_pane_even_for_matching_provider() {
+        let agents = catalogue_needles();
+        let rows = vec![
+            row(10, 1, "pwsh.exe"),
+            row(20, 10, "claude.exe"),
+            row(30, 20, "keel.exe"),
+            row(50, 1, "pwsh.exe"),
+            row(60, 50, "claude.exe"),
+            row(70, 60, "keel.exe"),
+        ];
+        assert!(hook_source_matches(
+            &rows,
+            10,
+            30,
+            "claude",
+            &agents,
+            |_| None
+        ));
+        for sender in [0, 10, 70, 999] {
+            assert!(!hook_source_matches(
+                &rows,
+                10,
+                sender,
+                "claude",
+                &agents,
+                |_| None
+            ));
+        }
+        assert!(!hook_source_matches(
+            &rows[3..],
+            10,
+            30,
+            "claude",
+            &agents,
+            |_| None
+        ));
+    }
+
+    #[test]
+    fn plugin_process_and_manually_switched_cli_can_report_without_a_watcher_tick() {
+        let agents = catalogue_needles();
+        for source in ["opencode", "codex", "grok", "claude"] {
+            let rows = vec![
+                row(10, 1, "pwsh.exe"),
+                row(20, 10, &format!("{source}.exe")),
+            ];
+            assert!(hook_source_matches(&rows, 10, 20, source, &agents, |_| {
+                None
+            }));
+        }
+        let rows = vec![
+            row(10, 1, "pwsh.exe"),
+            row(20, 10, "node.exe"),
+            row(30, 20, "keel.exe"),
+        ];
+        assert!(hook_source_matches(
+            &rows,
+            10,
+            30,
+            "claude",
+            &agents,
+            |pid| (pid == 20).then(|| vec!["node.exe".into(), "claude.js".into()])
+        ));
+        assert!(!hook_source_matches(
+            &rows,
+            10,
+            30,
+            "claude",
+            &agents,
+            |_| None
+        ));
     }
 
     #[test]

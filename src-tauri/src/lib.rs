@@ -1,7 +1,9 @@
+mod agent_hooks;
 mod agents;
 mod blocking;
 mod git;
 mod grep;
+mod hook_config;
 mod paths;
 mod procs;
 mod pty;
@@ -17,6 +19,8 @@ mod watch;
 mod workspace;
 
 use tauri::{Emitter, Manager};
+
+pub use agent_hooks::run_helper as run_agent_hook_helper;
 
 use pty::PtyManager;
 use vpn::VpnManager;

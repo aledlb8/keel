@@ -21,6 +21,8 @@
 import {
   BellOff,
   ChevronDown,
+  CircleAlert,
+  History,
   Maximize2,
   Minimize2,
   Plus,
@@ -43,6 +45,7 @@ import {
 import { AgentMark } from "@/components/AgentMark";
 import { InlineRename } from "@/components/InlineRename";
 import { withShortcut } from "@/lib/keymap";
+import { hasAgentHooks } from "@/lib/agentEvents";
 import { cn } from "@/lib/utils";
 import type { Agent, AgentAccount, Pane } from "@/lib/types";
 import { nextProfileName } from "@/state/store";
@@ -189,6 +192,19 @@ export function PaneHeader({
           {pane.title}
         </span>
       )}
+
+      {agent && pane.resumeAgent && hasAgentHooks(agent.id) ? (
+        <span
+          role="img"
+          aria-label={pane.sessionReady ? "Conversation linked" : "Conversation not linked yet"}
+          title={pane.sessionReady
+            ? "This pane reopens its linked conversation."
+            : "No conversation linked yet. Reopening this pane will start a new chat."}
+          className={pane.sessionReady ? "text-faint" : "text-amber-400"}
+        >
+          {pane.sessionReady ? <History className="size-3" /> : <CircleAlert className="size-3" />}
+        </span>
+      ) : null}
 
       {agent?.accountEnv ? (
         // Non-modal: a modal menu makes the whole window inert while it is

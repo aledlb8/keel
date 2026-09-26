@@ -99,6 +99,54 @@ beforeEach(() => {
 });
 
 describe("persist after restore", () => {
+  for (const agentId of ["claude", "codex", "grok", "opencode"]) {
+    for (const replacementEvent of ["session", "working"] as const) {
+      it(`reopens the second ${agentId} chat in the same terminal after a ${replacementEvent} event`, async () => {
+        let releaseFirstSave!: () => void;
+        const firstSave = new Promise<void>((resolve) => { releaseFirstSave = resolve; });
+        let writes = 0;
+        mockIPC(async (cmd, payload) => {
+          if (cmd === "detect_agents") return [];
+          if (cmd === "state_load") return structuredClone(saved.at(-1));
+          if (cmd === "state_save") {
+            const document = documentOf(payload);
+            if (writes++ === 0) await firstSave;
+            if (document) saved.push(structuredClone(document));
+          }
+          return null;
+        });
+        useKeel.setState({
+          ready: true,
+          projects: [folder("web", { pane: shell("pane", { agentId }) })],
+          activeProjectId: "web",
+        });
+        state().noteActivity("pane", "spawn");
+        const report = (kind: "session" | "working" | "completed" | "ended", sequence: number, sessionId: string) =>
+          state().noteAgentEvent("pane", 0, { agentId, sessionId, kind, sequence });
+        report("session", 1, "first-chat");
+        report("working", 2, "first-chat");
+        report("completed", 3, "first-chat");
+        // /new or /clear keeps this PTY and generation alive.
+        report(replacementEvent, 4, "second-chat");
+        report("completed", 5, "first-chat");
+        report("ended", 6, "first-chat");
+        assert.equal(state().projects[0]?.decks[0]?.panes.pane?.sessionId, "second-chat");
+        const closing = state().flushPersist();
+        releaseFirstSave();
+        await closing;
+        assert.equal(saved.at(-1)?.projects[0]?.decks[0]?.panes.pane?.sessionId, "second-chat");
+
+        useKeel.setState(useKeel.getInitialState());
+        await state().init();
+        const reopened = state().projects[0]?.decks[0]?.panes.pane;
+        assert.equal(reopened?.sessionId, "second-chat");
+        assert.equal(reopened?.sessionReady, true);
+        assert.equal(reopened?.resumeAgent, true);
+        await state().flushPersist();
+      });
+    }
+  }
+
   it("does not write keel.json after a failed init", async () => {
     await state().init();
     assert.equal(state().restoreStatus, "failed");

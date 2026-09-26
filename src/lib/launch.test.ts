@@ -4,7 +4,6 @@ import { describe, it } from "node:test";
 import {
   applySession,
   isSessionId,
-  pickCapturedSession,
   unboundSession,
 } from "./launch.ts";
 import type { SessionSpec } from "./types.ts";
@@ -280,86 +279,5 @@ describe("isSessionId", () => {
     assert.equal(isSessionId(";"), false);
     assert.equal(isSessionId("$()"), false);
     assert.equal(isSessionId("$(reboot)"), false);
-  });
-});
-
-describe("pickCapturedSession", () => {
-  const older = { id: "old", mtimeMs: 1_000 };
-  const minted = { id: "minted", mtimeMs: 5_000 };
-  const spawnedAt = 4_000;
-
-  it("binds only the id we handed the CLI, never an older chat in the folder", () => {
-    assert.equal(
-      pickCapturedSession({
-        mintedId: "minted",
-        recent: [older, minted],
-        claimed: new Set(),
-        spawnedAt,
-      }),
-      "minted",
-    );
-    assert.equal(
-      pickCapturedSession({
-        mintedId: "minted",
-        recent: [older],
-        claimed: new Set(),
-        spawnedAt,
-      }),
-      null,
-    );
-  });
-
-  it("does not adopt a neighbour's recently-touched transcript", () => {
-    assert.equal(
-      pickCapturedSession({
-        mintedId: null,
-        recent: [{ id: "neighbour", mtimeMs: spawnedAt + 10 }],
-        claimed: new Set(["neighbour"]),
-        spawnedAt,
-      }),
-      null,
-    );
-  });
-
-  it("without a minted id, only takes a session created at or after spawn", () => {
-    assert.equal(
-      pickCapturedSession({
-        mintedId: null,
-        recent: [older, { id: "fresh", mtimeMs: spawnedAt }],
-        claimed: new Set(),
-        spawnedAt,
-      }),
-      "fresh",
-    );
-    assert.equal(
-      pickCapturedSession({
-        mintedId: null,
-        recent: [{ id: "stale", mtimeMs: spawnedAt - 1 }],
-        claimed: new Set(),
-        spawnedAt,
-      }),
-      null,
-    );
-  });
-
-  it("must not wait for a leftover generated id, or the real session is never bound", () => {
-    assert.equal(
-      pickCapturedSession({
-        mintedId: leftoverId,
-        recent: [{ id: "real", mtimeMs: spawnedAt }],
-        claimed: new Set(),
-        spawnedAt,
-      }),
-      null,
-    );
-    assert.equal(
-      pickCapturedSession({
-        mintedId: null,
-        recent: [{ id: "real", mtimeMs: spawnedAt }],
-        claimed: new Set(),
-        spawnedAt,
-      }),
-      "real",
-    );
   });
 });

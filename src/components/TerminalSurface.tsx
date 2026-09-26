@@ -779,6 +779,7 @@ export const TerminalSurface = memo(function TerminalSurface({
     const sampleScreen = () => {
       screenTimer = undefined;
       if (!isCurrent() || pendingWrites !== 0) return;
+      if (!useKeel.getState().needsAgentScreen(paneId, generation)) return;
       useKeel.getState().noteScreen(
         paneId, generation, readAgentScreen(term.buffer.active, term.rows),
       );
@@ -825,6 +826,9 @@ export const TerminalSurface = memo(function TerminalSurface({
               // chunk rather than leave activity sampling wedged.
               pendingWrites = 0;
             }
+          },
+          (event) => {
+            if (isCurrent()) useKeel.getState().noteAgentEvent(paneId, generation, event);
           },
         );
         if (!isCurrent()) return;

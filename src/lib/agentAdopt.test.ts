@@ -122,7 +122,7 @@ it("a shell becomes the CLI that started in it, on the default login", async () 
   assert.equal(live().agentHome?.title, "Shell");
   assert.equal(live().sessionReady, false);
 
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  state().noteAgentEvent("term", 3, { agentId: "claude", sessionId: "chat-1", kind: "session", sequence: 1 });
   assert.equal(live().sessionId, "chat-1");
   assert.equal(live().sessionReady, true);
   assert.equal(
@@ -253,7 +253,7 @@ it("rearms the same agent after it exited, and keeps its profile", async () => {
   assert.equal(live().accountId, "work");
   assert.equal(live().agentHome, undefined);
   assert.equal(live().sessionReady, false);
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  state().noteAgentEvent("term", 3, { agentId: "claude", sessionId: "chat-2", kind: "session", sequence: 1 });
   assert.equal(live().sessionId, "chat-2");
   assert.equal(
     applySession(claude.command, claude.session, live()),

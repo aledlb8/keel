@@ -11,6 +11,7 @@
 
 import { create } from "zustand";
 import { AgentActivity, agentSignal, type AgentScreen } from "../lib/agentActivity.ts";
+import { hasAgentHooks, type AgentEvent } from "../lib/agentEvents.ts";
 import {
   notifyAgent,
   type AgentAlert,
@@ -29,7 +30,7 @@ import {
   type KeybindingOverrides,
   type ShortcutId,
 } from "../lib/keymap.ts";
-import { isSessionId, pickCapturedSession, unboundSession } from "../lib/launch.ts";
+import { isSessionId, unboundSession } from "../lib/launch.ts";
 import { PersistQueue } from "../lib/persistQueue.ts";
 import {
   briefFromOsc,
@@ -111,14 +112,7 @@ const activity = new Map<string, AgentActivity>();
  * agent whose variable was set.
  */
 const shellSpawn = new Map<string, { agentId: string | null; accountId: string | null }>();
-// OpenCode may create its session well after Enter (startup, plugins, or a
-// busy database). Keep the original capture boundary across later prompts.
-const sessionCaptures = new WeakMap<AgentActivity, {
-  since: number;
-  pending: boolean;
-  retryAt: number;
-  retryUntil: number;
-}>();
+
 /** Pane ids that already reported a post-reopen spawn settle. */
 const restoreSettled = new Set<string>();
 
@@ -176,6 +170,8 @@ export interface KeelState {
   init: () => Promise<void>;
   /** Write the current layout now, skipping the debounce. */
   flushPersist: () => Promise<void>;
+  noteAgentEvent: (paneId: string, generation: number, event: AgentEvent) => void;
+  needsAgentScreen: (paneId: string, generation: number) => boolean;
   /** Re-run state_load / hydrate after a failed restore. */
   retryRestore: () => Promise<void>;
   /** Abandon broken session layout → empty projects UI. */
@@ -234,17 +230,8 @@ export interface KeelState {
     agentId: string | null,
     accountId: string | null,
   ) => void;
-  /** First successful spawn: later launches should resume this conversation. */
-  markSessionReady: (paneId: string) => void;
   /** Bind this pane to the conversation that actually started in it. */
   bindSession: (paneId: string, sessionId: string) => void;
-  /**
-   * After the agent process appears, record its real conversation id. CLIs
-   * that mint the conversation on the first prompt (opencode) pass `since` —
-   * the wall-clock moment of that submission — instead of relying on spawn.
-   */
-  captureSession: (paneId: string, generation?: number, since?: number) => Promise<void>;
-
   /** The agents & profiles dialog; `agentId` preselects an agent. */
   agentSettings: { open: boolean; agentId: string | null };
   openAgentSettings: (agentId?: string | null) => void;
@@ -865,22 +852,6 @@ export const useKeel = create<KeelState>((set, get) => {
     return null;
   }
 
-  /** Conversations already owned by another pane of the same agent/account. */
-  function claimedSessionIds(paneId: string, pane: Pane): Set<string> {
-    const claimed = new Set<string>();
-    for (const item of get().projects) {
-      for (const deck of item.decks) {
-        for (const [id, other] of Object.entries(deck.panes)) {
-          if (id === paneId || !other.sessionReady || !other.sessionId) continue;
-          if (other.agentId !== pane.agentId) continue;
-          if ((other.accountId ?? null) !== (pane.accountId ?? null)) continue;
-          claimed.add(other.sessionId);
-        }
-      }
-    }
-    return claimed;
-  }
-
   /** Edit whichever deck holds `paneId`, searching every project. */
   function patchPane(
     paneId: string,
@@ -1399,10 +1370,9 @@ export const useKeel = create<KeelState>((set, get) => {
         finishRunningAgent(paneId, pane);
         return;
       }
-      // Already this live CLI. Capture if the conversation is not bound yet;
-      // do not reset the detector or the session underneath a running turn.
+      // Already this live CLI. Keep the detector and conversation underneath
+      // a running turn; its hook will supply any new conversation identity.
       if (pane.agentId === nextId && pane.resumeAgent) {
-        void get().captureSession(paneId, generation);
         return;
       }
 
@@ -1445,17 +1415,10 @@ export const useKeel = create<KeelState>((set, get) => {
         true,
       );
       armActivity(paneId, startedMs);
-      void get().captureSession(paneId, generation);
     },
 
     noteShellSpawn(paneId, agentId, accountId) {
       shellSpawn.set(paneId, { agentId, accountId });
-    },
-
-    markSessionReady(_paneId) {
-      // Spawn chrome only. sessionReady becomes true only when captureSession
-      // binds the conversation this process created — not merely because the
-      // executable started.
     },
 
     bindSession(paneId, sessionId) {
@@ -1468,86 +1431,6 @@ export const useKeel = create<KeelState>((set, get) => {
         (current) => ({ ...current, sessionId, sessionReady: true }),
         true,
       );
-    },
-
-    async captureSession(paneId, generation, since) {
-      if (generation !== undefined && (get().generations[paneId] ?? 0) !== generation) return;
-      const pane = findPane(paneId);
-      if (!pane?.agentId || !pane.resumeAgent) return;
-      // Already bound to a real conversation. Restarting this pane resumes
-      // that id; do not adopt a different transcript from the folder.
-      if (pane.sessionReady) return;
-      const project = get().projects.find((item) => deckOfPane(item, paneId));
-      if (!project) return;
-      const agent = get().agents.find((entry) => entry.id === pane.agentId);
-      const store = agent?.session?.store;
-      if (store !== "grok" && store !== "claude" && store !== "opencode" && store !== "codex") {
-        return;
-      }
-      // opencode creates its conversation when the first prompt is submitted,
-      // so a capture armed at spawn would have nothing to find — and could
-      // bind a neighbour's chat. Only the submit path arms it.
-      const capturedActivity = activity.get(paneId);
-      if (!capturedActivity) return;
-      let capture = sessionCaptures.get(capturedActivity);
-      if (store === "opencode") {
-        if (!capture) {
-          if (since === undefined) return;
-          capture = { since, pending: false, retryAt: 0, retryUntil: 0 };
-          sessionCaptures.set(capturedActivity, capture);
-        }
-        // Bound idle polling; another submission retries the original chat.
-        if (since !== undefined) capture.retryUntil = performance.now() + 60_000;
-        if (capture.pending) return;
-        capture.pending = true;
-      }
-      const spawnedAt = capture?.since ?? since ?? capturedActivity.spawnedAt;
-
-      try {
-        // Codex writes the thread row as the TUI comes up, which can lag the
-        // process-start event by a few seconds.
-        const attempts = store === "opencode" ? 1 : store === "codex" ? 15 : 6;
-        for (let attempt = 0; attempt < attempts; attempt += 1) {
-          if (attempt > 0) {
-            await new Promise((resolve) => setTimeout(resolve, 400));
-          }
-          const live = findPane(paneId);
-          if (!live?.resumeAgent) return;
-          if (live.sessionReady) return;
-          // A restart while we were waiting belongs to a later capture.
-          if (activity.get(paneId) !== capturedActivity) return;
-
-          const recent = await backend
-            .sessionRecent({
-              store,
-              cwd: live.cwd ?? project.path,
-              accountEnv: agent?.accountEnv ?? null,
-              accountId: live.accountId,
-            })
-            .catch(() => [] as { id: string; mtimeMs: number }[]);
-
-          const current = findPane(paneId);
-          if (activity.get(paneId) !== capturedActivity || !current?.resumeAgent || current.sessionReady) return;
-
-          const captured = pickCapturedSession({
-            // Never wait for a leftover generated UUID. Fresh launches do not
-            // pass `--session-id`, so the process creates its own conversation.
-            mintedId: null,
-            recent: Array.isArray(recent) ? recent : [],
-            claimed: claimedSessionIds(paneId, current),
-            spawnedAt,
-          });
-          if (captured) {
-            get().bindSession(paneId, captured);
-            return;
-          }
-        }
-      } finally {
-        if (capture) {
-          capture.pending = false;
-          capture.retryAt = performance.now() + 2_000;
-        }
-      }
     },
 
     openAgentSettings(agentId = null) {
@@ -2562,6 +2445,36 @@ export const useKeel = create<KeelState>((set, get) => {
       }));
     },
 
+    noteAgentEvent(paneId, generation, event) {
+      if ((get().generations[paneId] ?? 0) !== generation) return;
+      const pane = findPane(paneId);
+      if (!pane || pane.editor || paneId in get().exited || paneId in get().closing) return;
+      if (!hasAgentHooks(event.agentId)) return;
+      if (event.kind === "connected" || event.kind === "unavailable") return;
+      if (!isSessionId(event.sessionId)) return;
+      if (pane.sessionReady && pane.sessionId !== event.sessionId &&
+          event.kind !== "session" && event.kind !== "working") return;
+      if (pane.agentId !== event.agentId && event.kind !== "session" && event.kind !== "working") return;
+      let entry = activity.get(paneId);
+      if (!entry) return;
+      // A real hook can beat the process watcher. Adopt that CLI once, then keep
+      // its detector so a late process-start event cannot erase a fast turn.
+      if (pane.agentId !== event.agentId || !pane.resumeAgent) {
+        get().noteRunningAgent(paneId, generation, event.agentId);
+        entry = activity.get(paneId);
+      }
+      if (!entry?.event(event.kind, event.sequence)) return;
+      get().bindSession(paneId, event.sessionId);
+      if (["session", "working", "progress", "waiting", "cancelled", "failed", "ended", "idle"].includes(event.kind)) {
+        acknowledge(paneId);
+      }
+    },
+
+    needsAgentScreen(paneId, generation) {
+      return (get().generations[paneId] ?? 0) === generation &&
+        !activity.get(paneId)?.usesProtocol;
+    },
+
     noteOutput(paneId) {
       activity.get(paneId)?.output(performance.now());
     },
@@ -2599,16 +2512,6 @@ export const useKeel = create<KeelState>((set, get) => {
 
       const signal = activity.get(paneId)?.input(data ?? "", performance.now());
       if (signal === "report") return;
-      if (signal === "submit") {
-        // A submitted prompt is when a CLI that mints its conversation on the
-        // first message creates it. Floor the capture at this keystroke so an
-        // older, still-unclaimed conversation in the same folder cannot win.
-        void get().captureSession(
-          paneId,
-          get().generations[paneId],
-          Date.now(),
-        );
-      }
       acknowledge(paneId);
     },
 
@@ -2701,11 +2604,6 @@ export function startAttentionTracking(): () => void {
             entry &&
             !(paneId in state.exited)
           ) {
-            const capture = sessionCaptures.get(entry);
-            if (!pane.sessionReady && capture && !capture.pending &&
-              clock >= capture.retryAt && clock <= capture.retryUntil) {
-              void state.captureSession(paneId, state.generations[paneId]);
-            }
             current = entry.status(previous, clock, paneId === watching);
           }
 
