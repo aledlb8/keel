@@ -30,6 +30,7 @@ import {
   type ShortcutId,
 } from "../lib/keymap.ts";
 import { isSessionId, pickCapturedSession, unboundSession } from "../lib/launch.ts";
+import { PersistQueue } from "../lib/persistQueue.ts";
 import {
   briefFromOsc,
   briefFromPrompt,
@@ -174,7 +175,7 @@ export interface KeelState {
 
   init: () => Promise<void>;
   /** Write the current layout now, skipping the debounce. */
-  flushPersist: () => void;
+  flushPersist: () => Promise<void>;
   /** Re-run state_load / hydrate after a failed restore. */
   retryRestore: () => Promise<void>;
   /** Abandon broken session layout → empty projects UI. */
@@ -797,20 +798,21 @@ function migrate(saved: unknown): Project[] {
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
 export const useKeel = create<KeelState>((set, get) => {
+  const saves = new PersistQueue(backend.saveState);
   let vpnConnecting = false;
   let vpnRevision = 0;
   let vpnOp = 0;
 
   /** Debounced write-through. Every mutation calls this; disk sees one write. */
   function persist(immediate = false) {
-    if (!get().ready) return;
+    if (!get().ready) return Promise.resolve();
     // A failed restore must not write the empty in-memory document over keel.json.
-    if (get().restoreStatus === "failed") return;
+    if (get().restoreStatus === "failed") return Promise.resolve();
     if (saveTimer) clearTimeout(saveTimer);
     const write = () => {
       saveTimer = null;
-      if (!get().ready) return;
-      if (get().restoreStatus === "failed") return;
+      if (!get().ready) return Promise.resolve();
+      if (get().restoreStatus === "failed") return Promise.resolve();
       const { projects, workspaces, sidebar, activeProjectId, accounts, vpn, keybindings } =
         get();
       const projectIds = new Set(projects.map((project) => project.id));
@@ -829,12 +831,14 @@ export const useKeel = create<KeelState>((set, get) => {
         },
         keybindings,
       };
-      void backend.saveState(document).catch(() => {
-        /* A failed save should never interrupt what the user is doing. */
-      });
+      const saving = saves.enqueue(document);
+      // Routine mutations remain non-blocking; flushPersist observes failures.
+      void saving.catch(() => {});
+      return saving;
     };
-    if (immediate) write();
-    else saveTimer = setTimeout(write, 400);
+    if (immediate) return write();
+    saveTimer = setTimeout(write, 400);
+    return Promise.resolve();
   }
 
   /** Saved order, with missing rows filled in so tests and old documents still work. */
@@ -1036,7 +1040,7 @@ export const useKeel = create<KeelState>((set, get) => {
     vpn: emptyVpn(DEFAULT_VPN),
 
     flushPersist() {
-      persist(true);
+      return persist(true);
     },
 
     async init() {

@@ -5,6 +5,7 @@
 
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { toast } from "sonner";
 
 import { useKeel } from "@/state/store";
 import { useWorkspace } from "@/state/workspace";
@@ -53,10 +54,11 @@ export async function handleCloseRequested(): Promise<void> {
       closing = false;
       return;
     }
-    useKeel.getState().flushPersist();
+    await useKeel.getState().flushPersist();
     await getCurrentWindow().destroy();
   } catch {
     closing = false;
+    toast.error("Couldn't finish saving and closing Keel. The window has stayed open; try again.");
   }
 }
 
@@ -72,7 +74,7 @@ export function startCloseGuard(): () => void {
   });
   const onHidden = () => {
     if (document.visibilityState === "hidden") {
-      useKeel.getState().flushPersist();
+      void useKeel.getState().flushPersist().catch(() => {});
     }
   };
   document.addEventListener("visibilitychange", onHidden);
