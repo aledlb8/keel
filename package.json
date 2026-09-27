@@ -29,6 +29,7 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json",
     "test": "tsc --noEmit -p tsconfig.test.json && node scripts/test.mjs",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml --all-targets",
+    "test:agent-hooks": "node scripts/smoke-agent-hooks.mjs",
     "rust:fmt": "cargo fmt --manifest-path src-tauri/Cargo.toml",
     "rust:lint": "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings",
     "check": "pnpm run typecheck && pnpm run test && cargo fmt --manifest-path src-tauri/Cargo.toml -- --check && pnpm run rust:lint && pnpm run test:rust",
