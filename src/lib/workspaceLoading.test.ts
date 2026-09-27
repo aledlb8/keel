@@ -38,6 +38,8 @@ const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 beforeEach(async () => {
   Object.assign(globalThis, { window: {} });
   state().setRoot(null);
+  // The chosen tab survives project switches now, so put it back for each test.
+  state().setTab("files");
   mockIPC((cmd) => cmd === "git_status" ? status : []);
   state().setRoot("project-a");
   await state().refreshGit();
@@ -64,12 +66,12 @@ it("does not request folded metadata when selecting Git", async () => {
   assert.deepEqual(calls, []);
 });
 
-it("opens every project on the files tab, and a diff does not take it away", async () => {
+it("keeps the panel you picked as you switch projects, and a diff does not take it away", async () => {
   state().setTab("git");
   state().setRoot("project-b");
-  assert.equal(state().tab, "files");
+  assert.equal(state().tab, "git");
   await state().openDiff("a.ts", false);
-  assert.equal(state().tab, "files");
+  assert.equal(state().tab, "git");
 });
 
 it("publishes branches and history while pull requests are still pending", async () => {
@@ -409,6 +411,52 @@ it("takes a deleted folder's listing and fold away at once", async () => {
   assert.equal("src" in state().tree, false);
   assert.equal("src" in state().expanded, false);
   assert.equal(state().selectedRel, null);
+});
+
+it("brings back a project's open folders and selection when you return to it", async () => {
+  ipc({
+    workspace_list: (args) => {
+      const rel = String(args.rel);
+      if (rel === "") return [dir("src")];
+      if (rel === "src") return [file("src/a.ts")];
+      return [];
+    },
+  });
+  state().toggleExpanded("src");
+  await tick();
+  state().setSelected("src/a.ts");
+  state().setRoot("project-b");
+  assert.deepEqual(state().expanded, {});
+  assert.equal(state().selectedRel, null);
+
+  state().setRoot("project-a");
+  assert.equal(state().expanded.src, true);
+  assert.equal(state().selectedRel, "src/a.ts");
+  await tick();
+  assert.deepEqual(state().tree.src?.map((item) => item.rel), ["src/a.ts"]);
+});
+
+it("forgets a folder that was deleted while you were in another project", async () => {
+  const lists = new Map<string, WorkspaceEntry[] | null>([
+    ["", [dir("src")]],
+    ["src", [file("src/a.ts")]],
+  ]);
+  ipc({
+    workspace_list: (args) => {
+      const rel = String(args.rel);
+      return lists.has(rel) ? (lists.get(rel) as WorkspaceEntry[] | null) : [];
+    },
+  });
+  state().toggleExpanded("src");
+  await tick();
+  state().setRoot("project-b");
+
+  lists.set("src", null);
+  state().setRoot("project-a");
+  await tick();
+  await tick();
+  assert.equal("src" in state().expanded, false);
+  assert.equal("src" in state().tree, false);
 });
 
 it("reloads a stashed clean document changed by an agent in a background project", async () => {

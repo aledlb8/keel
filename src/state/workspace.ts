@@ -3,6 +3,9 @@
  *
  * The project folder comes from the active project in the main store. Buffers
  * live here so typing in the editor does not persist a snapshot of the file.
+ * The chosen tab and each project's open folders are session state: they
+ * survive switching projects, and a fresh launch starts from files and a
+ * folded tree.
  */
 
 import { create } from "zustand";
@@ -234,6 +237,23 @@ function emptyDocs(): EditorDocs {
     editorErrors: {},
     externalChange: {},
   };
+}
+
+/**
+ * Where you were in a folder you are not looking at: the folders left open and
+ * the row under the cursor. Like the open documents beside it, it comes back
+ * when you return to the project — and only for this session, because a fresh
+ * launch starts every project folded at its root.
+ */
+interface BrowseState {
+  expanded: Record<string, boolean>;
+  selectedRel: string | null;
+}
+
+const stashedBrowse = new Map<string, BrowseState>();
+
+function emptyBrowse(): BrowseState {
+  return { expanded: {}, selectedRel: null };
 }
 
 /** What to keep when leaving a folder. Reads still in flight are abandoned, so those load again. */
@@ -699,17 +719,29 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     grepGeneration += 1;
     searchGeneration += 1;
     reads.reset();
-    if (previous) stashedDocs.set(previous, settledDocs(get()));
+    if (previous) {
+      stashedDocs.set(previous, settledDocs(get()));
+      const { expanded, selectedRel } = get();
+      stashedBrowse.set(previous, { expanded: { ...expanded }, selectedRel });
+    }
     // No project at all: nothing will come back for what was open.
-    if (!root) stashedDocs.clear();
+    if (!root) {
+      stashedDocs.clear();
+      stashedBrowse.clear();
+    }
     const docs = (root ? stashedDocs.get(root) : undefined) ?? emptyDocs();
-    if (root) stashedDocs.delete(root);
+    const browse = (root ? stashedBrowse.get(root) : undefined) ?? emptyBrowse();
+    if (root) {
+      stashedDocs.delete(root);
+      stashedBrowse.delete(root);
+    }
     set({
       root,
-      tab: "files",
+      // `tab` is deliberately left as it is: the panel you picked follows you
+      // from project to project, and only a fresh launch starts on files.
       tree: {},
-      expanded: {},
-      selectedRel: null,
+      expanded: browse.expanded,
+      selectedRel: browse.selectedRel,
       creating: null,
       renaming: null,
       searchHits: null,
@@ -734,6 +766,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     });
     if (root) {
       void get().loadDir("");
+      // Refill every folder that was open, so the tree comes back whole. One
+      // deleted meanwhile returns a missing listing and is pruned then.
+      for (const [rel, open] of Object.entries(browse.expanded)) {
+        if (open && rel) void get().loadDir(rel);
+      }
       void get().refreshGit();
     }
   },
