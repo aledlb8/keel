@@ -83,7 +83,6 @@ pub fn run() {
             git::pr_list,
             git::pr_create,
             git::pr_checkout,
-            sessions::session_recent,
             usage::usage_fetch,
             vpn::vpn_snapshot,
             vpn::vpn_connect,

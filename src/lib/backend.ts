@@ -45,21 +45,6 @@ export function pickProjectFolder(): Promise<string | null> {
   return invoke("project_pick");
 }
 
-export interface SessionHit {
-  id: string;
-  mtimeMs: number;
-}
-
-/** Newest conversations for this CLI + folder, used to bind a pane to its chat. */
-export function sessionRecent(probe: {
-  store: string;
-  cwd: string;
-  accountEnv?: string | null;
-  accountId?: string | null;
-}): Promise<SessionHit[]> {
-  return invoke("session_recent", { probe });
-}
-
 export interface VpnSnapshot {
   phase: string;
   connectInstalled: boolean;
