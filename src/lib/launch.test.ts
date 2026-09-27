@@ -51,6 +51,12 @@ const aider: SessionSpec = {
 const leftoverId = "11111111-1111-4111-8111-111111111111";
 
 describe("applySession", () => {
+  it("preserves quoted Windows executables when inserting a resume subcommand", () => {
+    for (const bin of ['"C:\\Program Files\\Codex\\codex.exe"', "& 'C:\\Program Files\\Codex\\codex.exe'"]) {
+      assert.equal(applySession(`${bin} --search`, codex, { sessionId: "chat", sessionReady: true }),
+        `${bin} resume "chat" --search`);
+    }
+  });
   it("launches a fresh grok without --session-id, even if a leftover id is stored", () => {
     assert.equal(
       applySession("grok", grok, {

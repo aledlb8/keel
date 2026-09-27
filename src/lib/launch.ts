@@ -44,7 +44,9 @@ export function applySession(
   if (!extra) return base;
 
   if (session.kind === "subcommand") {
-    const match = /^(\S+)(?:\s+(.*))?$/.exec(base);
+    // Preserve a quoted executable (and PowerShell's call operator) as one
+    // unit. Splitting at the first space corrupts Windows installation paths.
+    const match = /^((?:&\s+)?(?:"(?:[^"`]|`.)*"|'(?:[^']|'')*'|\S+))(?:\s+(.*))?$/.exec(base);
     if (!match) return base;
     const bin = match[1];
     const rest = match[2];
