@@ -11,10 +11,21 @@ import { useKeel } from "@/state/store";
 export function RestoreChrome() {
   const ready = useKeel((state) => state.ready);
   const restoreStatus = useKeel((state) => state.restoreStatus);
+  const persistError = useKeel((state) => state.persistError);
   const showFailed = ready && restoreStatus === "failed";
 
   return (
     <>
+      {persistError && !showFailed ? (
+        <div role="alert" className="absolute inset-x-3 top-3 z-40 flex items-center gap-3 rounded-lg border border-line-strong bg-[color:var(--keel-chrome-strong)] p-3 text-row shadow-lg">
+          <p className="flex-1" title={persistError}>
+            Workspace changes couldn&apos;t be saved. Recent chats may not reopen until saving succeeds.
+          </p>
+          <Button size="sm" variant="outline" onClick={() => {
+            void useKeel.getState().flushPersist().catch(() => {});
+          }}>Retry save</Button>
+        </div>
+      ) : null}
       {showFailed ? (
         <div className="absolute inset-0 z-40 grid place-items-center bg-scrim backdrop-blur-[var(--keel-blur-strong)]">
           <div className="w-[320px] rounded-[var(--keel-r-window)] border border-line-strong bg-[color:var(--keel-chrome-strong)] px-5 py-5 text-center shadow-[var(--keel-lift-strong)] backdrop-blur-[var(--keel-blur-strong)]">

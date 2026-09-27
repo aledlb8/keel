@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { beforeEach, describe, it } from "node:test";
 import { mockIPC } from "@tauri-apps/api/mocks";
+import { mkdtemp, readFile, writeFile, rename, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { applySession } from "./launch.ts";
 
 import { fileTabId } from "./editorRefs.ts";
 import type { AgentAccount, Pane, PersistedState, Project } from "./types.ts";
@@ -99,6 +103,73 @@ beforeEach(() => {
 });
 
 describe("persist after restore", () => {
+  it("round-trips concurrent chats through disk, process replacement, and a full store reload", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "keel-restore-"));
+    const file = path.join(directory, "keel.json");
+    const providers = ["claude", "codex", "grok", "opencode"];
+    try {
+      mockIPC(async (cmd, payload) => {
+        if (cmd === "detect_agents") return [];
+        if (cmd === "state_load") return JSON.parse(await readFile(file, "utf8"));
+        if (cmd === "state_save") {
+          await writeFile(`${file}.tmp`, JSON.stringify(documentOf(payload)));
+          await rename(`${file}.tmp`, file);
+        }
+        return null;
+      });
+      const panes = Object.fromEntries(providers.flatMap((agentId) => [0, 1].map((n) => {
+        const id = `${agentId}-${n}`;
+        return [id, shell(id, { agentId, accountId: n ? "work" : null })];
+      })));
+      useKeel.setState({ ready: true, projects: [folder("web", panes)], activeProjectId: "web" });
+      for (const pane of Object.values(panes)) {
+        state().noteActivity(pane.id, "spawn");
+        const report = (sessionId: string, processId: string, sequence: number) =>
+          state().noteAgentEvent(pane.id, 0, { agentId: pane.agentId!, sessionId, processId, kind: "session", sequence });
+        report(`old-${pane.id}`, `old-process-${pane.id}`, 1);
+        // First event from a replacement can beat the old watcher's exit.
+        report(`new-${pane.id}`, `new-process-${pane.id}`, 2);
+        state().releaseAgent(pane.id, 0, `old-process-${pane.id}`);
+        state().noteRunningAgent(pane.id, 0, pane.agentId, `new-process-${pane.id}`);
+        report(`old-${pane.id}`, `old-process-${pane.id}`, 3);
+      }
+      await state().flushPersist();
+      useKeel.setState(useKeel.getInitialState());
+      await state().init();
+      const restored = state().projects[0]!.decks[0]!.panes;
+      for (const pane of Object.values(panes)) {
+        const actual = restored[pane.id]!;
+        assert.equal(actual.sessionId, `new-${pane.id}`);
+        assert.equal(actual.accountId, pane.accountId);
+        assert.equal(actual.resumeAgent, true);
+        assert.equal(applySession(pane.agentId!, { resume: "--resume {id}" }, actual),
+          `${pane.agentId} --resume "new-${pane.id}"`);
+      }
+      await state().flushPersist();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("exposes a failed identity save and retries the latest chat without losing it", async () => {
+    let fail = true;
+    mockIPC((cmd, payload) => {
+      if (cmd === "state_save") {
+        if (fail) return Promise.reject("disk full");
+        saved.push(documentOf(payload)!);
+      }
+      return null;
+    });
+    useKeel.setState({ ready: true, projects: [folder("web", { pane: shell("pane", { agentId: "claude" }) })] });
+    state().noteActivity("pane", "spawn");
+    state().noteAgentEvent("pane", 0, { agentId: "claude", sessionId: "exact-chat", kind: "session", sequence: 1 });
+    await assert.rejects(state().flushPersist(), /disk full/);
+    assert.equal(state().persistError, "disk full");
+    fail = false;
+    await state().flushPersist();
+    assert.equal(state().persistError, null);
+    assert.equal(saved.at(-1)!.projects[0]!.decks[0]!.panes.pane!.sessionId, "exact-chat");
+  });
   for (const agentId of ["claude", "codex", "grok", "opencode"]) {
     for (const replacementEvent of ["session", "working"] as const) {
       it(`reopens the second ${agentId} chat in the same terminal after a ${replacementEvent} event`, async () => {

@@ -17,4 +17,9 @@ export class PersistQueue<T> {
     }).catch(() => {});
     return operation;
   }
+
+  /** Includes identities queued while a close-time write was in flight. */
+  async drain(): Promise<void> {
+    while (this.tail) await this.tail;
+  }
 }

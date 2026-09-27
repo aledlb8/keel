@@ -136,6 +136,8 @@ export interface PaneSpec {
 
 export interface KeelState {
   ready: boolean;
+  /** A failed workspace write must be visible while conversations are live. */
+  persistError: string | null;
   agents: Agent[];
   accounts: AgentAccount[];
   projects: Project[];
@@ -820,7 +822,13 @@ export const useKeel = create<KeelState>((set, get) => {
         },
         keybindings,
       };
-      const saving = saves.enqueue(document);
+      const saving = saves.enqueue(document).then(
+        () => { set({ persistError: null }); },
+        (error: unknown) => {
+          set({ persistError: String(error) });
+          throw error;
+        },
+      );
       // Routine mutations remain non-blocking; flushPersist observes failures.
       void saving.catch(() => {});
       return saving;
@@ -986,6 +994,7 @@ export const useKeel = create<KeelState>((set, get) => {
 
   return {
     ready: false,
+    persistError: null,
     agents: [],
     accounts: [],
     projects: [],
@@ -1010,8 +1019,9 @@ export const useKeel = create<KeelState>((set, get) => {
     hostLost: false,
     vpn: emptyVpn(DEFAULT_VPN),
 
-    flushPersist() {
-      return persist(true);
+    async flushPersist() {
+      await persist(true);
+      await saves.drain();
     },
 
     async init() {

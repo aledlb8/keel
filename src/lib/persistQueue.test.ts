@@ -31,3 +31,26 @@ it("reports failed flushes and allows a subsequent save to recover", async () =>
   await recovered;
   assert.deepEqual(disk, [2]);
 });
+
+it("close waits for a new conversation arriving during the final write", async () => {
+  let releaseFirst!: () => void;
+  let releaseSecond!: () => void;
+  const first = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const second = new Promise<void>((resolve) => { releaseSecond = resolve; });
+  const disk: string[] = [];
+  const queue = new PersistQueue(async (value: string) => {
+    await (value === "old-chat" ? first : second);
+    disk.push(value);
+  });
+  void queue.enqueue("old-chat");
+  let closed = false;
+  const close = queue.drain().then(() => { closed = true; });
+  void queue.enqueue("new-chat");
+  releaseFirst();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(closed, false);
+  assert.deepEqual(disk, ["old-chat"]);
+  releaseSecond();
+  await close;
+  assert.deepEqual(disk, ["old-chat", "new-chat"]);
+});
