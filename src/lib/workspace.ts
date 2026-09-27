@@ -202,6 +202,15 @@ export function gitDiff(
   return invoke("git_diff", { root, path, staged });
 }
 
+/**
+ * The file as last committed, for the editor's change gutter. `""` when git
+ * would pick the file up but has never committed it; `null` when there is
+ * nothing to compare with (no repo, ignored, binary or too big).
+ */
+export function gitBase(root: string, path: string): Promise<string | null> {
+  return invoke("git_base", { root, path });
+}
+
 export function gitStage(root: string, paths: string[]): Promise<void> {
   return invoke("git_stage", { root, paths });
 }

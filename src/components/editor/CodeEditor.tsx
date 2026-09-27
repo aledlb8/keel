@@ -26,9 +26,11 @@ import {
   lineNumbers,
 } from "@codemirror/view";
 
+import { gitGutter, setGitBase } from "@/components/editor/gitGutter";
 import { languageFor } from "@/components/editor/language";
 import { keelEditorTheme } from "@/components/editor/theme";
 import { registerEditorView } from "@/lib/editorViews";
+import { gitBase } from "@/lib/workspace";
 import { useWorkspace } from "@/state/workspace";
 
 function editorLock(readOnly: boolean) {
@@ -67,6 +69,7 @@ export function CodeEditor({
           keelEditorTheme,
           history(),
           lineNumbers(),
+          gitGutter(),
           // The numbers belong to their lines, not to the window: scrolling a
           // long line sideways carries them off with the code rather than
           // pinning them over it. CodeMirror pins them by default.
@@ -101,6 +104,29 @@ export function CodeEditor({
     viewRef.current = view;
     const unregister = registerEditorView(id, view);
 
+    // The committed copy the change gutter measures against. Read again
+    // whenever git status moves: a commit or checkout changes what counts as
+    // unchanged.
+    let destroyed = false;
+    let base: string | null = null;
+    let baseRequest = 0;
+    let gitSeen = state.git;
+    const loadBase = () => {
+      const request = ++baseRequest;
+      const show = (next: string | null) => {
+        if (destroyed || request !== baseRequest || next === base) return;
+        base = next;
+        setGitBase(view, next);
+      };
+      const { root, git } = useWorkspace.getState();
+      if (!root || readOnly || git?.repo === false) {
+        show(null);
+        return;
+      }
+      gitBase(root, rel).then(show, () => show(null));
+    };
+    loadBase();
+
     // Another pane showing this file typed into it.
     const unsubscribe = useWorkspace.subscribe((next) => {
       const snap = next.snapshots[id];
@@ -108,7 +134,11 @@ export function CodeEditor({
       if (nextReadOnly !== readOnly) {
         readOnly = nextReadOnly;
         view.dispatch({ effects: lock.reconfigure(editorLock(readOnly)) });
+        loadBase();
+      } else if (next.git !== gitSeen) {
+        loadBase();
       }
+      gitSeen = next.git;
       const text = next.buffers[id];
       if (text === undefined || text === known) return;
       known = text;
@@ -117,6 +147,7 @@ export function CodeEditor({
     });
 
     return () => {
+      destroyed = true;
       unregister();
       unsubscribe();
       view.destroy();

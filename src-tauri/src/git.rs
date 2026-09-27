@@ -687,6 +687,47 @@ fn git_diff_blocking(root: String, path: String, staged: bool) -> Result<GitDiff
     Ok(parse_diff(&raw, &rel))
 }
 
+/// The committed copy of a file, for the editor's change gutter.
+///
+/// `Some("")` for a file git would pick up but has never committed, so all of
+/// it reads as new. `None` when there is nothing to compare with: no repo, an
+/// ignored file, or a blob that is binary or too big to diff.
+#[tauri::command]
+pub async fn git_base(root: String, path: String) -> Result<Option<String>, String> {
+    crate::blocking::run(move || git_base_blocking(root, path)).await
+}
+
+fn git_base_blocking(root: String, path: String) -> Result<Option<String>, String> {
+    let root = crate::roots::require(&root)?;
+    let rel = rel_arg(&root, &path)?;
+    // `./` resolves against the project folder, which may sit below the repo root.
+    let spec = format!("HEAD:./{rel}");
+    let output = git(&root, &["cat-file", "blob", &spec])?;
+    if output.status.success() {
+        let bytes = output.stdout;
+        if bytes.len() as u64 > MAX_DIFF_BYTES || bytes.contains(&0) {
+            return Ok(None);
+        }
+        return Ok(Some(String::from_utf8_lossy(&bytes).into_owned()));
+    }
+    let listed = git_ok(
+        &root,
+        &[
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            "--",
+            &rel,
+        ],
+    );
+    Ok(match listed {
+        Ok(out) if !out.trim_matches('\0').is_empty() => Some(String::new()),
+        _ => None,
+    })
+}
+
 fn untracked_file_diff(rel: String, path: &Path) -> GitDiff {
     let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     if size > MAX_DIFF_BYTES {
@@ -1500,6 +1541,59 @@ mod tests {
         .expect("diff");
         assert!(via_cmd.binary);
         assert!(via_cmd.hunks.is_empty());
+    }
+
+    #[test]
+    fn base_is_the_committed_copy() {
+        let scratch = Scratch::new("base");
+        crate::roots::register(&scratch.0).expect("register");
+        let root = scratch.0.to_string_lossy().into_owned();
+        git(&scratch.0, &["init", "--quiet"]).expect("git init");
+        std::fs::create_dir_all(scratch.0.join("src")).unwrap();
+        std::fs::write(scratch.0.join("src/kept.txt"), "one\ntwo\n").unwrap();
+        std::fs::write(scratch.0.join(".gitignore"), "ignored.txt\n").unwrap();
+        git(&scratch.0, &["add", "."]).expect("git add");
+        let committed = git(
+            &scratch.0,
+            &[
+                "-c",
+                "user.name=Keel",
+                "-c",
+                "user.email=keel@example.com",
+                "commit",
+                "--quiet",
+                "-m",
+                "init",
+            ],
+        )
+        .expect("git commit");
+        assert!(
+            committed.status.success(),
+            "{}",
+            user_err(&committed.stderr)
+        );
+
+        std::fs::write(scratch.0.join("src/kept.txt"), "one\nchanged\n").unwrap();
+        std::fs::write(scratch.0.join("new.txt"), "fresh\n").unwrap();
+        std::fs::write(scratch.0.join("ignored.txt"), "secret\n").unwrap();
+
+        assert_eq!(
+            git_base_blocking(root.clone(), "src/kept.txt".into()).unwrap(),
+            Some("one\ntwo\n".into())
+        );
+        assert_eq!(
+            git_base_blocking(root.clone(), "new.txt".into()).unwrap(),
+            Some(String::new())
+        );
+        assert_eq!(git_base_blocking(root, "ignored.txt".into()).unwrap(), None);
+
+        // A project opened on a folder inside the repo still finds its files.
+        let nested = scratch.0.join("src");
+        crate::roots::register(&nested).expect("register nested");
+        assert_eq!(
+            git_base_blocking(nested.to_string_lossy().into_owned(), "kept.txt".into()).unwrap(),
+            Some("one\ntwo\n".into())
+        );
     }
 
     #[test]

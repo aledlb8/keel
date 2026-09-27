@@ -67,6 +67,7 @@ pub fn run() {
             watch::workspace_unwatch,
             git::git_status,
             git::git_diff,
+            git::git_base,
             git::git_stage,
             git::git_unstage,
             git::git_discard,

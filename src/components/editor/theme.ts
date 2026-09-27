@@ -69,8 +69,9 @@ const chrome = EditorView.theme(
       border: "none",
       color: "var(--keel-text-faint)",
     },
+    // The change gutter's 8px column makes up the rest of the gap to the code.
     ".cm-lineNumbers .cm-gutterElement": {
-      padding: "0 16px 0 14px",
+      padding: "0 8px 0 14px",
       minWidth: "48px",
     },
     ".cm-activeLine": {
