@@ -12,12 +12,14 @@ import type { PaneStatus } from "@/lib/types";
 
 const STATUS_COLOR: Record<PaneStatus, string> = {
   working: "var(--keel-working)",
+  waiting: "var(--keel-working)",
   done: "var(--keel-done)",
   idle: "var(--keel-idle)",
 };
 
 export const STATUS_LABEL: Record<PaneStatus, string | undefined> = {
   working: "Working",
+  waiting: "Waiting for input",
   done: "Done",
   idle: undefined,
 };

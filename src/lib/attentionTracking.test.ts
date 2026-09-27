@@ -53,6 +53,74 @@ function hook(kind: AgentEventKind, sequence: number, sessionId = "chat-a", id =
   state().noteAgentEvent(id, generation, { agentId: "claude", sessionId, kind, sequence });
 }
 
+it("captures the next CLI's first hook after returning to the shell", () => {
+  hook("session", 1);
+  state().releaseAgent("agent", 0);
+  hook("session", 2, "next-chat");
+  assert.equal(state().projects[0]!.decks[0]!.panes.agent!.sessionId, "next-chat");
+  hook("working", 3, "next-chat");
+  hook("completed", 4, "next-chat");
+  tick();
+  assert.equal(state().status.agent, "done");
+});
+
+it("rejects stale provider changes before they mutate the pane or reset ordering", () => {
+  hook("session", 10);
+  state().noteAgentEvent("agent", 0, {
+    agentId: "grok", sessionId: "stale-chat", kind: "session", sequence: 9,
+  });
+  const pane = state().projects[0]!.decks[0]!.panes.agent!;
+  assert.equal(pane.agentId, "claude");
+  assert.equal(pane.sessionId, "chat-a");
+});
+
+it("late startup identity cannot erase work already in progress", () => {
+  hook("working", 1);
+  hook("session", 2);
+  tick();
+  assert.equal(state().status.agent, "working");
+  hook("completed", 3);
+  tick();
+  assert.equal(state().status.agent, "done");
+});
+
+it("an identity refresh cannot acknowledge an unseen completion", () => {
+  hook("working", 1);
+  hook("completed", 2);
+  hook("session", 3);
+  hook("identity", 4);
+  tick();
+  assert.equal(state().status.agent, "done");
+});
+
+it("a delayed watcher start cannot mutate identity after the shell has exited", () => {
+  hook("session", 1);
+  state().notePaneExit("agent", 0);
+  state().noteRunningAgent("agent", 0, "grok", "late-process");
+  const pane = state().projects[0]!.decks[0]!.panes.agent!;
+  assert.equal(pane.agentId, "claude");
+  assert.equal(pane.sessionId, "chat-a");
+  assert.equal(state().exited.agent, true);
+});
+
+it("acknowledges a completion even before the attention timer consumes it", () => {
+  hook("working", 1);
+  hook("completed", 2);
+  state().noteActivity("agent", "input", "next prompt");
+  tick();
+  assert.equal(state().status.agent, "idle");
+  assert.equal(chimes, 0);
+});
+
+it("terminal failure remains terminal when a winding-down tool reports progress", () => {
+  hook("working", 1);
+  hook("failed", 2);
+  hook("progress", 3);
+  hook("completed", 4);
+  tick();
+  assert.equal(state().status.agent, "idle");
+});
+
 it("binds exact concurrent pane identities without reading recent sessions", () => {
   const p = project();
   p.decks[0]!.panes.other = { ...p.decks[0]!.panes.agent!, id: "other" };
@@ -101,7 +169,7 @@ it("waiting and long tool turns cannot finish from a ready-looking screen", () =
   hook("waiting", 2);
   render(ready);
   tick(60_000);
-  assert.equal(state().status.agent, "working");
+  assert.equal(state().status.agent, "waiting");
   hook("progress", 3);
   hook("completed", 4);
   tick();
@@ -296,7 +364,7 @@ it("a shell that becomes claude tracks the next turn, and quitting clears it", (
     }],
     projects: [project("shell", null)],
   });
-  state().noteRunningAgent("shell", 0, "claude", 1_000_000);
+  state().noteRunningAgent("shell", 0, "claude");
   assert.equal(state().projects[0]?.decks[0]?.panes.shell?.agentId, "claude");
   assert.equal(state().projects[0]?.decks[0]?.panes.shell?.resumeAgent, true);
   render(ready, "shell");
@@ -304,7 +372,7 @@ it("a shell that becomes claude tracks the next turn, and quitting clears it", (
   render(busy, "shell");
   tick();
   assert.equal(state().status.shell, "working");
-  state().noteRunningAgent("shell", 0, null, 0);
+  state().noteRunningAgent("shell", 0, null);
   assert.equal(state().projects[0]?.decks[0]?.panes.shell?.agentId, null);
   tick(10_000);
   assert.equal(state().status.shell, "idle");

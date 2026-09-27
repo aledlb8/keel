@@ -104,7 +104,8 @@ export function projectAttention(
   let best: Attention | null = null;
   for (const deck of project.decks) {
     const attention = deckAttention(deck, status);
-    if (attention === "working") return attention;
+    if (attention === "waiting") return attention;
+    if (attention === "working") best = attention;
     best ??= attention;
   }
   return best;

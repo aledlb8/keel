@@ -10,6 +10,8 @@ use sha2::{Digest, Sha256};
 const EVENTS: &[(&str, &str)] = &[
     ("SessionStart", "session_start"),
     ("UserPromptSubmit", "user_prompt_submit"),
+    ("PreToolUse", "pre_tool_use"),
+    ("PostToolUse", "post_tool_use"),
     ("PermissionRequest", "permission_request"),
     ("Stop", "stop"),
 ];

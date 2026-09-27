@@ -325,10 +325,11 @@ export function Island({ actions, onNavigate }: IslandProps) {
         break;
       }
       const many = waiting.length > 1;
+      const activityLabel = status[lead.paneId] === "waiting" ? "needs input" : "finished";
       contentKey = many ? `arrival:${waiting.length}` : `arrival:${lead.paneId}`;
       label = many
         ? `${waiting.length} agents waiting`
-        : `${leadAgent?.name ?? lead.title} finished in ${whereOf(lead)}`;
+        : `${leadAgent?.name ?? lead.title} ${activityLabel} in ${whereOf(lead)}`;
       content = (
         <button
           type="button"
@@ -343,7 +344,7 @@ export function Island({ actions, onNavigate }: IslandProps) {
           <span className="text-body font-medium text-foreground">
             {many
               ? `${waiting.length} agents waiting`
-              : `${leadAgent?.name ?? "Shell"} finished`}
+              : `${leadAgent?.name ?? "Shell"} ${activityLabel}`}
           </span>
           <span className="max-w-[220px] truncate text-body text-faint">
             {many ? `longest in ${lead.projectName}` : `in ${whereOf(lead)}`}

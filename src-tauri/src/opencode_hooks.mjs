@@ -28,12 +28,15 @@ export async function KeelStatus({ client } = {}) {
     switch (event.type) {
       case "session.created": name = "SessionStart"; break;
       case "session.status":
-        name = p.status?.type === "idle" ? "Stop" : "UserPromptSubmit";
+        if (p.status?.type === "idle") name = "Stop";
+        else if (p.status?.type === "busy") name = "UserPromptSubmit";
+        else if (p.status?.type === "retry") name = "PostToolUse";
+        else return;
         break;
       case "session.error": name = "SessionError"; break;
       case "permission.asked": case "question.asked": name = "PermissionRequest"; break;
       case "permission.replied": case "question.replied": case "question.rejected":
-        name = "UserPromptSubmit"; break;
+        name = "PostToolUse"; break;
       default: return;
     }
     await fetch(`http://127.0.0.1:${port}/${token}/opencode`, {

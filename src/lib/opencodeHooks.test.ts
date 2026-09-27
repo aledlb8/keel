@@ -65,3 +65,15 @@ it("captures a new root immediately and does no work for token deltas", async ()
   }
   assert.deepEqual(posted, [{ session_id: "fresh", hook_event_name: "SessionStart" }]);
 });
+
+it("ignores unknown statuses and preserves retry/permission replies as progress", async () => {
+  const plugin = await makePlugin({ client: { session: { get: async () => ({ data: { id: "root" } }) } } });
+  for (const type of [undefined, "future-status", "retry"]) {
+    await plugin.event!({ event: { type: "session.status", properties: { sessionID: "root", status: { type } } } });
+  }
+  await plugin.event!({ event: { type: "permission.replied", properties: { sessionID: "root" } } });
+  assert.deepEqual(posted, [
+    { session_id: "root", hook_event_name: "PostToolUse" },
+    { session_id: "root", hook_event_name: "PostToolUse" },
+  ]);
+});

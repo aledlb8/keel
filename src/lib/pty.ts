@@ -80,10 +80,10 @@ export function onPtyExit(
 
 /** Fires when the agent typed into a pane has exited and left the shell. */
 export function onPtyAgentExit(
-  handler: (id: string, generation: number) => void,
+  handler: (id: string, generation: number, processId?: string) => void,
 ): Promise<() => void> {
-  return listen<{ id: string; generation: number }>("pty:agent-exit", (event) =>
-    handler(event.payload.id, event.payload.generation),
+  return listen<{ id: string; generation: number; processId: string | null }>("pty:agent-exit", (event) =>
+    handler(event.payload.id, event.payload.generation, event.payload.processId ?? undefined),
   );
 }
 
@@ -93,20 +93,20 @@ export function onPtyAgentStart(
     id: string,
     generation: number,
     agentId: string,
-    startedMs: number,
+    processId?: string,
   ) => void,
 ): Promise<() => void> {
   return listen<{
     id: string;
     generation: number;
     agentId: string;
-    startedMs: number;
+    processId: string | null;
   }>("pty:agent-start", (event) =>
     handler(
       event.payload.id,
       event.payload.generation,
       event.payload.agentId,
-      event.payload.startedMs,
+      event.payload.processId ?? undefined,
     ),
   );
 }

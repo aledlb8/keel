@@ -8,7 +8,7 @@ const claude: AgentScreen = {
 };
 
 function live() {
-  const activity = new AgentActivity(123);
+  const activity = new AgentActivity();
   activity.screen("ready", 0, "prompt");
   activity.input("fix it", 10);
   activity.input("\r", 20);
@@ -370,7 +370,7 @@ describe("parsed agent screen", () => {
 
 describe("agent turn lifecycle", () => {
   it("never announces startup or restoration, however long the replay lasts", () => {
-    const activity = new AgentActivity(123);
+    const activity = new AgentActivity();
     for (let time = 0; time < 120_000; time += 500) {
       activity.output(time);
       activity.screen(time % 1500 ? "busy" : "ready", time);
@@ -422,11 +422,11 @@ describe("agent turn lifecycle", () => {
   it("never reports an approval wait as finished", () => {
     const activity = live();
     activity.screen("blocked", 100, "approval");
-    assert.equal(activity.status("working", 3_600_000, false), "working");
+    assert.equal(activity.status("working", 3_600_000, false), "waiting");
   });
 
   it("announces a Claude turn that used a custom status line and no interrupt hint", () => {
-    const activity = new AgentActivity(0);
+    const activity = new AgentActivity();
     activity.screen("ready", 0, "prompt");
     activity.input("fix it", 0);
     activity.input("\r", 1);
@@ -438,7 +438,7 @@ describe("agent turn lifecycle", () => {
   });
 
   it("announces an opencode turn once its composer settles", () => {
-    const activity = new AgentActivity(0);
+    const activity = new AgentActivity();
     activity.screen("ready", 0, "composer");
     assert.equal(activity.input("list the files", 0), "input");
     assert.equal(activity.input("\r", 1), "submit");
@@ -452,11 +452,11 @@ describe("agent turn lifecycle", () => {
   });
 
   it("keeps an opencode permission or question wait working, never done", () => {
-    const activity = new AgentActivity(0);
+    const activity = new AgentActivity();
     activity.screen("ready", 0, "composer");
     activity.input("\r", 1);
     activity.screen("blocked", 100, "permission");
-    assert.equal(activity.status("idle", 3_600_000, false), "working");
+    assert.equal(activity.status("idle", 3_600_000, false), "waiting");
   });
 
   it("suppresses notifications for watched panes", () => {
@@ -486,7 +486,7 @@ describe("agent turn lifecycle", () => {
   }
 
   it("does not let focus/mouse/query reports or bracketed paste arm a turn", () => {
-    const activity = new AgentActivity(0);
+    const activity = new AgentActivity();
     for (const report of ["\x1b[I", "\x1b[O", "\x1b[<0;5;5M", "\x1b[10;20R", "\x1b[?1;2c"]) {
       assert.equal(activity.input(report, 0), "report");
     }
@@ -503,7 +503,7 @@ describe("agent turn lifecycle", () => {
   });
 
   it("reports the submit that the turn hangs off, but not a paste newline", () => {
-    const activity = new AgentActivity(0);
+    const activity = new AgentActivity();
     activity.screen("ready", 0, "prompt");
     assert.equal(activity.input("fix it", 0), "input");
     assert.equal(activity.input("\r", 1), "submit");
@@ -515,7 +515,7 @@ describe("agent turn lifecycle", () => {
 
   it("does not manufacture completions for empty submissions, slash menus or unknown layouts", () => {
     for (const signal of ["ready", "unknown"] as const) {
-      const activity = new AgentActivity(0);
+      const activity = new AgentActivity();
       activity.screen("ready", 0, "prompt");
       activity.input("\r", 1);
       activity.screen(signal, 10, "screen");
@@ -524,7 +524,7 @@ describe("agent turn lifecycle", () => {
   });
 
   it("does not finish the enter that launches the CLI, even if startup looks busy", () => {
-    const activity = new AgentActivity(0);
+    const activity = new AgentActivity();
     activity.screen("unknown", 0, "keel ❯");
     assert.equal(activity.input("\r", 10), "input");
     activity.screen("busy", 50, "✻ Running hooks…");
@@ -533,7 +533,7 @@ describe("agent turn lifecycle", () => {
   });
 
   it("finishes after a Claude duration row replaces the live spinner", () => {
-    const activity = new AgentActivity(0);
+    const activity = new AgentActivity();
     activity.screen("ready", 0, "prompt");
     activity.input("\r", 1);
     activity.screen("busy", 50, "✻ Cogitating…");
@@ -543,7 +543,7 @@ describe("agent turn lifecycle", () => {
   });
 
   it("lets Codex Astra sparkle change without postponing a finished turn", () => {
-    const activity = new AgentActivity(0);
+    const activity = new AgentActivity();
     activity.screen("ready", 0, "› ");
     activity.input("\r", 1);
     activity.screen("busy", 50, "Working (1s • esc to interrupt)");
@@ -551,7 +551,7 @@ describe("agent turn lifecycle", () => {
     activity.screen("ready", 2_200, "› \n⠂");
     activity.screen("ready", 3_900, "› \n⡀");
     assert.equal(activity.status("working", 4_001, false), "done");
-    const noisy = new AgentActivity(0);
+    const noisy = new AgentActivity();
     noisy.screen("ready", 0, "› ");
     noisy.input("\r", 1);
     noisy.screen("busy", 50, "Working");
@@ -576,7 +576,7 @@ describe("agent turn lifecycle", () => {
     activity.screen("ready", 100);
     activity.resize();
     assert.equal(activity.status("working", 10_000, false), "working");
-    const restarted = new AgentActivity(200);
+    const restarted = new AgentActivity();
     restarted.screen("ready", 20_000);
     assert.equal(restarted.status("idle", 30_000, false), "idle");
   });

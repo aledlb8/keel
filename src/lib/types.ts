@@ -19,7 +19,7 @@ export type LayoutNode =
  * Plain shells are always `idle`; `done` means a supported agent returned to
  * its prompt after working and you have not been back to it since.
  */
-export type PaneStatus = "idle" | "working" | "done";
+export type PaneStatus = "idle" | "working" | "waiting" | "done";
 
 /** Things a terminal reports that explain the output that follows them. */
 export type PaneActivity = "input" | "resize" | "spawn";

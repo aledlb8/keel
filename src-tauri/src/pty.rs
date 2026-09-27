@@ -61,6 +61,7 @@ struct AgentWatch {
     alive: Arc<AtomicBool>,
     /// Catalogue id currently attributed to this shell. `None` is an idle prompt.
     agent_id: Option<String>,
+    process_id: Option<String>,
     /// Agent Keel typed at launch. Used only until the first time that process
     /// is gone, and only when its executable is not one we can name.
     expected: Option<String>,
@@ -125,6 +126,7 @@ pub struct SpawnOptions {
 pub struct PtyExit {
     pub id: String,
     pub generation: u64,
+    pub process_id: Option<String>,
 }
 
 /// A catalogue CLI appeared in a shell that was idle, or replaced another one.
@@ -134,8 +136,7 @@ pub struct PtyAgent {
     pub id: String,
     pub generation: u64,
     pub agent_id: String,
-    /// Unix milliseconds when that process was created. `0` if unknown.
-    pub started_ms: u64,
+    pub process_id: Option<String>,
 }
 
 /// The default contents of `shell-init.ps1`.
@@ -491,6 +492,8 @@ pub fn pty_spawn(
             }
             .into(),
             sequence: 0,
+            process_id: None,
+            turn_id: None,
         });
     }
     // Agents read these to decide how much colour they are allowed to use.
@@ -567,7 +570,14 @@ pub fn pty_spawn(
                     })
                     .unwrap_or(false);
                 if still_current {
-                    let _ = app.emit("pty:exit", PtyExit { id, generation });
+                    let _ = app.emit(
+                        "pty:exit",
+                        PtyExit {
+                            id,
+                            generation,
+                            process_id: None,
+                        },
+                    );
                 }
             })
             .map_err(|err| format!("could not start the reader thread: {err}"))?;
@@ -658,6 +668,7 @@ fn watch_agent(
                 generation,
                 alive,
                 agent_id: None,
+                process_id: None,
                 expected,
             },
         );
@@ -751,28 +762,33 @@ fn collect_agent_events(app: &AppHandle, needles: &[procs::AgentNeedle]) -> Vec<
             procs::command_args,
         );
         let next = found.as_ref().map(|agent| agent.id.clone());
-        if next != watch.agent_id {
+        let process_id = found
+            .as_ref()
+            .and_then(|agent| agent.pid)
+            .map(procs::process_identity);
+        if next != watch.agent_id || process_id != watch.process_id {
             // Exit first, then start, so a shell that left Claude and entered
             // Codex is idle for one step and then Codex — not the other way round.
             if watch.agent_id.is_some() {
                 events.push(AgentChange::Stopped(PtyExit {
                     id: id.clone(),
                     generation: watch.generation,
+                    process_id: watch.process_id.clone(),
                 }));
             }
             if let Some(agent) = found {
-                let started_ms = agent.pid.and_then(procs::process_started_ms).unwrap_or(0);
                 events.push(AgentChange::Started(PtyAgent {
                     id: id.clone(),
                     generation: watch.generation,
                     agent_id: agent.id,
-                    started_ms,
+                    process_id: process_id.clone(),
                 }));
             } else {
                 // The launched CLI has gone. A later `git` must not count as it.
                 watch.expected = None;
             }
             watch.agent_id = next;
+            watch.process_id = process_id;
         }
         true
     });

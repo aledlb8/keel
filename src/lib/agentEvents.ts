@@ -7,6 +7,10 @@ export interface AgentEvent {
   sessionId: string;
   kind: AgentEventKind;
   sequence: number;
+  /** Verified agent process, not the short-lived hook helper. */
+  processId?: string;
+  /** Provider turn identity when available (Codex). */
+  turnId?: string;
 }
 
 export function hasAgentHooks(agentId: string): boolean {

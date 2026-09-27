@@ -13,13 +13,17 @@ use tauri::ipc::Channel;
 const MAX_BODY: usize = 1024 * 1024;
 type Routes = Arc<Mutex<HashMap<String, Route>>>;
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentEvent {
     pub agent_id: String,
     pub session_id: String,
     pub kind: String,
     pub sequence: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub process_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
 }
 
 struct Route {
@@ -168,16 +172,17 @@ fn receive(stream: &mut TcpStream, routes: &Routes) -> Option<()> {
             .get("sender_pid")?
             .as_u64()
             .and_then(|pid| u32::try_from(pid).ok())?;
-        if !crate::procs::hook_source_matches(
+        let Some(owner_pid) = crate::procs::hook_source_owner(
             &crate::procs::process_snapshot(),
             origin.shell_pid,
             sender,
             source,
             &origin.agents,
             crate::procs::command_args,
-        ) {
+        ) else {
             return Some(());
-        }
+        };
+        event.process_id = Some(crate::procs::process_identity(owner_pid));
         let mut routes = routes.lock().ok()?;
         let route = routes.get_mut(token)?;
         if !route.alive.load(Ordering::SeqCst) {
@@ -236,7 +241,7 @@ pub fn normalize(source: &str, body: &Value) -> Option<AgentEvent> {
         "stopcancelled" | "interrupt" => "cancelled",
         "stopfailure" | "sessionerror" => "failed",
         "sessionend" => "ended",
-        "postcompact" => "idle",
+        "postcompact" => "identity",
         _ => return None,
     };
     let kind = if name == "pretooluse"
@@ -261,6 +266,12 @@ pub fn normalize(source: &str, body: &Value) -> Option<AgentEvent> {
         session_id: id.into(),
         kind: kind.into(),
         sequence: 0,
+        process_id: None,
+        turn_id: body
+            .get("turn_id")
+            .and_then(Value::as_str)
+            .filter(|id| crate::sessions::is_session_id(id))
+            .map(str::to_owned),
     })
 }
 
@@ -298,6 +309,7 @@ fn forward_hook(source: &str) -> Option<()> {
     let normalized = serde_json::json!({
         "sender_pid": std::process::id(),
         "session_id": event.session_id,
+        "turn_id": event.turn_id,
         "hook_event_name": match event.kind.as_str() {
             "session" => "SessionStart", "working" => "UserPromptSubmit",
             "identity" => "SessionIdentity",
@@ -329,6 +341,101 @@ fn imported_grok_hook(source: &str, grok_event: Option<&std::ffi::OsStr>) -> boo
 mod tests {
     use super::*;
     use serde_json::json;
+
+    // Child entry point for the transport test. It reads stdin through the
+    // production helper and connects to the parent's real loopback listener.
+    #[test]
+    fn helper_subprocess() {
+        if let Ok(source) = std::env::var("KEEL_TEST_HOOK_SOURCE") {
+            assert!(forward_hook(&source).is_some());
+        }
+    }
+
+    #[test]
+    fn helper_transports_identity_from_a_live_child_without_waiting_for_eof() {
+        use std::process::{Command, Stdio};
+        let rows = crate::procs::process_snapshot();
+        let owner = rows.iter().find(|p| p.pid == std::process::id()).unwrap();
+        for source in ["claude", "codex", "grok"] {
+            let events = Arc::new(Mutex::new(Vec::<AgentEvent>::new()));
+            let received = events.clone();
+            let lease = register(Channel::new(move |event| {
+                received
+                    .lock()
+                    .unwrap()
+                    .push(event.deserialize::<AgentEvent>().unwrap());
+                Ok(())
+            }))
+            .unwrap();
+            lease.bind_process(
+                owner.parent,
+                vec![crate::procs::AgentNeedle {
+                    id: source.into(),
+                    names: vec![crate::procs::executable_stem(&owner.image)],
+                }],
+            );
+            let mut child = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "agent_hooks::tests::helper_subprocess",
+                    "--nocapture",
+                ])
+                .env("KEEL_TEST_HOOK_SOURCE", source)
+                .env("KEEL_HOOK_PORT", lease.port.to_string())
+                .env("KEEL_HOOK_TOKEN", lease.token())
+                .env_remove("GROK_HOOK_EVENT")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            // Keep stdin OPEN: Grok does this, so read_to_end would deadlock.
+            child
+                .stdin
+                .as_mut()
+                .unwrap()
+                .write_all(
+                    br#"{
+              "session_id": "transport-chat", "hook_event_name": "UserPromptSubmit",
+              "turn_id": "transport-turn", "prompt": "must not leave this process"
+            }"#,
+                )
+                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let status = loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    break status;
+                }
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("{source} helper waited for EOF or failed to exit");
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            };
+            let output = child.wait_with_output().unwrap();
+            assert!(
+                status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+            let events = events.lock().unwrap();
+            assert_eq!(events.len(), 1, "{source}");
+            let event = &events[0];
+            assert_eq!(event.agent_id, source);
+            assert_eq!(event.session_id, "transport-chat");
+            assert_eq!(event.kind, "working");
+            assert_eq!(event.turn_id.as_deref(), Some("transport-turn"));
+            assert_eq!(
+                event.process_id,
+                Some(crate::procs::process_identity(owner.pid))
+            );
+            assert_eq!(event.sequence, 1);
+            assert!(!serde_json::to_string(event)
+                .unwrap()
+                .contains("must not leave"));
+        }
+    }
 
     #[test]
     fn imported_claude_observer_cannot_publish_grok_as_claude() {

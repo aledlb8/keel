@@ -50,6 +50,7 @@ import { projectAttention } from "./ProjectList";
 
 const BADGE: Record<Attention, string> = {
   working: "var(--keel-working)",
+  waiting: "var(--keel-working)",
   done: "var(--keel-done)",
 };
 

@@ -10,8 +10,9 @@
  */
 
 import { create } from "zustand";
-import { AgentActivity, agentSignal, type AgentScreen } from "../lib/agentActivity.ts";
-import { hasAgentHooks, type AgentEvent } from "../lib/agentEvents.ts";
+import { agentSignal, type AgentScreen } from "../lib/agentActivity.ts";
+import { AgentRuntime } from "../lib/agentRuntime.ts";
+import { type AgentEvent } from "../lib/agentEvents.ts";
 import {
   notifyAgent,
   type AgentAlert,
@@ -105,7 +106,7 @@ export type RestoreStatus = "idle" | "restoring" | "partial" | "failed";
  * Per-pane output bookkeeping. Lives outside the store on purpose: a busy agent
  * writes hundreds of times a second and none of that should re-render React.
  */
-const activity = new Map<string, AgentActivity>();
+const activity = new Map<string, AgentRuntime>();
 /**
  * Account the live shell process was spawned with. A CLI typed later inherits
  * that environment, so the pane must show the same login — and only for the
@@ -209,7 +210,7 @@ export interface KeelState {
    */
   notePaneCwd: (paneId: string, dir: string) => void;
   /** Agent process left the shell; the next spawn should not type the command. */
-  releaseAgent: (paneId: string, generation?: number) => void;
+  releaseAgent: (paneId: string, generation?: number, processId?: string) => void;
   /**
    * A catalogue CLI is running in this shell (`agentId`), or the shell is idle
    * again (`null`). A shell the user opened becomes that agent for activity,
@@ -219,7 +220,7 @@ export interface KeelState {
     paneId: string,
     generation: number | undefined,
     agentId: string | null,
-    startedMs?: number,
+    processId?: string,
   ) => void;
   /**
    * Record the login this shell process was actually given. Called when the
@@ -728,9 +729,10 @@ export function deckAttention(
   deck: Deck,
   status: Record<string, PaneStatus>,
 ): Attention | null {
-  // Aggregate: working > done > idle
+  // A blocked agent needs attention before ongoing or completed work.
   const rank: Record<Attention, number> = {
     working: 2,
+    waiting: 3,
     done: 1,
   };
   let best: Attention | null = null;
@@ -918,6 +920,7 @@ export const useKeel = create<KeelState>((set, get) => {
 
   /** Looking at a finished agent — focusing it, typing into it — clears "done". */
   function acknowledge(paneId: string) {
+    activity.get(paneId)?.acknowledge();
     if (get().status[paneId] !== "done") return;
     set((state) => {
       const doneAt = { ...state.doneAt };
@@ -926,10 +929,8 @@ export const useKeel = create<KeelState>((set, get) => {
     });
   }
 
-  /** Wall time of the process, pulled back a second so a session file written as it starts still counts. */
-  function armActivity(paneId: string, startedMs: number) {
-    const spawnedAt = startedMs > 0 ? Math.max(0, startedMs - 1000) : Date.now() - 1500;
-    activity.set(paneId, new AgentActivity(spawnedAt));
+  function armActivity(paneId: string) {
+    if (!activity.has(paneId)) activity.set(paneId, new AgentRuntime());
     set((state) => {
       const doneAt = { ...state.doneAt };
       delete doneAt[paneId];
@@ -953,7 +954,6 @@ export const useKeel = create<KeelState>((set, get) => {
     }
     if (!live && !pane.agentHome) return;
 
-    activity.delete(paneId);
     acknowledge(paneId);
     set((current) => ({ status: { ...current.status, [paneId]: "idle" } }));
 
@@ -1357,22 +1357,35 @@ export const useKeel = create<KeelState>((set, get) => {
       patchPane(paneId, (current) => ({ ...current, cwd: dir }));
     },
 
-    releaseAgent(paneId, generation) {
-      get().noteRunningAgent(paneId, generation, null, 0);
+    releaseAgent(paneId, generation, processId) {
+      get().noteRunningAgent(paneId, generation, null, processId);
     },
 
-    noteRunningAgent(paneId, generation, agentId, startedMs = 0) {
+    noteRunningAgent(paneId, generation, agentId, processId) {
       if (generation !== undefined && (get().generations[paneId] ?? 0) !== generation) return;
       const pane = findPane(paneId);
-      if (!pane || pane.editor) return;
+      if (!pane || pane.editor || paneId in get().exited || paneId in get().closing) return;
       const nextId = agentId?.trim() ? agentId.trim() : null;
+      let runtime = activity.get(paneId);
+      if (!runtime) {
+        runtime = new AgentRuntime();
+        activity.set(paneId, runtime);
+      }
       if (!nextId) {
+        if (!runtime.endProcess(processId)) return;
         finishRunningAgent(paneId, pane);
         return;
       }
+      const hadOwner = runtime.hasOwner;
+      const revision = runtime.processRevision;
+      if (!runtime.observeProcess(nextId, processId)) return;
       // Already this live CLI. Keep the detector and conversation underneath
       // a running turn; its hook will supply any new conversation identity.
       if (pane.agentId === nextId && pane.resumeAgent) {
+        if (hadOwner && revision !== runtime.processRevision) {
+          patchPane(paneId, (current) => ({ ...current, ...unboundSession() }), true);
+          armActivity(paneId);
+        }
         return;
       }
 
@@ -1414,7 +1427,7 @@ export const useKeel = create<KeelState>((set, get) => {
         }),
         true,
       );
-      armActivity(paneId, startedMs);
+      armActivity(paneId);
     },
 
     noteShellSpawn(paneId, agentId, accountId) {
@@ -2449,30 +2462,24 @@ export const useKeel = create<KeelState>((set, get) => {
       if ((get().generations[paneId] ?? 0) !== generation) return;
       const pane = findPane(paneId);
       if (!pane || pane.editor || paneId in get().exited || paneId in get().closing) return;
-      if (!hasAgentHooks(event.agentId)) return;
-      if (event.kind === "connected" || event.kind === "unavailable") return;
-      if (!isSessionId(event.sessionId)) return;
-      if (pane.sessionReady && pane.sessionId !== event.sessionId &&
-          event.kind !== "session" && event.kind !== "working") return;
-      if (pane.agentId !== event.agentId && event.kind !== "session" && event.kind !== "working") return;
-      let entry = activity.get(paneId);
+      const entry = activity.get(paneId);
       if (!entry) return;
+      if (!entry.event(event)) return;
       // A real hook can beat the process watcher. Adopt that CLI once, then keep
       // its detector so a late process-start event cannot erase a fast turn.
       if (pane.agentId !== event.agentId || !pane.resumeAgent) {
         get().noteRunningAgent(paneId, generation, event.agentId);
-        entry = activity.get(paneId);
       }
-      if (!entry?.event(event.kind, event.sequence)) return;
       get().bindSession(paneId, event.sessionId);
-      if (["session", "working", "progress", "waiting", "cancelled", "failed", "ended", "idle"].includes(event.kind)) {
+      const identityChanged = pane.agentId !== event.agentId || pane.sessionId !== event.sessionId;
+      if (identityChanged || ["working", "progress", "waiting", "cancelled", "failed", "ended"].includes(event.kind)) {
         acknowledge(paneId);
       }
     },
 
     needsAgentScreen(paneId, generation) {
       return (get().generations[paneId] ?? 0) === generation &&
-        !activity.get(paneId)?.usesProtocol;
+        (activity.get(paneId)?.needsScreen ?? true);
     },
 
     noteOutput(paneId) {
@@ -2491,7 +2498,7 @@ export const useKeel = create<KeelState>((set, get) => {
     noteActivity(paneId, kind, data) {
       if (kind === "spawn") {
         if (!findPane(paneId)) return;
-        activity.set(paneId, new AgentActivity(Date.now()));
+        activity.set(paneId, new AgentRuntime());
         // A fresh process starts with a clean slate: not dead, not done.
         set((state) => {
           const exited = { ...state.exited };
@@ -2608,9 +2615,9 @@ export function startAttentionTracking(): () => void {
           }
 
           next[paneId] = current;
-          if (current === "done") {
+          if (current === "done" || current === "waiting") {
             nextDoneAt[paneId] =
-              previous === "done" ? (state.doneAt[paneId] ?? now) : now;
+              previous === current ? (state.doneAt[paneId] ?? now) : now;
           }
           if (previous !== "done" && current === "done") {
             notifyAgent(

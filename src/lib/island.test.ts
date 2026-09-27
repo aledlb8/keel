@@ -58,6 +58,11 @@ describe("lookingAt", () => {
 });
 
 describe("waitingPanes", () => {
+  it("includes permission waits in navigation but excludes them from working agents", () => {
+    const status = { a: "waiting", b: "working", c: "done" } as const;
+    assert.deepEqual(waitingPanes(projects, status, { a: 10, c: 20 }, null).map((pane) => pane.paneId), ["a", "c"]);
+    assert.deepEqual(workingPanes(projects, status).map((pane) => pane.paneId), ["b"]);
+  });
   const status = { a: "done", b: "done", c: "working", d: "done" } as const;
   const doneAt = { a: 10, b: 30, d: 20 };
 

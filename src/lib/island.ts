@@ -79,7 +79,7 @@ export function waitingPanes(
   watching: string | null,
 ): WaitingPane[] {
   return paneRefs(projects)
-    .filter((ref) => status[ref.paneId] === "done" && ref.paneId !== watching)
+    .filter((ref) => (status[ref.paneId] === "done" || status[ref.paneId] === "waiting") && ref.paneId !== watching)
     .map((ref) => ({ ...ref, since: doneAt[ref.paneId] ?? 0 }))
     .sort((a, b) => a.since - b.since);
 }

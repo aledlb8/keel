@@ -244,49 +244,59 @@ fn match_stem(stem: &str, agents: &[AgentNeedle]) -> Option<usize> {
 /// Hook labels are config names, not proof of which CLI invoked them. Require
 /// the sender to descend from this pane's identified agent, with no different
 /// agent between it and the sender (including imported hooks in nested CLIs).
-pub fn hook_source_matches(
+pub fn hook_source_owner(
     rows: &[ProcessRow],
     shell_pid: u32,
     sender_pid: u32,
     source: &str,
     agents: &[AgentNeedle],
     mut command_args: impl FnMut(u32) -> Option<Vec<String>>,
-) -> bool {
-    let Some(owner) = attribute_agent(rows, shell_pid, agents, None, None, &mut command_args)
-    else {
-        return false;
-    };
+) -> Option<u32> {
+    let owner = attribute_agent(rows, shell_pid, agents, None, None, &mut command_args)?;
     if owner.id != source {
-        return false;
+        return None;
     }
-    let Some(owner_pid) = owner.pid else {
-        return false;
-    };
+    let owner_pid = owner.pid?;
     let by_pid: HashMap<_, _> = rows.iter().map(|row| (row.pid, row)).collect();
     let mut seen = HashSet::new();
     let mut pid = sender_pid;
     // Hook shells and plugin runtimes can be deeper than the CLI detector.
     for _ in 0..64 {
         if pid == 0 || pid == shell_pid || !seen.insert(pid) {
-            return false;
+            return None;
         }
-        let Some(row) = by_pid.get(&pid) else {
-            return false;
-        };
+        let row = by_pid.get(&pid)?;
         let named = match_stem(&executable_stem(&row.image), agents).or_else(|| {
             is_interpreter(&row.image)
                 .then(|| command_args(pid).and_then(|args| match_script_args(&args, agents)))
                 .flatten()
         });
         if named.is_some_and(|index| agents[index].id != source) {
-            return false;
+            return None;
         }
         if pid == owner_pid {
-            return true;
+            return Some(owner_pid);
         }
         pid = row.parent;
     }
-    false
+    None
+}
+
+#[cfg(test)]
+pub fn hook_source_matches(
+    rows: &[ProcessRow],
+    shell_pid: u32,
+    sender_pid: u32,
+    source: &str,
+    agents: &[AgentNeedle],
+    command_args: impl FnMut(u32) -> Option<Vec<String>>,
+) -> bool {
+    hook_source_owner(rows, shell_pid, sender_pid, source, agents, command_args).is_some()
+}
+
+/// PID plus creation time distinguishes consecutive runs of the same CLI.
+pub fn process_identity(pid: u32) -> String {
+    format!("{pid}:{}", process_started_ms(pid).unwrap_or(0))
 }
 
 fn is_interpreter(image: &str) -> bool {

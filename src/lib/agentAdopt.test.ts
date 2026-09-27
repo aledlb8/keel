@@ -99,6 +99,7 @@ beforeEach(() => {
     generations: { term: 3 },
   });
   state().noteShellSpawn("term", null, null);
+  state().noteActivity("term", "spawn");
 });
 
 afterEach(() => {
@@ -112,7 +113,7 @@ it("a shell becomes the CLI that started in it, on the default login", async () 
     return [{ id: "chat-1", mtimeMs: started + 2_000 }];
   });
 
-  state().noteRunningAgent("term", 3, "claude", started);
+  state().noteRunningAgent("term", 3, "claude");
   assert.equal(live().agentId, "claude");
   assert.equal(live().resumeAgent, true);
   // The process inherited the shell, not the default Work profile.
@@ -134,12 +135,12 @@ it("a shell becomes the CLI that started in it, on the default login", async () 
 it("inherits the profile this shell was spawned with, and not another agent's", () => {
   mockIPC(() => []);
   state().noteShellSpawn("term", "claude", "work");
-  state().noteRunningAgent("term", 3, "claude", Date.now());
+  state().noteRunningAgent("term", 3, "claude");
   assert.equal(live().accountId, "work");
-  state().noteRunningAgent("term", 3, null, 0);
+  state().noteRunningAgent("term", 3, null);
 
   state().noteShellSpawn("term", "claude", "work");
-  state().noteRunningAgent("term", 3, "grok", Date.now());
+  state().noteRunningAgent("term", 3, "grok");
   assert.equal(live().agentId, "grok");
   assert.equal(live().accountId, null);
 });
@@ -148,10 +149,10 @@ it("quitting that CLI returns the pane to a shell", async () => {
   mockIPC((command) => (
     command === "session_recent" ? [{ id: "chat-1", mtimeMs: Date.now() }] : null
   ));
-  state().noteRunningAgent("term", 3, "claude", Date.now() - 1_000);
+  state().noteRunningAgent("term", 3, "claude");
   await new Promise((resolve) => setTimeout(resolve, 0));
 
-  state().noteRunningAgent("term", 3, null, 0);
+  state().noteRunningAgent("term", 3, null);
   assert.equal(live().agentId, null);
   assert.equal(live().resumeAgent, false);
   assert.equal(live().accountId, null);
@@ -163,15 +164,15 @@ it("quitting that CLI returns the pane to a shell", async () => {
 
 it("starting a second CLI replaces the first and quitting still returns to the shell", async () => {
   mockIPC(() => null);
-  state().noteRunningAgent("term", 3, "claude", Date.now() - 1_000);
-  state().noteRunningAgent("term", 3, "grok", Date.now());
+  state().noteRunningAgent("term", 3, "claude");
+  state().noteRunningAgent("term", 3, "grok");
   assert.equal(live().agentId, "grok");
   assert.equal(live().title, "Grok Build");
   assert.equal(live().accountId, null);
   assert.equal(live().agentHome?.agentId, null);
   assert.equal(live().agentHome?.title, "Shell");
 
-  state().noteRunningAgent("term", 3, null, 0);
+  state().noteRunningAgent("term", 3, null);
   assert.equal(live().agentId, null);
   assert.equal(live().title, "Shell");
   assert.equal(live().resumeAgent, false);
@@ -181,16 +182,16 @@ it("keeps a name the user gave the shell", () => {
   useKeel.setState({
     projects: [project(pane({ id: "term", title: "deploy", titleLocked: true }))],
   });
-  state().noteRunningAgent("term", 3, "claude", Date.now());
+  state().noteRunningAgent("term", 3, "claude");
   assert.equal(live().title, "deploy");
   assert.equal(live().titleLocked, true);
-  state().noteRunningAgent("term", 3, null, 0);
+  state().noteRunningAgent("term", 3, null);
   assert.equal(live().title, "deploy");
   assert.equal(live().agentId, null);
 });
 
 it("ignores a stale generation and an editor pane", () => {
-  state().noteRunningAgent("term", 2, "claude", Date.now());
+  state().noteRunningAgent("term", 2, "claude");
   assert.equal(live().agentId, null);
 
   useKeel.setState({
@@ -200,7 +201,7 @@ it("ignores a stale generation and an editor pane", () => {
       editor: { tabs: [], active: null },
     }))],
   });
-  state().noteRunningAgent("term", 3, "claude", Date.now());
+  state().noteRunningAgent("term", 3, "claude");
   assert.equal(live().editor?.tabs.length, 0);
   assert.equal(live().agentId, null);
 });
@@ -222,7 +223,7 @@ it("does not reset a launcher pane that is already that live agent", async () =>
     if (command === "session_recent") reads += 1;
     return [{ id: "other-chat", mtimeMs: Date.now() }];
   });
-  state().noteRunningAgent("term", 3, "claude", Date.now());
+  state().noteRunningAgent("term", 3, "claude");
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(reads, 0);
   assert.equal(live().sessionId, "kept-chat");
@@ -248,7 +249,7 @@ it("rearms the same agent after it exited, and keeps its profile", async () => {
       title: "Claude Code",
     }))],
   });
-  state().noteRunningAgent("term", 3, "claude", started);
+  state().noteRunningAgent("term", 3, "claude");
   assert.equal(live().resumeAgent, true);
   assert.equal(live().accountId, "work");
   assert.equal(live().agentHome, undefined);
@@ -274,7 +275,7 @@ it("a different CLI inside an at-rest agent pane restores that agent when it exi
       title: "fix auth",
     }))],
   });
-  state().noteRunningAgent("term", 3, "grok", Date.now());
+  state().noteRunningAgent("term", 3, "grok");
   assert.equal(live().agentId, "grok");
   assert.equal(live().accountId, null);
   assert.equal(live().resumeAgent, true);
@@ -284,7 +285,7 @@ it("a different CLI inside an at-rest agent pane restores that agent when it exi
   // The work title is not the program name, so it stays while Grok runs.
   assert.equal(live().title, "fix auth");
 
-  state().noteRunningAgent("term", 3, null, 0);
+  state().noteRunningAgent("term", 3, null);
   assert.equal(live().agentId, "claude");
   assert.equal(live().accountId, "work");
   assert.equal(live().resumeAgent, false);
