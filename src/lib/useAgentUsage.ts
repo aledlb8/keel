@@ -6,6 +6,12 @@
  * draws a blank gauge or a dash while it waits. One that did answer keeps its
  * last good reading through a failed poll, so a flaky request does not make it
  * blink out; it only goes once that reading is properly stale.
+ *
+ * Bringing the private tunnel up or down changes which logins can answer at
+ * all, so a poll that ran mid-transition gives only half the picture. A phase
+ * that settles onto a new route asks the whole set again right away, instead
+ * of leaving the missing logins to appear on the next interval or a manual
+ * refresh.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -19,6 +25,7 @@ import {
   retainUsage,
   usageKey,
   usageQueryKey,
+  usageRouteChanged,
   isReady,
   type AgentUsage,
   type KeptUsage,
@@ -59,6 +66,7 @@ export function useAgentUsage(): {
     [projects, activeProjectId],
   );
   const activeKey = usageKey(focused?.agentId ?? "", focused?.accountId);
+  const vpnPhase = useKeel((state) => state.vpn.phase);
 
   const query = useMemo(
     () => buildUsageQueries(agents, accounts),
@@ -78,9 +86,16 @@ export function useAgentUsage(): {
 
     let cancelled = false;
     let inFlight = false;
+    // A poll asked for while one is already running must not be dropped — a
+    // VPN that settles mid-poll needs the request to run against the new
+    // route the moment the old one finishes.
+    let queued = false;
 
     const pull = async () => {
-      if (inFlight) return;
+      if (inFlight) {
+        queued = true;
+        return;
+      }
       inFlight = true;
       setFetching(true);
       try {
@@ -101,6 +116,10 @@ export function useAgentUsage(): {
         inFlight = false;
         if (!cancelled) setFetching(false);
       }
+      if (queued && !cancelled) {
+        queued = false;
+        void pull();
+      }
     };
 
     pullNow.current = () => void pull();
@@ -117,6 +136,16 @@ export function useAgentUsage(): {
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [key]);
+
+  // The tunnel's phase decides whether the backend reaches each vendor
+  // directly or through the private proxy. Once a transition settles, the
+  // logins that could not answer before get asked again immediately.
+  const lastVpnPhase = useRef(vpnPhase);
+  useEffect(() => {
+    const previous = lastVpnPhase.current;
+    lastVpnPhase.current = vpnPhase;
+    if (usageRouteChanged(previous, vpnPhase)) pullNow.current();
+  }, [vpnPhase]);
 
   const ready = useMemo(
     () =>

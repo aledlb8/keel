@@ -6,7 +6,7 @@
  * Named profiles are extra queries against that agent's isolated config dir.
  */
 
-import type { Agent, AgentAccount } from "./types";
+import type { Agent, AgentAccount, VpnPhase } from "./types";
 
 export interface UsageWindow {
   usedPercent: number;
@@ -233,4 +233,15 @@ export function usageQueryKey(query: UsageAgentQuery[]): string {
     .map((item) => `${item.id}:${item.accountId ?? ""}`)
     .sort()
     .join("|");
+}
+
+/**
+ * Whether a VPN phase change moved the route usage requests take. A poll that
+ * ran while the tunnel was still coming up could only reach the logins that
+ * answer directly; once the phase settles somewhere else — connected, idle, or
+ * error — the whole set deserves asking again, at once. "connecting" is a
+ * route still in flux, so a poll there would only repeat a half answer.
+ */
+export function usageRouteChanged(previous: VpnPhase, next: VpnPhase): boolean {
+  return previous !== next && next !== "connecting";
 }

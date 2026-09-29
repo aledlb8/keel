@@ -14,6 +14,7 @@ import {
   usageKey,
   usageLevel,
   usageQueryKey,
+  usageRouteChanged,
   windowElapsed,
   windowName,
   windowShortName,
@@ -280,5 +281,22 @@ describe("usageQueryKey", () => {
     );
     const b = [...a].reverse();
     assert.equal(usageQueryKey(a), usageQueryKey(b));
+  });
+});
+
+describe("usageRouteChanged", () => {
+  it("asks again once the tunnel settles onto a new route", () => {
+    assert.equal(usageRouteChanged("connecting", "connected"), true);
+    assert.equal(usageRouteChanged("connecting", "error"), true);
+    assert.equal(usageRouteChanged("connected", "idle"), true);
+    assert.equal(usageRouteChanged("connected", "error"), true);
+    assert.equal(usageRouteChanged("idle", "error"), true);
+  });
+
+  it("waits while the tunnel is still coming up, or when nothing moved", () => {
+    assert.equal(usageRouteChanged("idle", "connecting"), false);
+    assert.equal(usageRouteChanged("connected", "connecting"), false);
+    assert.equal(usageRouteChanged("connected", "connected"), false);
+    assert.equal(usageRouteChanged("idle", "idle"), false);
   });
 });
