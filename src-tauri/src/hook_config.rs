@@ -49,6 +49,15 @@ pub fn install(
             include_str!("opencode_hooks.mjs"),
         );
     }
+    // Codex's managed daemon, and Grok's hook runner, have no console of their
+    // own. On Windows every console child (pwsh, cmd) is given a new one, and
+    // Windows Terminal shows it. A command hook therefore opens a window on
+    // every tool call. OpenCode reports in-process. Claude's hook runs inside
+    // the pane console, so it does not.
+    #[cfg(windows)]
+    if matches!(agent, "codex" | "grok") {
+        return remove_command_hooks(agent, account, &variable);
+    }
     let (home_variable, folder, filename) = match agent {
         "claude" => ("CLAUDE_CONFIG_DIR", ".claude", "settings.json"),
         "codex" => ("CODEX_HOME", ".codex", "hooks.json"),
@@ -97,18 +106,72 @@ pub fn install(
     Ok(())
 }
 
+#[cfg(windows)]
+fn remove_command_hooks(
+    agent: &str,
+    account: Option<&Path>,
+    variable: &impl Fn(&str) -> Option<std::ffi::OsString>,
+) -> Result<(), String> {
+    let (home_variable, folder, filename) = match agent {
+        "codex" => ("CODEX_HOME", ".codex", "hooks.json"),
+        "grok" => ("GROK_HOME", ".grok", "hooks/keel-status.json"),
+        _ => return Ok(()),
+    };
+    let home = account
+        .map(Path::to_path_buf)
+        .or_else(|| {
+            variable(home_variable)
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from)
+        })
+        .or_else(|| crate::pty::home_dir().map(|p| p.join(folder)))
+        .ok_or("no provider home")?;
+    let path = home.join(filename);
+    let mut config = read_json(&path)?;
+    if !strip_keel_hooks(&mut config) {
+        return Ok(());
+    }
+    write_changed(
+        &path,
+        &serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?,
+    )
+}
+
+fn strip_keel_hooks(config: &mut Value) -> bool {
+    let Some(hooks) = config.get_mut("hooks").and_then(Value::as_object_mut) else {
+        return false;
+    };
+    let mut changed = false;
+    let events: Vec<String> = hooks.keys().cloned().collect();
+    for event in events {
+        let Some(groups) = hooks.get_mut(&event).and_then(Value::as_array_mut) else {
+            continue;
+        };
+        let before = groups.len();
+        groups.retain(|group| {
+            !group["hooks"].as_array().is_some_and(|handlers| {
+                handlers.len() == 1 && handlers[0]["statusMessage"] == "Keel activity"
+            })
+        });
+        if groups.len() != before {
+            changed = true;
+        }
+    }
+    hooks.retain(|_, value| value.as_array().is_none_or(|groups| !groups.is_empty()));
+    changed
+}
+
 fn hook_command(executable: &Path, agent: &str) -> String {
     let path = executable.to_string_lossy();
     #[cfg(windows)]
     {
-        use base64::Engine;
-        // Safe through both PowerShell and Git Bash, including spaces/apostrophes.
-        let script = format!("& '{}' --keel-agent-hook {agent}", path.replace('\'', "''"));
-        let bytes: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
-        format!(
-            "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand {}",
-            base64::engine::general_purpose::STANDARD.encode(bytes)
-        )
+        // Claude runs this with Git Bash. `& 'path'` is a syntax error there,
+        // and a failing UserPromptSubmit hook blocks the prompt. Codex and Grok
+        // run the same string with `pwsh -Command`. A forward-slash path with
+        // no shell metacharacters is a native command in both. powershell.exe
+        // is a console program, so Windows Terminal opens a window for it.
+        let path = path.replace('\\', "/");
+        format!("{path} --keel-agent-hook {agent}")
     }
     #[cfg(not(windows))]
     format!(
@@ -302,6 +365,29 @@ mod tests {
         assert!(codex_trust("[bad", source, &[], "observer").is_err());
         let malformed = format!("[hooks.state]\n'{key}' = false\n");
         assert!(codex_trust(&malformed, source, &[("stop".into(), 2)], "observer").is_err());
+    }
+
+    #[test]
+    fn strips_keel_groups_and_keeps_user_hooks() {
+        let mut config = json!({
+            "hooks": {
+                "PostToolUse": [
+                    {"matcher": "Bash", "hooks": [{"type": "command", "command": "user-check"}]},
+                    {"hooks": [{"type": "command", "command": "keel", "statusMessage": "Keel activity"}]}
+                ],
+                "Stop": [
+                    {"hooks": [{"type": "command", "command": "keel", "statusMessage": "Keel activity"}]}
+                ]
+            }
+        });
+        assert!(strip_keel_hooks(&mut config));
+        assert_eq!(config["hooks"]["PostToolUse"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            config["hooks"]["PostToolUse"][0]["hooks"][0]["command"],
+            "user-check"
+        );
+        assert!(config["hooks"].get("Stop").is_none());
+        assert!(!strip_keel_hooks(&mut config));
     }
 
     #[test]

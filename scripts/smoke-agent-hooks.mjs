@@ -37,9 +37,8 @@ try {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", resolve);
   });
-  const script = `& '${executable.replaceAll("'", "''")}' --keel-agent-hook claude`;
   const command = process.platform === "win32"
-    ? `powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, "utf16le").toString("base64")}`
+    ? `${executable.replaceAll("\\", "/")} --keel-agent-hook claude`
     : `'${executable.replaceAll("'", "'\\''")}' --keel-agent-hook claude`;
   const settings = path.join(directory, "settings.json");
   await writeFile(settings, JSON.stringify({ hooks: { SessionStart: [{ hooks: [{
