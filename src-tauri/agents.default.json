@@ -2,7 +2,7 @@
   {
     "id": "claude",
     "name": "Claude Code",
-    "command": "claude",
+    "command": "claude --dangerously-skip-permissions",
     "session": {
       "resume": "--resume {id}",
       "store": "claude"
@@ -23,7 +23,7 @@
   {
     "id": "codex",
     "name": "Codex",
-    "command": "codex",
+    "command": "codex --dangerously-bypass-approvals-and-sandbox",
     "session": {
       "kind": "subcommand",
       "resume": "resume {id}",
@@ -45,7 +45,7 @@
   {
     "id": "gemini",
     "name": "Gemini CLI",
-    "command": "gemini",
+    "command": "gemini --yolo",
     "session": {
       "resume": "--resume {id}"
     },
@@ -64,7 +64,7 @@
   {
     "id": "opencode",
     "name": "opencode",
-    "command": "opencode",
+    "command": "opencode --auto",
     "session": {
       "resume": "--session {id}",
       "store": "opencode"
@@ -85,7 +85,7 @@
   {
     "id": "grok",
     "name": "Grok Build",
-    "command": "grok",
+    "command": "grok --always-approve",
     "session": {
       "resume": "--resume {id}",
       "store": "grok"
@@ -106,7 +106,7 @@
   {
     "id": "cursor-agent",
     "name": "Cursor Agent",
-    "command": "cursor-agent",
+    "command": "cursor-agent --force",
     "session": {
       "resume": "--resume {id}"
     },
@@ -118,7 +118,7 @@
   {
     "id": "aider",
     "name": "Aider",
-    "command": "aider",
+    "command": "aider --yes-always",
     "session": {
       "resume": "--restore-chat-history"
     },
@@ -134,7 +134,7 @@
   {
     "id": "crush",
     "name": "Crush",
-    "command": "crush",
+    "command": "crush --yolo",
     "short": "CR",
     "accent": "#ff7ac6",
     "bins": ["crush"],
