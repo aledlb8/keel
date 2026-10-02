@@ -612,6 +612,12 @@ pub fn pty_spawn(
         .filter(|command| !command.trim().is_empty())
         .cloned();
     if let Some(command) = typed_command.as_deref() {
+        #[cfg(windows)]
+        let command = if options.agent_id.as_deref() == Some("codex") {
+            codex_in_pane_console(command)
+        } else {
+            command.to_string()
+        };
         let line = format!("{command}\r");
         let mut guard = lock_writer(&writer)?;
         write_pty_bytes(&mut **guard, line.as_bytes())
@@ -638,6 +644,24 @@ pub fn pty_spawn(
     }
 
     Ok(())
+}
+
+/// Codex hands the session to a shared background daemon that has no console.
+/// On Windows every console program it starts (pwsh per tool call, git, the
+/// `notify` program) is given a new console, and Windows Terminal shows each
+/// one as a window that flashes over the desktop. `--no-daemon` keeps the
+/// server inside the pane's console, so those children inherit it instead.
+/// `--remote` already names a server and Codex rejects the two together.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn codex_in_pane_console(command: &str) -> String {
+    let opted_out = command
+        .split_whitespace()
+        .any(|word| word == "--no-daemon" || word == "--remote" || word.starts_with("--remote="));
+    if opted_out {
+        command.to_string()
+    } else {
+        format!("{command} --no-daemon")
+    }
 }
 
 /// How often we look at the process tree for typed-in agents that have exited.
@@ -888,6 +912,26 @@ mod tests {
         assert!(!is_env_name("FOO=BAR"));
         assert!(!is_env_name("FOO\0BAR"));
         assert!(!is_env_name("FOO BAR"));
+    }
+
+    #[test]
+    fn codex_keeps_its_server_in_the_pane_console() {
+        assert_eq!(codex_in_pane_console("codex"), "codex --no-daemon");
+        assert_eq!(
+            codex_in_pane_console(r#"codex resume "019a-abc""#),
+            r#"codex resume "019a-abc" --no-daemon"#
+        );
+        assert_eq!(
+            codex_in_pane_console(r"& 'C:\Program Files\Codex\codex.exe'"),
+            r"& 'C:\Program Files\Codex\codex.exe' --no-daemon"
+        );
+        for kept in [
+            "codex --no-daemon",
+            "codex --remote ws://h:1",
+            "codex --remote=ws://h:1",
+        ] {
+            assert_eq!(codex_in_pane_console(kept), kept);
+        }
     }
 
     #[test]
