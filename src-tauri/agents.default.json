@@ -104,6 +104,26 @@
     ]
   },
   {
+    "id": "pi",
+    "name": "Pi",
+    "command": "pi --approve",
+    "session": {
+      "resume": "--session {id}"
+    },
+    "accountEnv": "PI_CODING_AGENT_DIR",
+    "short": "PI",
+    "accent": "#a3e635",
+    "bins": ["pi", "pi-launcher"],
+    "paths": [
+      "{home}/.pi/agent/bin",
+      "{home}/AppData/Local/pnpm",
+      "{home}/AppData/Roaming/npm",
+      "{home}/.local/bin",
+      "/opt/homebrew/bin",
+      "/usr/local/bin"
+    ]
+  },
+  {
     "id": "cursor-agent",
     "name": "Cursor Agent",
     "command": "cursor-agent --force",
