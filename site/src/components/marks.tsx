@@ -1,4 +1,6 @@
-import type { CSSProperties, ReactNode } from "react";
+import { useId, type CSSProperties } from "react";
+
+import { AGENT_LOGOS } from "./agentLogos";
 
 export type AgentId =
   | "claude"
@@ -10,6 +12,7 @@ export type AgentId =
   | "aider"
   | "crush"
   | "goose"
+  | "pi"
   | "shell";
 
 export interface AgentInfo {
@@ -87,6 +90,13 @@ export const AGENTS: Record<AgentId, AgentInfo> = {
     spinner: ["◢", "◣", "◤", "◥"],
     bullet: "→",
   },
+  pi: {
+    id: "pi",
+    name: "Pi",
+    accent: "#a3e635",
+    spinner: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
+    bullet: "•",
+  },
   shell: {
     id: "shell",
     name: "Shell",
@@ -106,54 +116,8 @@ export const AGENT_ORDER: AgentId[] = [
   "aider",
   "crush",
   "goose",
+  "pi",
 ];
-
-const STROKE = {
-  fill: "none",
-  stroke: "currentColor",
-  strokeWidth: 2,
-  strokeLinecap: "round",
-  strokeLinejoin: "round",
-} as const;
-
-/** The same geometric marks the app draws. Unlisted agents get a letter. */
-const MARKS: Partial<Record<AgentId, ReactNode>> = {
-  claude: (
-    <g {...STROKE}>
-      <path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6 5.6 18.4" />
-    </g>
-  ),
-  codex: (
-    <g {...STROKE} strokeWidth={1.8}>
-      <rect x="8" y="3" width="8" height="18" rx="4" />
-      <rect x="8" y="3" width="8" height="18" rx="4" transform="rotate(60 12 12)" />
-      <rect x="8" y="3" width="8" height="18" rx="4" transform="rotate(-60 12 12)" />
-    </g>
-  ),
-  gemini: (
-    <path
-      fill="currentColor"
-      d="M12 2c.6 5.2 4.8 9.4 10 10-5.2.6-9.4 4.8-10 10-.6-5.2-4.8-9.4-10-10 5.2-.6 9.4-4.8 10-10Z"
-    />
-  ),
-  grok: (
-    <g {...STROKE}>
-      <path d="M17.5 7.5A7 7 0 1 0 19 12" />
-      <path d="M20 4 6 20" />
-    </g>
-  ),
-  opencode: (
-    <g {...STROKE}>
-      <path d="M8 4H5v16h3M16 4h3v16h-3" />
-    </g>
-  ),
-  "cursor-agent": <path fill="currentColor" d="M5 3.5 20 10l-6.6 2.2L11 19Z" />,
-  shell: (
-    <g {...STROKE}>
-      <path d="m6 8 4 4-4 4M13 16h5" />
-    </g>
-  ),
-};
 
 export function AgentMark({
   agent,
@@ -172,7 +136,8 @@ export function AgentMark({
   fluid?: boolean;
 }) {
   const info = AGENTS[agent];
-  const mark = MARKS[agent];
+  const logo = AGENT_LOGOS[agent];
+  const uid = useId();
   const tile = variant === "tile";
   const glyph = tile ? Math.round(size * 0.58) : size;
   const accent = info.accent;
@@ -194,13 +159,14 @@ export function AgentMark({
         ...style,
       }}
     >
-      {mark ? (
+      {logo ? (
         <svg
           width={fluid ? "100%" : glyph}
           height={fluid ? "100%" : glyph}
-          viewBox="0 0 24 24"
+          viewBox={logo.viewBox}
+          style={fluid || logo.ink === "accent" ? undefined : { color: "var(--k-text)" }}
         >
-          {mark}
+          {logo.draw(uid)}
         </svg>
       ) : (
         <span
