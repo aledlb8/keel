@@ -38,6 +38,8 @@ notify-debouncer-mini = "0.7"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls-native-roots"] }
 socket2 = "0.5"
 time = { version = "0.3", default-features = false, features = ["parsing"] }
+# The editor's read-only database view: limits stops ATTACH, hooks a time limit.
+rusqlite = { version = "0.40", features = ["bundled", "limits", "hooks"] }
 # Query strings on the keel-file scheme. Already in the tree through tauri.
 url = "2"
 

@@ -11,6 +11,7 @@ mod procs;
 mod pty;
 mod roots;
 mod sessions;
+mod sqlite;
 mod store;
 mod usage;
 mod vpn;
@@ -66,6 +67,9 @@ pub fn run() {
             workspace::workspace_rename,
             workspace::workspace_search,
             preview::workspace_read_bytes,
+            sqlite::sqlite_tables,
+            sqlite::sqlite_rows,
+            sqlite::sqlite_query,
             grep::workspace_grep,
             grep::workspace_replace,
             watch::workspace_watch,
