@@ -77,26 +77,81 @@ export function workspaceSearch(
 export interface GrepHit {
   rel: string;
   line: number;
+  /** Where the first match starts, 1-based, in UTF-16 units. */
   column: number;
+  /** The first match's length, so the editor can select it. */
+  length?: number | undefined;
   text: string;
+  /** Every match as `[start, end)` offsets into `text`. */
+  ranges?: [number, number][] | undefined;
+  /** What each match becomes, when a replacement was asked for. */
+  replacements?: string[] | null | undefined;
 }
 
 export interface GrepResults {
   hits: GrepHit[];
   truncated: boolean;
+  filesSearched?: number | undefined;
+  elapsedMs?: number | undefined;
+  /** A newer search took over before this one finished. */
+  cancelled?: boolean | undefined;
 }
+
+export interface GrepOptions {
+  caseSensitive: boolean;
+  wholeWord: boolean;
+  regex: boolean;
+  /** Comma-separated globs; only matching files are searched. */
+  include: string;
+  /** Comma-separated globs to leave out. */
+  exclude: string;
+  /** Hidden, gitignored and build folders too. */
+  includeIgnored: boolean;
+}
+
+export const DEFAULT_GREP_OPTIONS: GrepOptions = {
+  caseSensitive: false,
+  wholeWord: false,
+  regex: false,
+  include: "",
+  exclude: "",
+  includeIgnored: false,
+};
 
 export function workspaceGrep(
   root: string,
   query: string,
-  opts?: { caseSensitive?: boolean; regex?: boolean },
+  options: Partial<GrepOptions> = {},
+  replace: string | null = null,
 ): Promise<GrepResults> {
   return invoke("workspace_grep", {
     root,
     query,
-    caseSensitive: opts?.caseSensitive ?? false,
-    isRegex: opts?.regex ?? false,
+    options: { ...DEFAULT_GREP_OPTIONS, ...options },
+    replace,
   });
+}
+
+export interface ReplaceTarget {
+  rel: string;
+  /** Only these lines; the whole file when absent. */
+  lines?: number[] | null;
+}
+
+export interface ReplaceSummary {
+  files: number;
+  replacements: number;
+  skipped: string[];
+}
+
+export function workspaceReplace(
+  root: string,
+  query: string,
+  options: GrepOptions,
+  replacement: string,
+  targets: ReplaceTarget[],
+): Promise<ReplaceSummary> {
+  return invoke("workspace_replace", { root, query, options, replacement, targets });
 }
 
 export type GitFileStatus =

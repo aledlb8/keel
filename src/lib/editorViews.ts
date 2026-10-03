@@ -10,7 +10,7 @@ import { EditorView } from "@codemirror/view";
 
 /** The same file can be open in two panes; jump every live view. */
 const views = new Map<string, EditorView[]>();
-const pending = new Map<string, { line: number; column?: number }>();
+const pending = new Map<string, { line: number; column?: number; length?: number }>();
 
 /** A newer navigation or project switch invalidates reveals that have not mounted. */
 export function clearEditorReveals(): void {
@@ -21,14 +21,17 @@ function applyReveal(
   view: EditorView,
   line: number,
   column: number | undefined,
+  length = 0,
 ): void {
   const doc = view.state.doc;
   const approx = Math.min(Math.max(line, 1), Math.max(doc.lines, 1));
   const info = doc.line(approx);
   const { offset } = clampReveal(doc.lines, info.length, line, column);
   const pos = info.from + offset;
+  // A search hit selects what matched, so it stands out and can be typed over.
+  const head = Math.min(pos + Math.max(length, 0), info.to);
   view.dispatch({
-    selection: { anchor: pos },
+    selection: { anchor: pos, head },
     effects: EditorView.scrollIntoView(pos, { y: "center" }),
   });
 }
@@ -52,7 +55,7 @@ export function registerEditorView(id: string, view: EditorView): () => void {
   const queued = pending.get(id);
   if (queued) {
     pending.delete(id);
-    applyReveal(view, queued.line, queued.column);
+    applyReveal(view, queued.line, queued.column, queued.length);
     view.focus();
   }
   return () => {
@@ -64,14 +67,23 @@ export function registerEditorView(id: string, view: EditorView): () => void {
   };
 }
 
-export function revealInEditor(id: string, line: number, column?: number): boolean {
+export function revealInEditor(
+  id: string,
+  line: number,
+  column?: number,
+  length?: number,
+): boolean {
   // Keep a pending jump so a pane that is still mounting (openFile then reveal)
   // lands on the same line once its view registers. If a view already exists,
   // only retain the jump briefly for other panes mounting the same file.
-  pending.set(id, column === undefined ? { line } : { line, column });
+  pending.set(id, {
+    line,
+    ...(column === undefined ? {} : { column }),
+    ...(length === undefined ? {} : { length }),
+  });
   const list = views.get(id);
   if (list?.length) {
-    for (const view of list) applyReveal(view, line, column);
+    for (const view of list) applyReveal(view, line, column, length);
     const focused = list.find((view) => view.hasFocus) ?? list[list.length - 1];
     focused?.focus();
   }
