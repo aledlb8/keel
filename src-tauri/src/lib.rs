@@ -2,6 +2,7 @@ mod agent_hooks;
 mod agents;
 mod blocking;
 mod git;
+mod git_ops;
 mod grep;
 mod hook_config;
 mod paths;
@@ -83,6 +84,32 @@ pub fn run() {
             git::pr_list,
             git::pr_create,
             git::pr_checkout,
+            git_ops::git_commit_details,
+            git_ops::git_diff_rev,
+            git_ops::git_head_message,
+            git_ops::git_undo_commit,
+            git_ops::git_stash_list,
+            git_ops::git_stash_push,
+            git_ops::git_stash_apply,
+            git_ops::git_stash_drop,
+            git_ops::git_tags,
+            git_ops::git_tag_create,
+            git_ops::git_tag_delete,
+            git_ops::git_tag_push,
+            git_ops::git_branch_rename,
+            git_ops::git_checkout_remote,
+            git_ops::git_checkout_rev,
+            git_ops::git_branch_delete_remote,
+            git_ops::git_merge,
+            git_ops::git_rebase,
+            git_ops::git_cherry_pick,
+            git_ops::git_revert,
+            git_ops::git_reset,
+            git_ops::git_operation,
+            git_ops::git_resolve,
+            git_ops::git_ignore,
+            git_ops::git_remotes,
+            git_ops::git_init,
             usage::usage_fetch,
             vpn::vpn_snapshot,
             vpn::vpn_connect,

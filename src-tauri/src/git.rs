@@ -2,8 +2,9 @@
 //!
 //! Subcommands are fixed. The frontend never sends a freeform git string.
 
+use std::collections::HashMap;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::OnceLock;
 use std::thread;
@@ -19,8 +20,17 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 const MAX_DIFF_BYTES: u64 = 1_000_000;
 const MAX_DIFF_LINES: usize = 4000;
-const GIT_TIMEOUT: Duration = Duration::from_secs(30);
-const GIT_REMOTE_TIMEOUT: Duration = Duration::from_secs(120);
+pub(crate) const GIT_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const GIT_REMOTE_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Lines added and removed, as `git diff --numstat` counts them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LineStat {
+    pub added: u32,
+    pub removed: u32,
+    pub binary: bool,
+}
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,6 +42,10 @@ pub struct GitFile {
     pub unstaged: bool,
     pub untracked: bool,
     pub conflict: bool,
+    /// The working tree against the index (or the whole file, when untracked).
+    pub stat: Option<LineStat>,
+    /// The index against HEAD.
+    pub staged_stat: Option<LineStat>,
 }
 
 #[derive(Debug, Serialize)]
@@ -45,6 +59,15 @@ pub struct GitStatus {
     pub ahead: u32,
     pub behind: u32,
     pub files: Vec<GitFile>,
+    /// Short name of HEAD's commit; `None` before the first commit.
+    pub head: Option<String>,
+    /// A merge, rebase, cherry-pick or revert waiting to be finished.
+    pub operation: Option<String>,
+    pub stashes: u32,
+    /// When this repository last fetched, in unix seconds.
+    pub last_fetch: Option<i64>,
+    /// There is somewhere to push to and pull from.
+    pub has_remote: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -82,6 +105,14 @@ pub struct GitBranch {
     pub current: bool,
     pub remote: bool,
     pub upstream: Option<String>,
+    /// The upstream was deleted on the remote.
+    pub gone: bool,
+    pub ahead: u32,
+    pub behind: u32,
+    /// Committer date of the tip, unix seconds.
+    pub timestamp: i64,
+    /// The tip's subject line.
+    pub subject: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -98,8 +129,14 @@ pub struct GitCommit {
     pub hash: String,
     pub short: String,
     pub author: String,
+    pub email: String,
     pub subject: String,
     pub timestamp: i64,
+    pub parents: Vec<String>,
+    /// Decorations as `git log` prints them: `HEAD -> main`, `origin/main`, `tag: v1`.
+    pub refs: Vec<String>,
+    /// Not on any remote-tracking branch yet.
+    pub unpushed: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -113,6 +150,20 @@ pub struct PullRequest {
     pub author: String,
     pub head: String,
     pub base: String,
+    pub updated_at: Option<String>,
+    /// `APPROVED`, `CHANGES_REQUESTED`, `REVIEW_REQUIRED` or none.
+    pub review: Option<String>,
+    pub checks: Option<PrChecks>,
+    pub additions: u32,
+    pub deletions: u32,
+}
+
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrChecks {
+    pub passed: u32,
+    pub failed: u32,
+    pub pending: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -123,7 +174,7 @@ pub struct PrList {
     pub error: Option<String>,
 }
 
-fn hide_window(cmd: &mut Command) {
+pub(crate) fn hide_window(cmd: &mut Command) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -131,7 +182,7 @@ fn hide_window(cmd: &mut Command) {
     }
 }
 
-fn apply_git_env(cmd: &mut Command) {
+pub(crate) fn apply_git_env(cmd: &mut Command) {
     cmd.env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("LC_ALL", "C")
@@ -139,17 +190,17 @@ fn apply_git_env(cmd: &mut Command) {
 }
 
 /// Hide `://user:password@` and `://x-access-token:token@` in git/gh output.
-fn redact_git_output(s: &str) -> String {
+pub(crate) fn redact_git_output(s: &str) -> String {
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| Regex::new(r"://[^/\s@]+:[^/\s@]+@").expect("redact pattern"));
     re.replace_all(s, "://***@").into_owned()
 }
 
-fn user_err(bytes: &[u8]) -> String {
+pub(crate) fn user_err(bytes: &[u8]) -> String {
     redact_git_output(String::from_utf8_lossy(bytes).trim())
 }
 
-fn wait_output_timeout(
+pub(crate) fn wait_output_timeout(
     mut child: Child,
     timeout: Duration,
     program: &str,
@@ -214,23 +265,27 @@ fn run_in_timeout(
     wait_output_timeout(child, timeout, program)
 }
 
-fn run_in(root: &Path, program: &str, args: &[&str]) -> Result<Output, String> {
+pub(crate) fn run_in(root: &Path, program: &str, args: &[&str]) -> Result<Output, String> {
     run_in_timeout(root, program, args, GIT_TIMEOUT)
 }
 
-fn git(root: &Path, args: &[&str]) -> Result<Output, String> {
+pub(crate) fn git(root: &Path, args: &[&str]) -> Result<Output, String> {
     git_timeout(root, args, GIT_TIMEOUT)
 }
 
-fn git_timeout(root: &Path, args: &[&str], timeout: Duration) -> Result<Output, String> {
+pub(crate) fn git_timeout(root: &Path, args: &[&str], timeout: Duration) -> Result<Output, String> {
     run_in_timeout(root, "git", args, timeout)
 }
 
-fn git_ok(root: &Path, args: &[&str]) -> Result<String, String> {
+pub(crate) fn git_ok(root: &Path, args: &[&str]) -> Result<String, String> {
     git_ok_timeout(root, args, GIT_TIMEOUT)
 }
 
-fn git_ok_timeout(root: &Path, args: &[&str], timeout: Duration) -> Result<String, String> {
+pub(crate) fn git_ok_timeout(
+    root: &Path,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<String, String> {
     let output = git_timeout(root, args, timeout)?;
     if output.status.success() {
         return Ok(redact_git_output(&String::from_utf8_lossy(&output.stdout)));
@@ -256,7 +311,7 @@ fn git_installed() -> bool {
     cmd.status().map(|s| s.success()).unwrap_or(false)
 }
 
-fn gh_installed() -> bool {
+pub(crate) fn gh_installed() -> bool {
     let mut cmd = Command::new("gh");
     cmd.arg("--version")
         .stdin(Stdio::null())
@@ -276,6 +331,11 @@ fn empty_status(git: bool, repo: bool) -> GitStatus {
         ahead: 0,
         behind: 0,
         files: Vec::new(),
+        head: None,
+        operation: None,
+        stashes: 0,
+        last_fetch: None,
+        has_remote: false,
     }
 }
 
@@ -401,6 +461,8 @@ pub fn parse_status(raw: &[u8]) -> GitStatus {
                 unstaged: true,
                 untracked: true,
                 conflict: false,
+                stat: None,
+                staged_stat: None,
             });
             continue;
         }
@@ -416,6 +478,8 @@ pub fn parse_status(raw: &[u8]) -> GitStatus {
                 unstaged: true,
                 untracked: false,
                 conflict: true,
+                stat: None,
+                staged_stat: None,
             });
             continue;
         }
@@ -450,6 +514,8 @@ pub fn parse_status(raw: &[u8]) -> GitStatus {
                 unstaged,
                 untracked: false,
                 conflict: x == 'U' || y == 'U',
+                stat: None,
+                staged_stat: None,
             });
         }
     }
@@ -496,7 +562,7 @@ fn push_diff_line(hunk: &mut GitHunk, total: &mut usize, line: DiffLine) -> bool
     true
 }
 
-pub fn parse_diff(raw: &str, path: &str) -> GitDiff {
+pub(crate) fn parse_diff(raw: &str, path: &str) -> GitDiff {
     if raw.contains("Binary files ") || raw.contains("GIT binary patch") {
         return GitDiff {
             path: path.to_string(),
@@ -598,7 +664,7 @@ pub fn parse_diff(raw: &str, path: &str) -> GitDiff {
     }
 }
 
-fn rel_arg(root: &Path, rel: &str) -> Result<String, String> {
+pub(crate) fn rel_arg(root: &Path, rel: &str) -> Result<String, String> {
     let _root = canonicalize_dir(root)?;
     let path = normalize_rel(rel)?;
     if path.as_os_str().is_empty() {
@@ -607,7 +673,7 @@ fn rel_arg(root: &Path, rel: &str) -> Result<String, String> {
     Ok(to_posix(&path))
 }
 
-fn rels(root: &Path, paths: &[String]) -> Result<Vec<String>, String> {
+pub(crate) fn rels(root: &Path, paths: &[String]) -> Result<Vec<String>, String> {
     paths.iter().map(|p| rel_arg(root, p)).collect()
 }
 
@@ -630,8 +696,17 @@ fn git_status_blocking(root: String) -> Result<GitStatus, String> {
         return Ok(empty_status(false, false));
     }
     let root = crate::roots::require(&root)?;
+    let mut status = git_status_core(&root)?;
+    if status.repo {
+        enrich_status(&root, &mut status);
+    }
+    Ok(status)
+}
+
+/// Branch and files only — what a discard needs, without the extras.
+fn git_status_core(root: &Path) -> Result<GitStatus, String> {
     let output = git(
-        &root,
+        root,
         &[
             "status",
             "--porcelain=v2",
@@ -651,6 +726,170 @@ fn git_status_blocking(root: String) -> Result<GitStatus, String> {
         return Err(err);
     }
     Ok(parse_status(&output.stdout))
+}
+
+/// Untracked files this size or smaller get their lines counted.
+const MAX_COUNTED_BYTES: u64 = 512 * 1024;
+const MAX_COUNTED_FILES: usize = 300;
+
+/// The extras around a status: HEAD, an operation in progress, stashes, the
+/// last fetch, and how many lines each change touches.
+fn enrich_status(root: &Path, status: &mut GitStatus) {
+    status.head = git_ok(root, &["rev-parse", "--verify", "-q", "--short", "HEAD"])
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    status.has_remote = git_ok(root, &["remote"])
+        .map(|out| !out.trim().is_empty())
+        .unwrap_or(false);
+    if let Some((git_dir, common_dir)) = git_dirs(root) {
+        status.operation = repo_operation(&git_dir);
+        status.stashes = count_stashes(&common_dir);
+        status.last_fetch = modified_secs(&common_dir.join("FETCH_HEAD"));
+    }
+    apply_numstat(root, status);
+}
+
+/// This worktree's git folder and the one its worktrees share.
+pub(crate) fn git_dirs(root: &Path) -> Option<(PathBuf, PathBuf)> {
+    let out = git_ok(
+        root,
+        &["rev-parse", "--absolute-git-dir", "--git-common-dir"],
+    )
+    .ok()?;
+    let mut lines = out.lines().map(str::trim).filter(|line| !line.is_empty());
+    let git_dir = PathBuf::from(lines.next()?);
+    let common = PathBuf::from(lines.next()?);
+    let common = if common.is_absolute() {
+        common
+    } else {
+        root.join(common)
+    };
+    Some((git_dir, common))
+}
+
+pub(crate) fn repo_operation(git_dir: &Path) -> Option<String> {
+    let op = if git_dir.join("rebase-merge").is_dir() || git_dir.join("rebase-apply").is_dir() {
+        "rebase"
+    } else if git_dir.join("MERGE_HEAD").is_file() {
+        "merge"
+    } else if git_dir.join("CHERRY_PICK_HEAD").is_file() {
+        "cherry-pick"
+    } else if git_dir.join("REVERT_HEAD").is_file() {
+        "revert"
+    } else {
+        return None;
+    };
+    Some(op.into())
+}
+
+fn count_stashes(common_dir: &Path) -> u32 {
+    std::fs::read_to_string(common_dir.join("logs").join("refs").join("stash"))
+        .map(|log| log.lines().filter(|line| !line.trim().is_empty()).count() as u32)
+        .unwrap_or(0)
+}
+
+fn modified_secs(path: &Path) -> Option<i64> {
+    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
+    let secs = modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    i64::try_from(secs).ok()
+}
+
+/// `git diff --numstat -z`: `added<TAB>removed<TAB>path<NUL>`, or for
+/// a rename `added<TAB>removed<TAB><NUL>from<NUL>to<NUL>`. Binary files count `-` for both.
+pub(crate) fn parse_numstat(raw: &[u8]) -> Vec<(String, LineStat)> {
+    let mut out = Vec::new();
+    let mut parts = raw.split(|b| *b == 0);
+    while let Some(part) = parts.next() {
+        if part.is_empty() {
+            continue;
+        }
+        let line = String::from_utf8_lossy(part);
+        let mut fields = line.splitn(3, '\t');
+        let added = fields.next().unwrap_or("");
+        let removed = fields.next().unwrap_or("");
+        let Some(path) = fields.next() else {
+            continue;
+        };
+        let binary = added == "-" || removed == "-";
+        let stat = LineStat {
+            added: added.parse().unwrap_or(0),
+            removed: removed.parse().unwrap_or(0),
+            binary,
+        };
+        let path = if path.is_empty() {
+            // A rename: the source, then the destination, as their own fields.
+            let _from = parts.next();
+            match parts.next() {
+                Some(to) => String::from_utf8_lossy(to).into_owned(),
+                None => continue,
+            }
+        } else {
+            path.to_string()
+        };
+        out.push((path.replace('\\', "/"), stat));
+    }
+    out
+}
+
+fn numstat_map(root: &Path, cached: bool) -> HashMap<String, LineStat> {
+    let mut args = vec!["diff", "--numstat", "-z", "-M", "--no-color"];
+    if cached {
+        args.push("--cached");
+    }
+    match git(root, &args) {
+        Ok(output) if output.status.success() => {
+            parse_numstat(&output.stdout).into_iter().collect()
+        }
+        _ => HashMap::new(),
+    }
+}
+
+fn count_lines(path: &Path) -> Option<LineStat> {
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() || meta.len() > MAX_COUNTED_BYTES {
+        return None;
+    }
+    let bytes = std::fs::read(path).ok()?;
+    if bytes.contains(&0) {
+        return Some(LineStat {
+            binary: true,
+            ..LineStat::default()
+        });
+    }
+    let mut lines = bytes.iter().filter(|b| **b == b'\n').count() as u32;
+    if bytes.last().is_some_and(|b| *b != b'\n') {
+        lines += 1;
+    }
+    Some(LineStat {
+        added: lines,
+        removed: 0,
+        binary: false,
+    })
+}
+
+fn apply_numstat(root: &Path, status: &mut GitStatus) {
+    let unstaged = numstat_map(root, false);
+    let staged = numstat_map(root, true);
+    let mut counted = 0;
+    for file in &mut status.files {
+        if file.untracked {
+            if counted < MAX_COUNTED_FILES {
+                counted += 1;
+                file.stat = count_lines(&root.join(&file.path));
+            }
+            continue;
+        }
+        if file.unstaged {
+            file.stat = unstaged.get(&file.path).copied();
+        }
+        if file.staged {
+            file.staged_stat = staged.get(&file.path).copied();
+        }
+    }
 }
 
 fn not_a_git_repository(output: &Output) -> bool {
@@ -824,7 +1063,7 @@ pub async fn git_discard(root: String, paths: Vec<String>) -> Result<(), String>
 
 fn git_discard_blocking(root: String, paths: Vec<String>) -> Result<(), String> {
     let root = crate::roots::require(&root)?;
-    let status = git_status_blocking(root.to_string_lossy().into_owned())?;
+    let status = git_status_core(&root)?;
     let mut tracked = Vec::new();
     let mut untracked = Vec::new();
     for path in paths {
@@ -926,19 +1165,49 @@ fn recycle_delete(path: &Path) -> Result<(), String> {
     }
 }
 
-#[tauri::command]
-pub async fn git_commit(root: String, message: String) -> Result<String, String> {
-    crate::blocking::run(move || git_commit_blocking(root, message)).await
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CommitOptions {
+    /// Replace the last commit instead of adding one.
+    pub amend: bool,
+    /// Add a `Signed-off-by` trailer.
+    pub signoff: bool,
+    /// Skip the pre-commit and commit-msg hooks.
+    pub no_verify: bool,
 }
 
-fn git_commit_blocking(root: String, message: String) -> Result<String, String> {
+#[tauri::command]
+pub async fn git_commit(
+    root: String,
+    message: String,
+    options: Option<CommitOptions>,
+) -> Result<String, String> {
+    let options = options.unwrap_or_default();
+    crate::blocking::run(move || git_commit_blocking(root, message, options)).await
+}
+
+fn git_commit_blocking(
+    root: String,
+    message: String,
+    options: CommitOptions,
+) -> Result<String, String> {
     let message = message.trim().to_string();
     if message.is_empty() {
         return Err("Write a commit message first.".into());
     }
     let root = crate::roots::require(&root)?;
+    let mut args = vec!["commit", "-F", "-"];
+    if options.amend {
+        args.push("--amend");
+    }
+    if options.signoff {
+        args.push("--signoff");
+    }
+    if options.no_verify {
+        args.push("--no-verify");
+    }
     let mut cmd = Command::new("git");
-    cmd.args(["commit", "-F", "-"])
+    cmd.args(&args)
         .current_dir(&root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -969,7 +1238,7 @@ fn git_commit_blocking(root: String, message: String) -> Result<String, String> 
     git_ok(&root, &["rev-parse", "--short", "HEAD"]).map(|s| s.trim().to_string())
 }
 
-fn valid_remote_name(name: &str) -> bool {
+pub(crate) fn valid_remote_name(name: &str) -> bool {
     !name.is_empty()
         && !name.starts_with('-')
         && name
@@ -991,7 +1260,7 @@ fn pick_remote(listing: &str) -> Option<String> {
     valid_remote_name(chosen).then(|| chosen.to_string())
 }
 
-fn default_remote(root: &Path) -> String {
+pub(crate) fn default_remote(root: &Path) -> String {
     git_ok(root, &["remote"])
         .ok()
         .and_then(|out| pick_remote(&out))
@@ -999,22 +1268,35 @@ fn default_remote(root: &Path) -> String {
 }
 
 #[tauri::command]
-pub async fn git_push(root: String, set_upstream: bool) -> Result<String, String> {
-    crate::blocking::run(move || git_push_blocking(root, set_upstream)).await
+pub async fn git_push(
+    root: String,
+    set_upstream: bool,
+    force: Option<bool>,
+) -> Result<String, String> {
+    let force = force.unwrap_or(false);
+    crate::blocking::run(move || git_push_blocking(root, set_upstream, force)).await
 }
 
-fn git_push_blocking(root: String, set_upstream: bool) -> Result<String, String> {
+fn git_push_blocking(root: String, set_upstream: bool, force: bool) -> Result<String, String> {
     let root = crate::roots::require(&root)?;
     let has_upstream = git_ok(
         &root,
         &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
     )
     .is_ok();
+    // A lease rather than a bare force: it refuses if the remote moved since
+    // the last fetch, so nobody else's work is thrown away.
+    let lease = force.then_some("--force-with-lease");
     let output = if has_upstream && !set_upstream {
-        git_timeout(&root, &["push"], GIT_REMOTE_TIMEOUT)?
+        let mut args = vec!["push"];
+        args.extend(lease);
+        git_timeout(&root, &args, GIT_REMOTE_TIMEOUT)?
     } else {
         let remote = default_remote(&root);
-        git_timeout(&root, &["push", "-u", &remote, "HEAD"], GIT_REMOTE_TIMEOUT)?
+        let mut args = vec!["push", "-u"];
+        args.extend(lease);
+        args.extend([remote.as_str(), "HEAD"]);
+        git_timeout(&root, &args, GIT_REMOTE_TIMEOUT)?
     };
     let stdout = redact_git_output(&String::from_utf8_lossy(&output.stdout));
     let stderr = user_err(&output.stderr);
@@ -1039,13 +1321,19 @@ fn git_push_blocking(root: String, set_upstream: bool) -> Result<String, String>
 }
 
 #[tauri::command]
-pub async fn git_pull(root: String) -> Result<String, String> {
-    crate::blocking::run(move || git_pull_blocking(root)).await
+pub async fn git_pull(root: String, mode: Option<String>) -> Result<String, String> {
+    crate::blocking::run(move || git_pull_blocking(root, mode)).await
 }
 
-fn git_pull_blocking(root: String) -> Result<String, String> {
+fn git_pull_blocking(root: String, mode: Option<String>) -> Result<String, String> {
     let root = crate::roots::require(&root)?;
-    git_ok_timeout(&root, &["pull", "--ff-only"], GIT_REMOTE_TIMEOUT).map(|s| {
+    let flag = match mode.as_deref().unwrap_or("ff-only") {
+        "ff-only" => "--ff-only",
+        "rebase" => "--rebase",
+        "merge" => "--no-rebase",
+        other => return Err(format!("Unknown pull mode: {other}")),
+    };
+    git_ok_timeout(&root, &["pull", flag], GIT_REMOTE_TIMEOUT).map(|s| {
         let t = s.trim();
         if t.is_empty() {
             "Already up to date.".into()
@@ -1088,7 +1376,8 @@ fn git_branches_blocking(root: String) -> Result<GitBranches, String> {
         &root,
         &[
             "for-each-ref",
-            "--format=%(refname:short)%00%(HEAD)%00%(upstream:short)%00%(refname)",
+            "--sort=-committerdate",
+            "--format=%(refname:short)%00%(HEAD)%00%(upstream:short)%00%(refname)%00%(upstream:track)%00%(committerdate:unix)%00%(contents:subject)",
             "refs/heads",
             "refs/remotes",
         ],
@@ -1104,17 +1393,28 @@ fn git_branches_blocking(root: String) -> Result<GitBranches, String> {
         let head = bits.next().unwrap_or("");
         let upstream = bits.next().unwrap_or("");
         let refname = bits.next().unwrap_or("");
-        if name.is_empty() || name == "origin/HEAD" {
+        let track = bits.next().unwrap_or("");
+        let timestamp = bits.next().unwrap_or("0").parse().unwrap_or(0);
+        let subject = bits.next().unwrap_or("").to_string();
+        // `refs/remotes/origin/HEAD` is a pointer, not a branch.
+        let remote = refname.starts_with("refs/remotes/");
+        if name.is_empty() || (remote && refname.ends_with("/HEAD")) {
             continue;
         }
+        let (ahead, behind, gone) = parse_track(track);
         items.push(GitBranch {
             current: head == "*",
-            remote: refname.starts_with("refs/remotes/"),
+            remote,
             upstream: if upstream.is_empty() {
                 None
             } else {
                 Some(upstream.to_string())
             },
+            gone,
+            ahead,
+            behind,
+            timestamp,
+            subject,
             name,
         });
     }
@@ -1123,6 +1423,25 @@ fn git_branches_blocking(root: String) -> Result<GitBranches, String> {
         detached,
         items,
     })
+}
+
+/// `%(upstream:track)`: `[ahead 1, behind 2]`, `[gone]`, or nothing.
+pub(crate) fn parse_track(track: &str) -> (u32, u32, bool) {
+    let inner = track.trim().trim_start_matches('[').trim_end_matches(']');
+    if inner == "gone" {
+        return (0, 0, true);
+    }
+    let mut ahead = 0;
+    let mut behind = 0;
+    for part in inner.split(',') {
+        let part = part.trim();
+        if let Some(n) = part.strip_prefix("ahead ") {
+            ahead = n.parse().unwrap_or(0);
+        } else if let Some(n) = part.strip_prefix("behind ") {
+            behind = n.parse().unwrap_or(0);
+        }
+    }
+    (ahead, behind, false)
 }
 
 #[tauri::command]
@@ -1140,11 +1459,21 @@ fn git_checkout_blocking(root: String, name: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn git_branch_create(root: String, name: String, checkout: bool) -> Result<(), String> {
-    crate::blocking::run(move || git_branch_create_blocking(root, name, checkout)).await
+pub async fn git_branch_create(
+    root: String,
+    name: String,
+    checkout: bool,
+    start: Option<String>,
+) -> Result<(), String> {
+    crate::blocking::run(move || git_branch_create_blocking(root, name, checkout, start)).await
 }
 
-fn git_branch_create_blocking(root: String, name: String, checkout: bool) -> Result<(), String> {
+fn git_branch_create_blocking(
+    root: String,
+    name: String,
+    checkout: bool,
+    start: Option<String>,
+) -> Result<(), String> {
     let name = name.trim();
     if name.is_empty()
         || name.contains("..")
@@ -1153,69 +1482,178 @@ fn git_branch_create_blocking(root: String, name: String, checkout: bool) -> Res
     {
         return Err("Pick a branch name without spaces.".into());
     }
+    let start = start
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(crate::git_ops::checked_ref)
+        .transpose()?;
     let root = crate::roots::require(&root)?;
-    if checkout {
-        git_ok(&root, &["checkout", "-b", name]).map(|_| ())
+    let mut args = if checkout {
+        vec!["checkout", "-b", name]
     } else {
-        git_ok(&root, &["branch", name]).map(|_| ())
-    }
+        vec!["branch", name]
+    };
+    args.extend(start);
+    git_ok(&root, &args).map(|_| ())
 }
 
 #[tauri::command]
-pub async fn git_branch_delete(root: String, name: String) -> Result<(), String> {
-    crate::blocking::run(move || git_branch_delete_blocking(root, name)).await
+pub async fn git_branch_delete(
+    root: String,
+    name: String,
+    force: Option<bool>,
+) -> Result<(), String> {
+    let force = force.unwrap_or(false);
+    crate::blocking::run(move || git_branch_delete_blocking(root, name, force)).await
 }
 
-fn git_branch_delete_blocking(root: String, name: String) -> Result<(), String> {
+fn git_branch_delete_blocking(root: String, name: String, force: bool) -> Result<(), String> {
     let name = name.trim();
     if name.is_empty() || name.contains("..") || name.starts_with('-') {
         return Err("That is not a branch name.".into());
     }
     let root = crate::roots::require(&root)?;
-    git_ok(&root, &["branch", "-d", name]).map(|_| ())
+    // `-D` only when asked: it drops commits no other branch has.
+    let flag = if force { "-D" } else { "-d" };
+    git_ok(&root, &["branch", flag, name]).map(|_| ())
 }
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct LogOptions {
+    /// Commits to step over, for paging.
+    pub skip: u32,
+    /// Every branch, remote and tag rather than just HEAD.
+    pub all: bool,
+    /// Only commits whose message contains this, ignoring case.
+    pub query: Option<String>,
+}
+
+/// One record per commit, fields split by NUL, records by RS.
+const LOG_FORMAT: &str = "--format=%H%x00%h%x00%an%x00%ae%x00%at%x00%P%x00%D%x00%s%x1e";
 
 #[tauri::command]
-pub async fn git_log(root: String, limit: u32) -> Result<Vec<GitCommit>, String> {
-    crate::blocking::run(move || git_log_blocking(root, limit)).await
+pub async fn git_log(
+    root: String,
+    limit: u32,
+    options: Option<LogOptions>,
+) -> Result<Vec<GitCommit>, String> {
+    let options = options.unwrap_or_default();
+    crate::blocking::run(move || git_log_blocking(root, limit, options)).await
 }
 
-fn git_log_blocking(root: String, limit: u32) -> Result<Vec<GitCommit>, String> {
+fn git_log_blocking(
+    root: String,
+    limit: u32,
+    options: LogOptions,
+) -> Result<Vec<GitCommit>, String> {
     let root = crate::roots::require(&root)?;
-    let n = limit.clamp(1, 100).to_string();
-    let raw = git_ok(
-        &root,
-        &[
-            "log",
-            &format!("-n{n}"),
-            "--format=%H%x00%h%x00%an%x00%at%x00%s",
-        ],
-    )?;
+    let count = format!("-n{}", limit.clamp(1, 5000));
+    let skip = format!("--skip={}", options.skip);
+    let mut args = vec![
+        "log",
+        "--date-order",
+        count.as_str(),
+        skip.as_str(),
+        LOG_FORMAT,
+    ];
+    // Not `--all`: that would walk the stash too and hang it off the graph.
+    if options.all {
+        args.extend(["--branches", "--remotes", "--tags", "HEAD"]);
+    }
+    let grep = options
+        .query
+        .as_deref()
+        .map(str::trim)
+        .filter(|q| !q.is_empty())
+        .map(|q| format!("--grep={q}"));
+    if let Some(grep) = grep.as_deref() {
+        args.extend(["-i", "-F", grep]);
+    }
+    let output = git(&root, &args)?;
+    if !output.status.success() {
+        let err = user_err(&output.stderr);
+        // A fresh repository has no history to show, which is not an error.
+        if err.contains("does not have any commits") || err.contains("unknown revision") {
+            return Ok(Vec::new());
+        }
+        return Err(if err.is_empty() {
+            "git log failed".into()
+        } else {
+            err
+        });
+    }
+    let raw = String::from_utf8_lossy(&output.stdout);
+    let unpushed = unpushed_commits(&root);
+    Ok(parse_log(&raw, &unpushed))
+}
+
+/// Commits on a local branch that no remote-tracking branch has yet. Empty
+/// when there is no remote at all, where "unpushed" would mean nothing.
+fn unpushed_commits(root: &Path) -> std::collections::HashSet<String> {
+    let has_remote = git_ok(root, &["remote"])
+        .map(|out| !out.trim().is_empty())
+        .unwrap_or(false);
+    if !has_remote {
+        return Default::default();
+    }
+    git_ok(
+        root,
+        &["rev-list", "-n1000", "--branches", "--not", "--remotes"],
+    )
+    .map(|out| out.lines().map(|line| line.trim().to_string()).collect())
+    .unwrap_or_default()
+}
+
+pub(crate) fn parse_log(raw: &str, unpushed: &std::collections::HashSet<String>) -> Vec<GitCommit> {
     let mut commits = Vec::new();
-    for line in raw.split('\n') {
-        let line = line.trim_end_matches('\r');
-        if line.is_empty() {
+    for record in raw.split('\u{1e}') {
+        let record = record.trim_matches(|c| c == '\n' || c == '\r');
+        if record.is_empty() {
             continue;
         }
-        let mut bits = line.split('\0');
+        let mut bits = record.split('\0');
         let hash = bits.next().unwrap_or("").to_string();
         let short = bits.next().unwrap_or("").to_string();
         let author = bits.next().unwrap_or("").to_string();
+        let email = bits.next().unwrap_or("").to_string();
         let timestamp = bits.next().unwrap_or("0").parse().unwrap_or(0);
+        let parents = bits
+            .next()
+            .unwrap_or("")
+            .split_whitespace()
+            .map(str::to_string)
+            .collect();
+        let refs = bits
+            .next()
+            .unwrap_or("")
+            .split(", ")
+            .map(str::trim)
+            // `origin/HEAD` only says which branch the remote calls its default.
+            .filter(|r| !r.is_empty() && !(r.ends_with("/HEAD") && !r.starts_with("tag: ")))
+            .map(str::to_string)
+            .collect();
         let subject = bits.next().unwrap_or("").to_string();
         if hash.is_empty() {
             continue;
         }
         commits.push(GitCommit {
+            unpushed: unpushed.contains(&hash),
             hash,
             short,
             author,
+            email,
             subject,
             timestamp,
+            parents,
+            refs,
         });
     }
-    Ok(commits)
+    commits
 }
+
+const PR_FIELDS: &str = "number,title,url,state,isDraft,author,headRefName,baseRefName,updatedAt,reviewDecision,statusCheckRollup,additions,deletions";
 
 #[derive(Debug, Deserialize)]
 struct GhPr {
@@ -1231,6 +1669,69 @@ struct GhPr {
     head_ref_name: String,
     #[serde(rename = "baseRefName", default)]
     base_ref_name: String,
+    #[serde(rename = "updatedAt", default)]
+    updated_at: Option<String>,
+    #[serde(rename = "reviewDecision", default)]
+    review_decision: Option<String>,
+    #[serde(rename = "statusCheckRollup", default)]
+    status_check_rollup: Option<Vec<serde_json::Value>>,
+    #[serde(default)]
+    additions: u32,
+    #[serde(default)]
+    deletions: u32,
+}
+
+impl From<GhPr> for PullRequest {
+    fn from(pr: GhPr) -> Self {
+        PullRequest {
+            number: pr.number,
+            title: pr.title,
+            url: pr.url,
+            state: pr.state,
+            draft: pr.is_draft,
+            author: pr.author.login,
+            head: pr.head_ref_name,
+            base: pr.base_ref_name,
+            updated_at: pr.updated_at.filter(|s| !s.is_empty()),
+            review: pr.review_decision.filter(|s| !s.is_empty()),
+            checks: pr.status_check_rollup.as_deref().and_then(summarize_checks),
+            additions: pr.additions,
+            deletions: pr.deletions,
+        }
+    }
+}
+
+/// Check runs report a status and a conclusion; commit statuses a state.
+pub(crate) fn summarize_checks(rollup: &[serde_json::Value]) -> Option<PrChecks> {
+    if rollup.is_empty() {
+        return None;
+    }
+    let mut checks = PrChecks::default();
+    for check in rollup {
+        let field = |name: &str| {
+            check
+                .get(name)
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .to_ascii_uppercase()
+        };
+        let (status, conclusion, state) = (field("status"), field("conclusion"), field("state"));
+        let verdict = if !state.is_empty() {
+            state
+        } else if status != "COMPLETED" {
+            "PENDING".into()
+        } else {
+            conclusion
+        };
+        match verdict.as_str() {
+            "SUCCESS" | "NEUTRAL" | "SKIPPED" => checks.passed += 1,
+            "PENDING" | "EXPECTED" | "QUEUED" | "IN_PROGRESS" | "WAITING" | "" => {
+                checks.pending += 1
+            }
+            _ => checks.failed += 1,
+        }
+    }
+    Some(checks)
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1256,14 +1757,7 @@ fn pr_list_blocking(root: String) -> Result<PrList, String> {
     let output = run_in(
         &root,
         "gh",
-        &[
-            "pr",
-            "list",
-            "--json",
-            "number,title,url,state,isDraft,author,headRefName,baseRefName",
-            "--limit",
-            "40",
-        ],
+        &["pr", "list", "--json", PR_FIELDS, "--limit", "40"],
     )?;
     if !output.status.success() {
         let err = user_err(&output.stderr);
@@ -1281,19 +1775,7 @@ fn pr_list_blocking(root: String) -> Result<PrList, String> {
         .map_err(|err| format!("Could not read pull requests: {err}"))?;
     Ok(PrList {
         available: true,
-        items: parsed
-            .into_iter()
-            .map(|pr| PullRequest {
-                number: pr.number,
-                title: pr.title,
-                url: pr.url,
-                state: pr.state,
-                draft: pr.is_draft,
-                author: pr.author.login,
-                head: pr.head_ref_name,
-                base: pr.base_ref_name,
-            })
-            .collect(),
+        items: parsed.into_iter().map(PullRequest::from).collect(),
         error: None,
     })
 }
@@ -1331,8 +1813,6 @@ fn pr_create_blocking(
         title.to_string(),
         "--body".into(),
         body,
-        "--json".into(),
-        "number,title,url,state,isDraft,author,headRefName,baseRefName".into(),
     ];
     if let Some(base) = base.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         args.push("--base".into());
@@ -1351,18 +1831,20 @@ fn pr_create_blocking(
             err
         });
     }
-    let pr: GhPr = serde_json::from_slice(&output.stdout)
+    // `gh pr create` has no `--json`; it prints the new pull request's URL.
+    let url = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .rfind(|line| line.starts_with("https://"))
+        .map(str::to_string)
+        .ok_or_else(|| "Opened the pull request, but gh did not say where.".to_string())?;
+    let viewed = run_in(&root, "gh", &["pr", "view", &url, "--json", PR_FIELDS])?;
+    if !viewed.status.success() {
+        return Err(format!("Opened {url}, but could not read it back."));
+    }
+    let pr: GhPr = serde_json::from_slice(&viewed.stdout)
         .map_err(|err| format!("Opened the pull request, but could not read it back: {err}"))?;
-    Ok(PullRequest {
-        number: pr.number,
-        title: pr.title,
-        url: pr.url,
-        state: pr.state,
-        draft: pr.is_draft,
-        author: pr.author.login,
-        head: pr.head_ref_name,
-        base: pr.base_ref_name,
-    })
+    Ok(pr.into())
 }
 
 #[tauri::command]
@@ -1483,6 +1965,59 @@ mod tests {
             redact_git_output("from https://alice:one@host/a and https://bob:two@host/b"),
             "from https://***@host/a and https://***@host/b"
         );
+    }
+
+    #[test]
+    fn numstat_reads_counts_renames_and_binaries() {
+        let raw = b"3\t1\tsrc/a.ts\x002\t0\t\x00old.ts\x00new.ts\x00-\t-\tlogo.png\x00";
+        let stats = parse_numstat(raw);
+        assert_eq!(stats.len(), 3);
+        assert_eq!(stats[0].0, "src/a.ts");
+        assert_eq!((stats[0].1.added, stats[0].1.removed), (3, 1));
+        assert_eq!(stats[1].0, "new.ts");
+        assert_eq!(stats[1].1.added, 2);
+        assert!(stats[2].1.binary);
+    }
+
+    #[test]
+    fn upstream_track_reads_ahead_behind_and_gone() {
+        assert_eq!(parse_track("[ahead 2, behind 3]"), (2, 3, false));
+        assert_eq!(parse_track("[behind 1]"), (0, 1, false));
+        assert_eq!(parse_track("[gone]"), (0, 0, true));
+        assert_eq!(parse_track(""), (0, 0, false));
+    }
+
+    #[test]
+    fn log_reads_parents_refs_and_pushed_state() {
+        let raw = "aaa\0a\0Ann\0ann@x\x00100\0bbb ccc\0HEAD -> main, origin/main, origin/HEAD, tag: v1\0Merge\x1e\nbbb\0b\0Bo\0bo@x\x0090\0\0\0First\x1e\n";
+        let unpushed = std::collections::HashSet::from(["aaa".to_string()]);
+        let commits = parse_log(raw, &unpushed);
+        assert_eq!(commits.len(), 2);
+        assert_eq!(commits[0].parents, vec!["bbb", "ccc"]);
+        assert_eq!(
+            commits[0].refs,
+            vec!["HEAD -> main", "origin/main", "tag: v1"]
+        );
+        assert!(commits[0].unpushed);
+        assert!(commits[1].parents.is_empty());
+        assert!(!commits[1].unpushed);
+        assert_eq!(commits[1].subject, "First");
+    }
+
+    #[test]
+    fn checks_sum_runs_and_statuses() {
+        let rollup: Vec<serde_json::Value> = serde_json::from_str(
+            r#"[
+                {"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"},
+                {"__typename":"CheckRun","status":"IN_PROGRESS","conclusion":""},
+                {"__typename":"CheckRun","status":"COMPLETED","conclusion":"FAILURE"},
+                {"__typename":"StatusContext","state":"SUCCESS"}
+            ]"#,
+        )
+        .unwrap();
+        let checks = summarize_checks(&rollup).unwrap();
+        assert_eq!((checks.passed, checks.failed, checks.pending), (2, 1, 1));
+        assert!(summarize_checks(&[]).is_none());
     }
 
     #[test]
