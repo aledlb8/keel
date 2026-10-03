@@ -473,7 +473,7 @@ export const TerminalSurface = memo(function TerminalSurface({
     const term = new Terminal({
       allowProposedApi: true,
       fontFamily: getComputedStyle(document.documentElement)
-        .getPropertyValue("--keel-font-mono")
+        .getPropertyValue("--keel-font-term")
         .trim(),
       fontSize: 13,
       // Exactly 1. Agent TUIs draw their boxes and bars out of line-drawing

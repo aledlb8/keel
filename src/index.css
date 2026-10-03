@@ -277,6 +277,10 @@
     --keel-font-mono: "JetBrainsMono Nerd Font", "JetBrains Mono Variable",
         "CaskaydiaCove Nerd Font", "Cascadia Mono", "Consolas", ui-monospace,
         monospace;
+    /* Terminals are set in Hack, the face the Alacritty setup uses, and fall
+     * back to the chrome's stack on a machine without it. */
+    --keel-font-term: "Hack Nerd Font", "Hack Nerd Font Mono", "Hack",
+        var(--keel-font-mono);
 
     /* ---- shadcn bridge -------------------------------------------------- */
     --background: var(--keel-void);
