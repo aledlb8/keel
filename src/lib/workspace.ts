@@ -109,6 +109,13 @@ export type GitFileStatus =
   | "conflict"
   | "typechange";
 
+/** Lines a change adds and removes. A binary file counts neither. */
+export interface LineStat {
+  added: number;
+  removed: number;
+  binary: boolean;
+}
+
 export interface GitFile {
   path: string;
   origPath: string | null;
@@ -117,7 +124,14 @@ export interface GitFile {
   unstaged: boolean;
   untracked: boolean;
   conflict: boolean;
+  /** The working tree against the index, or the whole file when untracked. */
+  stat?: LineStat | null | undefined;
+  /** The index against HEAD. */
+  stagedStat?: LineStat | null | undefined;
 }
+
+/** Something that stopped halfway and is waiting to be finished or abandoned. */
+export type GitOperation = "merge" | "rebase" | "cherry-pick" | "revert";
 
 export interface GitStatus {
   git: boolean;
@@ -128,6 +142,14 @@ export interface GitStatus {
   ahead: number;
   behind: number;
   files: GitFile[];
+  /** HEAD's short hash; null before the first commit. */
+  head?: string | null | undefined;
+  operation?: GitOperation | null | undefined;
+  stashes?: number | undefined;
+  /** Unix seconds. */
+  lastFetch?: number | null | undefined;
+  /** There is somewhere to push to and pull from. */
+  hasRemote?: boolean | undefined;
 }
 
 export interface DiffLine {
@@ -157,6 +179,13 @@ export interface GitBranch {
   current: boolean;
   remote: boolean;
   upstream: string | null;
+  /** Its upstream was deleted on the remote. */
+  gone: boolean;
+  ahead: number;
+  behind: number;
+  /** The tip's committer date, unix seconds. */
+  timestamp: number;
+  subject: string;
 }
 
 export interface GitBranches {
@@ -169,8 +198,63 @@ export interface GitCommit {
   hash: string;
   short: string;
   author: string;
+  email: string;
   subject: string;
   timestamp: number;
+  parents: string[];
+  /** As `git log` decorates: `HEAD -> main`, `origin/main`, `tag: v1`. */
+  refs: string[];
+  /** On no remote-tracking branch yet. */
+  unpushed: boolean;
+}
+
+export interface CommitFile {
+  path: string;
+  origPath: string | null;
+  status: GitFileStatus;
+  stat: LineStat | null;
+}
+
+export interface CommitDetails {
+  hash: string;
+  short: string;
+  author: string;
+  email: string;
+  timestamp: number;
+  committer: string;
+  commitTimestamp: number;
+  subject: string;
+  body: string;
+  parents: string[];
+  files: CommitFile[];
+  truncated: boolean;
+}
+
+export interface GitStash {
+  index: number;
+  hash: string;
+  message: string;
+  branch: string | null;
+  timestamp: number;
+}
+
+export interface GitTag {
+  name: string;
+  hash: string;
+  annotated: boolean;
+  subject: string;
+  timestamp: number;
+}
+
+export interface GitRemote {
+  name: string;
+  url: string;
+}
+
+export interface PrChecks {
+  passed: number;
+  failed: number;
+  pending: number;
 }
 
 export interface PullRequest {
@@ -182,6 +266,11 @@ export interface PullRequest {
   author: string;
   head: string;
   base: string;
+  updatedAt?: string | null | undefined;
+  review?: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null | undefined;
+  checks?: PrChecks | null | undefined;
+  additions?: number | undefined;
+  deletions?: number | undefined;
 }
 
 export interface PrList {
@@ -223,16 +312,28 @@ export function gitDiscard(root: string, paths: string[]): Promise<void> {
   return invoke("git_discard", { root, paths });
 }
 
-export function gitCommit(root: string, message: string): Promise<string> {
-  return invoke("git_commit", { root, message });
+export interface CommitOptions {
+  amend: boolean;
+  signoff: boolean;
+  noVerify: boolean;
 }
 
-export function gitPush(root: string, setUpstream = false): Promise<string> {
-  return invoke("git_push", { root, setUpstream });
+export function gitCommit(
+  root: string,
+  message: string,
+  options?: CommitOptions,
+): Promise<string> {
+  return invoke("git_commit", { root, message, options: options ?? null });
 }
 
-export function gitPull(root: string): Promise<string> {
-  return invoke("git_pull", { root });
+export function gitPush(root: string, setUpstream = false, force = false): Promise<string> {
+  return invoke("git_push", { root, setUpstream, force });
+}
+
+export type PullMode = "ff-only" | "rebase" | "merge";
+
+export function gitPull(root: string, mode: PullMode = "ff-only"): Promise<string> {
+  return invoke("git_pull", { root, mode });
 }
 
 export function gitFetch(root: string): Promise<string> {
@@ -247,20 +348,165 @@ export function gitCheckout(root: string, name: string): Promise<void> {
   return invoke("git_checkout", { root, name });
 }
 
+export function gitCheckoutRemote(root: string, name: string): Promise<string> {
+  return invoke("git_checkout_remote", { root, name });
+}
+
+export function gitCheckoutRev(root: string, rev: string): Promise<string> {
+  return invoke("git_checkout_rev", { root, rev });
+}
+
+export function gitBranchRename(root: string, from: string, to: string): Promise<string> {
+  return invoke("git_branch_rename", { root, from, to });
+}
+
+export function gitBranchDeleteRemote(root: string, name: string): Promise<string> {
+  return invoke("git_branch_delete_remote", { root, name });
+}
+
+export type MergeMode = "default" | "no-ff" | "ff-only" | "squash";
+
+export function gitMerge(root: string, name: string, mode: MergeMode = "default"): Promise<string> {
+  return invoke("git_merge", { root, name, mode });
+}
+
+export function gitRebase(root: string, onto: string): Promise<string> {
+  return invoke("git_rebase", { root, onto });
+}
+
+export function gitCherryPick(root: string, rev: string): Promise<string> {
+  return invoke("git_cherry_pick", { root, rev });
+}
+
+export function gitRevert(root: string, rev: string): Promise<string> {
+  return invoke("git_revert", { root, rev });
+}
+
+export type ResetMode = "soft" | "mixed" | "hard";
+
+export function gitReset(root: string, rev: string, mode: ResetMode): Promise<string> {
+  return invoke("git_reset", { root, rev, mode });
+}
+
+export type OperationAction = "continue" | "abort" | "skip";
+
+export function gitOperation(root: string, action: OperationAction): Promise<string> {
+  return invoke("git_operation", { root, action });
+}
+
+export function gitResolve(
+  root: string,
+  paths: string[],
+  side: "ours" | "theirs",
+): Promise<void> {
+  return invoke("git_resolve", { root, paths, side });
+}
+
+export function gitIgnore(root: string, pattern: string): Promise<void> {
+  return invoke("git_ignore", { root, pattern });
+}
+
+export function gitHeadMessage(root: string): Promise<string> {
+  return invoke("git_head_message", { root });
+}
+
+/** Take back the last commit, keeping its changes. Resolves to its message. */
+export function gitUndoCommit(root: string): Promise<string> {
+  return invoke("git_undo_commit", { root });
+}
+
+export function gitCommitDetails(root: string, rev: string): Promise<CommitDetails> {
+  return invoke("git_commit_details", { root, rev });
+}
+
+export function gitDiffRev(
+  root: string,
+  rev: string,
+  path: string,
+  origPath: string | null = null,
+): Promise<GitDiff> {
+  return invoke("git_diff_rev", { root, rev, path, origPath });
+}
+
+export function gitStashList(root: string): Promise<GitStash[]> {
+  return invoke("git_stash_list", { root });
+}
+
+export function gitStashPush(
+  root: string,
+  args: { message?: string | null; includeUntracked: boolean; paths?: string[] | null },
+): Promise<string> {
+  return invoke("git_stash_push", {
+    root,
+    message: args.message ?? null,
+    includeUntracked: args.includeUntracked,
+    paths: args.paths ?? null,
+  });
+}
+
+export function gitStashApply(root: string, stash: GitStash, pop: boolean): Promise<string> {
+  return invoke("git_stash_apply", { root, index: stash.index, hash: stash.hash, pop });
+}
+
+export function gitStashDrop(root: string, stash: GitStash): Promise<string> {
+  return invoke("git_stash_drop", { root, index: stash.index, hash: stash.hash });
+}
+
+export function gitTags(root: string): Promise<GitTag[]> {
+  return invoke("git_tags", { root });
+}
+
+export function gitTagCreate(
+  root: string,
+  name: string,
+  rev: string,
+  message: string | null = null,
+): Promise<string> {
+  return invoke("git_tag_create", { root, name, rev, message });
+}
+
+export function gitTagDelete(root: string, name: string): Promise<string> {
+  return invoke("git_tag_delete", { root, name });
+}
+
+export function gitTagPush(root: string, name: string): Promise<string> {
+  return invoke("git_tag_push", { root, name });
+}
+
+export function gitInit(root: string): Promise<void> {
+  return invoke("git_init", { root });
+}
+
+export function gitRemotes(root: string): Promise<GitRemote[]> {
+  return invoke("git_remotes", { root });
+}
+
 export function gitBranchCreate(
   root: string,
   name: string,
   checkout: boolean,
+  start: string | null = null,
 ): Promise<void> {
-  return invoke("git_branch_create", { root, name, checkout });
+  return invoke("git_branch_create", { root, name, checkout, start });
 }
 
-export function gitBranchDelete(root: string, name: string): Promise<void> {
-  return invoke("git_branch_delete", { root, name });
+export function gitBranchDelete(root: string, name: string, force = false): Promise<void> {
+  return invoke("git_branch_delete", { root, name, force });
 }
 
-export function gitLog(root: string, limit = 30): Promise<GitCommit[]> {
-  return invoke("git_log", { root, limit });
+export interface LogOptions {
+  skip?: number;
+  /** Every branch, remote and tag rather than just HEAD. */
+  all?: boolean;
+  query?: string | null;
+}
+
+export function gitLog(root: string, limit = 30, options: LogOptions = {}): Promise<GitCommit[]> {
+  return invoke("git_log", {
+    root,
+    limit,
+    options: { skip: options.skip ?? 0, all: options.all ?? false, query: options.query ?? null },
+  });
 }
 
 export function prList(root: string): Promise<PrList> {

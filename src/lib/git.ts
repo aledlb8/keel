@@ -193,3 +193,127 @@ export function relativeTime(seconds: number, now = Date.now()): string {
   if (days < 365) return `${Math.floor(days / 30)}mo ago`;
   return `${Math.floor(days / 365)}y ago`;
 }
+
+// ---- Change tree ------------------------------------------------------------
+
+export interface ChangeFolder {
+  kind: "folder";
+  /** Full relative path of the deepest folder this row stands for. */
+  path: string;
+  /** What the row shows: one folder, or a chain of single-child folders. */
+  name: string;
+  children: ChangeNode[];
+  /** Every file anywhere below, for acting on the folder as a whole. */
+  files: GitFile[];
+}
+
+export interface ChangeLeaf {
+  kind: "file";
+  file: GitFile;
+}
+
+export type ChangeNode = ChangeFolder | ChangeLeaf;
+
+/**
+ * Changes as folders. A folder holding nothing but one other folder folds into
+ * it — `src/lib` rather than `src` › `lib` — so a deep change is one row deep.
+ */
+export function buildChangeTree(files: GitFile[]): ChangeNode[] {
+  interface Draft {
+    folders: Map<string, Draft>;
+    files: GitFile[];
+    all: GitFile[];
+  }
+  const root: Draft = { folders: new Map(), files: [], all: [] };
+  for (const file of files) {
+    const parts = file.path.split("/");
+    parts.pop();
+    let node = root;
+    node.all.push(file);
+    for (const part of parts) {
+      let next = node.folders.get(part);
+      if (!next) {
+        next = { folders: new Map(), files: [], all: [] };
+        node.folders.set(part, next);
+      }
+      next.all.push(file);
+      node = next;
+    }
+    node.files.push(file);
+  }
+
+  const build = (draft: Draft, prefix: string): ChangeNode[] => {
+    const folders = [...draft.folders.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([part, child]): ChangeFolder => {
+        let name = part;
+        let path = prefix ? `${prefix}/${part}` : part;
+        let node = child;
+        while (node.files.length === 0 && node.folders.size === 1) {
+          const [[nextPart, next]] = [...node.folders.entries()] as [[string, Draft]];
+          name = `${name}/${nextPart}`;
+          path = `${path}/${nextPart}`;
+          node = next;
+        }
+        return { kind: "folder", path, name, children: build(node, path), files: node.all };
+      });
+    const leaves = [...draft.files]
+      .sort((a, b) => fileName(a.path).localeCompare(fileName(b.path)))
+      .map((file): ChangeLeaf => ({ kind: "file", file }));
+    return [...folders, ...leaves];
+  };
+  return build(root, "");
+}
+
+// ---- Refs and remotes -------------------------------------------------------
+
+export interface RefLabel {
+  kind: "head" | "branch" | "remote" | "tag";
+  name: string;
+  /** The branch HEAD is on. */
+  current: boolean;
+}
+
+/**
+ * A `git log` decoration as a label. Whether `a/b` is a remote branch or a
+ * local one with a slash in its name depends on the remotes that exist.
+ */
+export function parseRef(ref: string, remotes: string[] = ["origin"]): RefLabel {
+  if (ref === "HEAD") return { kind: "head", name: "HEAD", current: true };
+  if (ref.startsWith("HEAD -> ")) {
+    return { kind: "branch", name: ref.slice("HEAD -> ".length), current: true };
+  }
+  if (ref.startsWith("tag: ")) return { kind: "tag", name: ref.slice(5), current: false };
+  const remote = remotes.some((name) => ref.startsWith(`${name}/`));
+  return { kind: remote ? "remote" : "branch", name: ref, current: false };
+}
+
+/** The browsable page of a remote, for GitHub, GitLab and the like. */
+export function remoteWebUrl(url: string): string | null {
+  const trimmed = url.trim().replace(/\.git$/, "").replace(/\/$/, "");
+  // git@github.com:owner/repo
+  const scp = /^[\w.-]+@([\w.-]+):(.+)$/.exec(trimmed);
+  if (scp) return `https://${scp[1]}/${scp[2]}`;
+  const parsed = /^(?:https?|ssh|git):\/\/(?:[^@/]+@)?([^/:]+)(?::\d+)?\/(.+)$/.exec(trimmed);
+  if (parsed) return `https://${parsed[1]}/${parsed[2]}`;
+  return null;
+}
+
+/** "feat(ui): x" → "feat"; anything else → null. */
+export function conventionalType(subject: string): string | null {
+  const match = /^([a-z]+)(\([^)]*\))?!?:\s/.exec(subject);
+  return match?.[1] ?? null;
+}
+
+/** First line, and how far over git's 50- and 72-column habits it runs. */
+export function subjectLength(message: string): { length: number; level: "ok" | "long" | "over" } {
+  const length = (message.split("\n")[0] ?? "").length;
+  return { length, level: length > 72 ? "over" : length > 50 ? "long" : "ok" };
+}
+
+/** A hue that stays the same for the same name, for an author's monogram. */
+export function nameHue(name: string): number {
+  let hash = 0;
+  for (const char of name) hash = (hash * 31 + char.charCodeAt(0)) | 0;
+  return Math.abs(hash) % 360;
+}

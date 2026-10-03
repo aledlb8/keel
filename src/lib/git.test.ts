@@ -3,6 +3,8 @@ import { describe, it } from "node:test";
 
 import {
   aheadBehind,
+  buildChangeTree,
+  conventionalType,
   diffStats,
   fileName,
   folderStatuses,
@@ -11,9 +13,12 @@ import {
   gitStatusLabel,
   groupGitFiles,
   joinRel,
+  parseRef,
   parentRel,
   relativeTime,
+  remoteWebUrl,
   splitHunkHeader,
+  subjectLength,
 } from "./git.ts";
 import type { GitFile } from "./workspace.ts";
 
@@ -162,5 +167,62 @@ describe("relativeTime", () => {
 
   it("never goes negative for a clock slightly ahead", () => {
     assert.equal(relativeTime(ago(-30), now), "just now");
+  });
+});
+
+describe("buildChangeTree", () => {
+  it("folds single-child folders and lists folders before files", () => {
+    const tree = buildChangeTree([
+      file({ path: "src/lib/deep/a.ts" }),
+      file({ path: "src/lib/deep/b.ts" }),
+      file({ path: "README.md" }),
+      file({ path: "src/App.tsx" }),
+    ]);
+    assert.equal(tree.length, 2);
+    const src = tree[0];
+    assert.ok(src?.kind === "folder");
+    assert.equal(src.name, "src");
+    assert.equal(src.files.length, 3);
+    const deep = src.children[0];
+    assert.ok(deep?.kind === "folder");
+    assert.equal(deep.name, "lib/deep");
+    assert.equal(deep.path, "src/lib/deep");
+    assert.equal(src.children[1]?.kind, "file");
+    assert.equal(tree[1]?.kind, "file");
+  });
+});
+
+describe("parseRef", () => {
+  it("tells the current branch, tags and remote branches apart", () => {
+    assert.deepEqual(parseRef("HEAD -> main"), { kind: "branch", name: "main", current: true });
+    assert.equal(parseRef("tag: v1.0").kind, "tag");
+    assert.equal(parseRef("origin/main").kind, "remote");
+    assert.equal(parseRef("feature/login").kind, "branch");
+    assert.equal(parseRef("HEAD").kind, "head");
+  });
+});
+
+describe("remoteWebUrl", () => {
+  it("turns ssh and https remotes into a page", () => {
+    assert.equal(remoteWebUrl("git@github.com:o/r.git"), "https://github.com/o/r");
+    assert.equal(remoteWebUrl("https://github.com/o/r.git"), "https://github.com/o/r");
+    assert.equal(remoteWebUrl("ssh://git@gitlab.com:22/g/r.git"), "https://gitlab.com/g/r");
+    assert.equal(remoteWebUrl("/local/path"), null);
+  });
+});
+
+describe("subjectLength", () => {
+  it("grades the first line against 50 and 72 columns", () => {
+    assert.equal(subjectLength("short").level, "ok");
+    assert.equal(subjectLength("x".repeat(60)).level, "long");
+    assert.equal(subjectLength(`${"x".repeat(80)}\nbody`).level, "over");
+  });
+});
+
+describe("conventionalType", () => {
+  it("reads the type of a conventional subject", () => {
+    assert.equal(conventionalType("feat(ui): draw logos"), "feat");
+    assert.equal(conventionalType("fix!: breaking"), "fix");
+    assert.equal(conventionalType("Update readme"), null);
   });
 });
