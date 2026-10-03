@@ -111,6 +111,7 @@ pub fn run() {
             git_ops::git_ignore,
             git_ops::git_remotes,
             git_ops::git_init,
+            git_ops::git_apply_lines,
             usage::usage_fetch,
             vpn::vpn_snapshot,
             vpn::vpn_connect,

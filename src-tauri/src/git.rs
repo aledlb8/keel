@@ -901,14 +901,31 @@ fn not_a_git_repository(output: &Output) -> bool {
 }
 
 #[tauri::command]
-pub async fn git_diff(root: String, path: String, staged: bool) -> Result<GitDiff, String> {
-    crate::blocking::run(move || git_diff_blocking(root, path, staged)).await
+pub async fn git_diff(
+    root: String,
+    path: String,
+    staged: bool,
+    context: Option<u32>,
+) -> Result<GitDiff, String> {
+    crate::blocking::run(move || git_diff_blocking(root, path, staged, context)).await
 }
 
-fn git_diff_blocking(root: String, path: String, staged: bool) -> Result<GitDiff, String> {
+/// `--unified=N` for a number of context lines, capped so "the whole file"
+/// stays one argument git accepts.
+pub(crate) fn unified_arg(context: Option<u32>) -> String {
+    format!("--unified={}", context.unwrap_or(3).min(1_000_000))
+}
+
+fn git_diff_blocking(
+    root: String,
+    path: String,
+    staged: bool,
+    context: Option<u32>,
+) -> Result<GitDiff, String> {
     let root = crate::roots::require(&root)?;
     let rel = rel_arg(&root, &path)?;
-    let mut args = vec!["diff", "--no-color", "--unified=3"];
+    let unified = unified_arg(context);
+    let mut args = vec!["diff", "--no-color", "--no-ext-diff", unified.as_str()];
     if staged {
         args.push("--cached");
     }
@@ -2072,6 +2089,7 @@ mod tests {
             scratch.0.to_string_lossy().into_owned(),
             "huge.txt".into(),
             false,
+            None,
         )
         .expect("diff");
         assert!(via_cmd.binary);

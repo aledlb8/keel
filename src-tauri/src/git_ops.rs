@@ -10,12 +10,12 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::git::{
     apply_git_env, default_remote, git, git_dirs, git_ok, hide_window, parse_diff, parse_numstat,
-    rel_arg, rels, repo_operation, user_err, valid_remote_name, wait_output_timeout, GitDiff,
-    LineStat, GIT_REMOTE_TIMEOUT, GIT_TIMEOUT,
+    rel_arg, rels, repo_operation, unified_arg, user_err, valid_remote_name, wait_output_timeout,
+    GitDiff, LineStat, GIT_REMOTE_TIMEOUT, GIT_TIMEOUT,
 };
 
 const MAX_COMMIT_FILES: usize = 1000;
@@ -305,8 +305,9 @@ pub async fn git_diff_rev(
     rev: String,
     path: String,
     orig_path: Option<String>,
+    context: Option<u32>,
 ) -> Result<GitDiff, String> {
-    crate::blocking::run(move || git_diff_rev_blocking(root, rev, path, orig_path)).await
+    crate::blocking::run(move || git_diff_rev_blocking(root, rev, path, orig_path, context)).await
 }
 
 fn git_diff_rev_blocking(
@@ -314,6 +315,7 @@ fn git_diff_rev_blocking(
     rev: String,
     path: String,
     orig_path: Option<String>,
+    context: Option<u32>,
 ) -> Result<GitDiff, String> {
     let rev = checked_rev(&rev)?;
     let root = crate::roots::require(&root)?;
@@ -329,7 +331,8 @@ fn git_diff_rev_blocking(
     let mut args = diff_tree_args(parent.as_deref(), rev);
     // `-z` is for listings; a patch is read line by line.
     args.retain(|arg| *arg != "-z");
-    args.extend(["-p", "--unified=3", "--"]);
+    let unified = unified_arg(context);
+    args.extend(["-p", unified.as_str(), "--"]);
     // Both names, so the rename is still found inside the narrowed diff.
     if let Some(orig) = orig.as_deref() {
         args.push(orig);
@@ -826,6 +829,290 @@ fn git_operation_blocking(root: String, action: String) -> Result<String, String
     Ok(format!("{done} the {op}"))
 }
 
+// ---- Staging part of a file ---------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LineSelection {
+    /// Which hunk, in the order the diff lists them.
+    pub hunk: u32,
+    /// Which of its lines, counted the way the diff view counts them; the
+    /// whole hunk when absent.
+    pub lines: Option<Vec<u32>>,
+}
+
+/// A line of a hunk's body, as the diff view numbers them: a context, added
+/// or removed line, or git's "no newline" note. Anything else is skipped, the
+/// same way `parse_diff` skips it.
+fn is_body_line(line: &str) -> bool {
+    let bare = line.trim_end_matches('\r');
+    bare.starts_with(['+', '-', ' ']) || bare == "\\ No newline at end of file"
+}
+
+struct RawHunk<'a> {
+    header: &'a str,
+    old_start: u32,
+    new_start: u32,
+    body: Vec<&'a str>,
+}
+
+/// Split `git diff` output into its file header and hunks, keeping every
+/// byte of every line — a CRLF file's `\r` included — so a patch built from
+/// it applies exactly.
+fn split_raw_diff(raw: &str) -> (Vec<&str>, Vec<RawHunk<'_>>) {
+    let mut header = Vec::new();
+    let mut hunks: Vec<RawHunk> = Vec::new();
+    let mut lines: Vec<&str> = raw.split('\n').collect();
+    if lines.last() == Some(&"") {
+        lines.pop();
+    }
+    for line in lines {
+        if line.starts_with("@@ ") {
+            let bare = line.trim_end_matches('\r');
+            let mut old_start = 0;
+            let mut new_start = 0;
+            for token in bare.split_whitespace().skip(1) {
+                if let Some(spec) = token.strip_prefix('-') {
+                    old_start = spec
+                        .split(',')
+                        .next()
+                        .and_then(|n| n.parse().ok())
+                        .unwrap_or(0);
+                } else if let Some(spec) = token.strip_prefix('+') {
+                    new_start = spec
+                        .split(',')
+                        .next()
+                        .and_then(|n| n.parse().ok())
+                        .unwrap_or(0);
+                    break;
+                }
+            }
+            hunks.push(RawHunk {
+                header: bare,
+                old_start,
+                new_start,
+                body: Vec::new(),
+            });
+        } else if let Some(hunk) = hunks.last_mut() {
+            if is_body_line(line) {
+                hunk.body.push(line);
+            }
+        } else {
+            header.push(line);
+        }
+    }
+    (header, hunks)
+}
+
+/// A patch holding only the chosen lines.
+///
+/// Applied forwards (staging), an unchosen addition never happened and an
+/// unchosen removal is still there, so it becomes context. Applied in
+/// reverse (unstaging, discarding) the roles swap: an unchosen addition stays
+/// as context and an unchosen removal drops out. Either way the side git
+/// matches against is untouched, so the hunk's start line still holds.
+pub(crate) fn build_partial_patch(
+    raw: &str,
+    selection: &[LineSelection],
+    expected: &[String],
+    forward: bool,
+) -> Result<String, String> {
+    let (header, hunks) = split_raw_diff(raw);
+    let stale = hunks.len() != expected.len()
+        || hunks
+            .iter()
+            .zip(expected)
+            .any(|(hunk, header)| hunk.header != header.trim_end());
+    if stale {
+        return Err("The file changed since this diff was drawn. Look again and retry.".into());
+    }
+    let mut patch = String::new();
+    for line in &header {
+        patch.push_str(line);
+        patch.push('\n');
+    }
+    let mut changed = false;
+    for choice in selection {
+        let Some(hunk) = hunks.get(choice.hunk as usize) else {
+            return Err("That part of the diff is gone. Look again and retry.".into());
+        };
+        let mut body = Vec::new();
+        let (mut old_count, mut new_count) = (0u32, 0u32);
+        let mut kept_last = false;
+        let mut has_change = false;
+        for (index, line) in hunk.body.iter().enumerate() {
+            let chosen = choice
+                .lines
+                .as_ref()
+                .is_none_or(|lines| lines.contains(&(index as u32)));
+            let (kind, rest) = line.split_at(1);
+            let emitted = match kind {
+                " " => Some(format!(" {rest}")),
+                "+" if chosen => Some(format!("+{rest}")),
+                "-" if chosen => Some(format!("-{rest}")),
+                "+" if forward => None,
+                "+" => Some(format!(" {rest}")),
+                "-" if forward => Some(format!(" {rest}")),
+                "-" => None,
+                // The "no newline" note belongs to the line before it.
+                _ => kept_last.then(|| (*line).to_string()),
+            };
+            if let Some(text) = emitted {
+                match text.as_bytes().first() {
+                    Some(b' ') => {
+                        old_count += 1;
+                        new_count += 1;
+                    }
+                    Some(b'+') => {
+                        new_count += 1;
+                        has_change = true;
+                    }
+                    Some(b'-') => {
+                        old_count += 1;
+                        has_change = true;
+                    }
+                    _ => {}
+                }
+                kept_last = true;
+                body.push(text);
+            } else if kind != "\\" {
+                kept_last = false;
+            }
+        }
+        if !has_change {
+            continue;
+        }
+        changed = true;
+        patch.push_str(&format!(
+            "@@ -{},{old_count} +{},{new_count} @@\n",
+            hunk.old_start, hunk.new_start
+        ));
+        for line in body {
+            patch.push_str(&line);
+            patch.push('\n');
+        }
+    }
+    if !changed {
+        return Err("Pick at least one changed line.".into());
+    }
+    Ok(patch)
+}
+
+/// Stage, unstage or discard chosen hunks or lines of one file.
+#[tauri::command]
+pub async fn git_apply_lines(
+    root: String,
+    path: String,
+    action: String,
+    selection: Vec<LineSelection>,
+    headers: Vec<String>,
+    context: Option<u32>,
+) -> Result<String, String> {
+    crate::blocking::run(move || {
+        git_apply_lines_blocking(root, path, action, selection, headers, context)
+    })
+    .await
+}
+
+fn git_apply_lines_blocking(
+    root: String,
+    path: String,
+    action: String,
+    selection: Vec<LineSelection>,
+    headers: Vec<String>,
+    context: Option<u32>,
+) -> Result<String, String> {
+    let root = crate::roots::require(&root)?;
+    let rel = rel_arg(&root, &path)?;
+    // Which diff the lines were picked from, and how the patch goes back in.
+    let (cached_source, apply): (bool, &[&str]) = match action.as_str() {
+        "stage" => (
+            false,
+            &["apply", "--cached", "--recount", "--whitespace=nowarn", "-"],
+        ),
+        "unstage" => (
+            true,
+            &[
+                "apply",
+                "--cached",
+                "--reverse",
+                "--recount",
+                "--whitespace=nowarn",
+                "-",
+            ],
+        ),
+        "discard" => (
+            false,
+            &[
+                "apply",
+                "--reverse",
+                "--recount",
+                "--whitespace=nowarn",
+                "-",
+            ],
+        ),
+        other => return Err(format!("Unknown action: {other}")),
+    };
+    // The same context the diff was drawn with, so its hunks line up.
+    let unified = unified_arg(context);
+    let mut diff_args = vec!["diff", "--no-color", "--no-ext-diff", unified.as_str()];
+    if cached_source {
+        diff_args.push("--cached");
+    }
+    diff_args.extend(["--", rel.as_str()]);
+    let output = git(&root, &diff_args)?;
+    if !output.status.success() {
+        return Err(user_err(&output.stderr));
+    }
+    let raw = String::from_utf8(output.stdout)
+        .map_err(|_| "Only part of a UTF-8 text file can be staged.".to_string())?;
+    if raw.contains("Binary files ") || raw.contains("GIT binary patch") {
+        return Err("A binary file can only be staged whole.".into());
+    }
+    let patch = build_partial_patch(&raw, &selection, &headers, action == "stage")?;
+    run_git_stdin(&root, apply, &patch)?;
+    Ok(match action.as_str() {
+        "stage" => "Staged".into(),
+        "unstage" => "Unstaged".into(),
+        _ => "Discarded".into(),
+    })
+}
+
+/// Run git with `input` on its stdin.
+fn run_git_stdin(root: &Path, args: &[&str], input: &str) -> Result<String, String> {
+    let mut cmd = Command::new("git");
+    cmd.args(args)
+        .current_dir(root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    apply_git_env(&mut cmd);
+    hide_window(&mut cmd);
+    let mut child = cmd
+        .spawn()
+        .map_err(|err| format!("Could not run git: {err}"))?;
+    {
+        use std::io::Write;
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "git did not accept the patch.".to_string())?;
+        stdin
+            .write_all(input.as_bytes())
+            .map_err(|err| err.to_string())?;
+    }
+    let output = wait_output_timeout(child, GIT_TIMEOUT, "git")?;
+    if output.status.success() {
+        return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
+    }
+    let err = user_err(&output.stderr);
+    Err(if err.is_empty() {
+        "git apply failed".into()
+    } else {
+        err
+    })
+}
+
 // ---- Conflicts and ignores ------------------------------------------------
 
 /// Settle conflicts by taking one side whole, and mark them resolved.
@@ -991,6 +1278,131 @@ mod tests {
         assert_eq!(remotes.len(), 2);
         assert_eq!(remotes[0].url, "https://github.com/o/r.git");
         assert_eq!(remotes[1].url, "git@github.com:o/r.git");
+    }
+
+    const RAW: &str = "diff --git a/f.txt b/f.txt\r\nindex 1..2 100644\n--- a/f.txt\n+++ b/f.txt\n@@ -1,4 +1,4 @@ fn x\n keep\r\n-old one\r\n-old two\r\n+new one\r\n+new two\r\n keep\r\n";
+
+    fn header() -> Vec<String> {
+        vec!["@@ -1,4 +1,4 @@ fn x".to_string()]
+    }
+
+    #[test]
+    fn staging_some_lines_turns_the_rest_into_context() {
+        let patch = build_partial_patch(
+            RAW,
+            &[LineSelection {
+                hunk: 0,
+                lines: Some(vec![1, 3]),
+            }],
+            &header(),
+            true,
+        )
+        .unwrap();
+        // Forwards: the unchosen removal stays as context, the unchosen
+        // addition never happened; every `\r` survives.
+        assert!(patch
+            .ends_with("@@ -1,4 +1,4 @@\n keep\r\n-old one\r\n old two\r\n+new one\r\n keep\r\n"));
+    }
+
+    #[test]
+    fn unstaging_some_lines_keeps_unchosen_additions_as_context() {
+        let patch = build_partial_patch(
+            RAW,
+            &[LineSelection {
+                hunk: 0,
+                lines: Some(vec![1, 3]),
+            }],
+            &header(),
+            false,
+        )
+        .unwrap();
+        assert!(patch
+            .ends_with("@@ -1,4 +1,4 @@\n keep\r\n-old one\r\n+new one\r\n new two\r\n keep\r\n"));
+    }
+
+    #[test]
+    fn a_stale_diff_is_refused() {
+        let err = build_partial_patch(
+            RAW,
+            &[LineSelection {
+                hunk: 0,
+                lines: None,
+            }],
+            &["@@ -9,9 +9,9 @@".to_string()],
+            true,
+        )
+        .unwrap_err();
+        assert!(err.contains("changed"));
+    }
+
+    #[test]
+    fn picking_only_context_is_refused() {
+        let err = build_partial_patch(
+            RAW,
+            &[LineSelection {
+                hunk: 0,
+                lines: Some(vec![0]),
+            }],
+            &header(),
+            true,
+        )
+        .unwrap_err();
+        assert!(err.contains("changed line"));
+    }
+
+    #[test]
+    fn staging_part_of_a_real_file_works_end_to_end() {
+        let dir = std::env::temp_dir().join(format!(
+            "keel-partial-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let run = |args: &[&str]| {
+            let out = git(&dir, args).unwrap();
+            assert!(
+                out.status.success(),
+                "{:?}: {}",
+                args,
+                user_err(&out.stderr)
+            );
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+        run(&["init", "-q"]);
+        run(&["config", "user.email", "t@example.com"]);
+        run(&["config", "user.name", "T"]);
+        run(&["config", "core.autocrlf", "false"]);
+        std::fs::write(dir.join("f.txt"), "a\r\nb\r\nc\r\n").unwrap();
+        run(&["add", "f.txt"]);
+        run(&["commit", "-qm", "first"]);
+        std::fs::write(dir.join("f.txt"), "a\r\nB\r\nc\r\nd\r\n").unwrap();
+        crate::roots::register(&dir).unwrap();
+        let root = dir.to_string_lossy().into_owned();
+        let diff = run(&["diff", "--no-color", "--unified=3", "--", "f.txt"]);
+        let headers: Vec<String> = diff
+            .lines()
+            .filter(|line| line.starts_with("@@ "))
+            .map(|line| line.trim_end().to_string())
+            .collect();
+        // Body: " a", "-b", "+B", " c", "+d" — stage only the new last line.
+        git_apply_lines_blocking(
+            root.clone(),
+            "f.txt".into(),
+            "stage".into(),
+            vec![LineSelection {
+                hunk: 0,
+                lines: Some(vec![4]),
+            }],
+            headers,
+            None,
+        )
+        .unwrap();
+        let staged = run(&["show", ":f.txt"]);
+        assert_eq!(staged, "a\r\nb\r\nc\r\nd\r\n");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
