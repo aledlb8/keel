@@ -8,7 +8,8 @@
  * shows is saved; the text is read from disk when it next comes on screen.
  *
  * The header is its tabs and, like a terminal's strip, the handle you drag it
- * by. The body is the tab on screen: a CodeMirror surface, or a diff.
+ * by. The body is the tab on screen: a CodeMirror surface, a diff, or — for a
+ * file that is not text — a viewer for what it is (see FilePreview).
  */
 
 import {
@@ -20,18 +21,22 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
+import { openPath } from "@tauri-apps/plugin-opener";
 import {
+  Binary,
   ChevronDown,
   ChevronRight,
+  Eye,
   FileDiff,
-  FileImage,
   FileText,
   Maximize2,
   Minimize2,
   SplitSquareHorizontal,
   SplitSquareVertical,
+  SquareArrowOutUpRight,
   X,
 } from "lucide-react";
+import { toast } from "sonner";
 
 import { DockNotice } from "@/components/Dock";
 import {
@@ -43,6 +48,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { CodeEditor } from "@/components/editor/CodeEditor";
 import { DiffView } from "@/components/editor/DiffView";
+import { FilePreview } from "@/components/editor/FilePreview";
 import { languageName } from "@/components/editor/language";
 import { FileIcon } from "@/components/inspector/FileIcon";
 import { LoadingRows } from "@/components/inspector/LoadingRows";
@@ -50,15 +56,17 @@ import { editorRefId, editorRefName } from "@/lib/editorRefs";
 import { showEditorTab } from "@/lib/editorTabs";
 import { diffStats, parentRel } from "@/lib/git";
 import { withShortcut } from "@/lib/keymap";
+import {
+  absolutePath,
+  errorMessage,
+  formatBytes,
+  PREVIEW_LABEL,
+  previewKind,
+  type PreviewKind,
+} from "@/lib/preview";
 import type { Direction, EditorRef, Pane } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/state/workspace";
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
 
 /** The tab a pane has on screen: its active one, or its first. */
 function shownTab(pane: Pane): EditorRef | null {
@@ -423,6 +431,26 @@ export function EditorBody({
   const error = useWorkspace((state) => (id ? (state.editorErrors[id] ?? null) : null));
   const snapshot = useWorkspace((state) => (id ? state.snapshots[id] : undefined));
   const diff = useWorkspace((state) => (id ? state.diffs[id] : undefined));
+  // Tabs whose viewer was swapped for their bytes. Not saved: a reopened
+  // file gets its viewer back.
+  const [asBytes, setAsBytes] = useState<Record<string, boolean>>({});
+  const preview: PreviewState | null =
+    active?.kind === "file" && snapshot?.binary && id && root
+      ? (() => {
+          const kind = previewKind(active.rel, snapshot.format);
+          const path = absolutePath(root, active.rel);
+          return {
+            kind,
+            size: snapshot.size,
+            bytes: kind === "hex" || Boolean(asBytes[id]),
+            setBytes: (bytes: boolean) => setAsBytes((current) => ({ ...current, [id]: bytes })),
+            openExternally: () =>
+              void openPath(path).catch((err: unknown) =>
+                toast.error(`Couldn't open ${editorRefName(active)}: ${errorMessage(err)}`),
+              ),
+          };
+        })()
+      : null;
 
   const kind = active?.kind;
   const rel = active?.rel;
@@ -455,6 +483,7 @@ export function EditorBody({
             id={id}
             truncated={Boolean(snapshot?.truncated && !snapshot.binary)}
             stats={active.kind === "diff" && diff ? diffStats(diff) : null}
+            preview={known && !loading && !error ? preview : null}
           />
           <div className="relative min-h-0 flex-1">
             {!known || loading ? (
@@ -473,16 +502,14 @@ export function EditorBody({
                   Retry
                 </button>
               </div>
-            ) : snapshot?.binary ? (
-              <DockNotice
-                icon={FileImage}
-                title="Binary file"
-                detail={
-                  snapshot.size
-                    ? `${formatBytes(snapshot.size)}. Keel only opens text.`
-                    : "Keel only opens text."
-                }
-                className="h-full justify-center"
+            ) : preview && snapshot && root ? (
+              <FilePreview
+                root={root}
+                rel={active.rel}
+                kind={preview.bytes ? "hex" : preview.kind}
+                snapshot={snapshot}
+                onShowBytes={() => preview.setBytes(true)}
+                onOpenExternally={preview.openExternally}
               />
             ) : active.kind === "diff" ? (
               <DiffView id={id} />
@@ -496,17 +523,28 @@ export function EditorBody({
   );
 }
 
+/** A binary tab: what it is, and whether its viewer or its bytes are showing. */
+interface PreviewState {
+  kind: PreviewKind;
+  size: number;
+  bytes: boolean;
+  setBytes: (bytes: boolean) => void;
+  openExternally: () => void;
+}
+
 /** Where the file lives, and the one fact about it worth knowing right now. */
 function PathBar({
   tab,
   id,
   truncated,
   stats,
+  preview,
 }: {
   tab: EditorRef;
   id: string;
   truncated: boolean;
   stats: { added: number; removed: number } | null;
+  preview: PreviewState | null;
 }) {
   const dirty = useDirty(tab);
   const segments = tab.rel.split("/");
@@ -539,7 +577,9 @@ function PathBar({
         {truncated ? (
           <span className="text-faint">Showing the start of a large file</span>
         ) : null}
-        {tab.kind === "diff" ? (
+        {preview ? (
+          <PreviewControls preview={preview} />
+        ) : tab.kind === "diff" ? (
           <>
             {stats ? (
               <span className="flex items-center gap-1.5 font-mono tabular-nums">
@@ -568,5 +608,56 @@ function PathBar({
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * A binary tab's corner of the path bar: what the file is and how big, a
+ * switch between its viewer and its bytes, and a way out to the app that owns
+ * the format. A file with no viewer is only ever bytes, so it gets neither.
+ */
+function PreviewControls({ preview }: { preview: PreviewState }) {
+  const viewable = preview.kind !== "hex";
+  return (
+    <>
+      <span className="text-faint tabular-nums">
+        {PREVIEW_LABEL[preview.kind]} · {formatBytes(preview.size)}
+      </span>
+      {viewable ? (
+        <>
+          <div className="k-seg p-[2px]">
+            <button
+              type="button"
+              title="Preview"
+              aria-label="Preview"
+              data-active={!preview.bytes}
+              onClick={() => preview.setBytes(false)}
+              className="k-seg-btn h-[18px] px-1.5"
+            >
+              <Eye className="size-3.5" />
+            </button>
+            <button
+              type="button"
+              title="Bytes"
+              aria-label="Bytes"
+              data-active={preview.bytes}
+              onClick={() => preview.setBytes(true)}
+              className="k-seg-btn h-[18px] px-1.5"
+            >
+              <Binary className="size-3.5" />
+            </button>
+          </div>
+          <button
+            type="button"
+            title="Open in default app"
+            aria-label="Open in default app"
+            onClick={preview.openExternally}
+            className="k-icon-btn size-6"
+          >
+            <SquareArrowOutUpRight className="size-3.5" />
+          </button>
+        </>
+      ) : null}
+    </>
   );
 }

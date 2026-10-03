@@ -15,6 +15,8 @@ export interface FileContents {
   truncated: boolean;
   size: number;
   mtimeMs: number;
+  /** What a binary file's first bytes say it is: `image`, `sqlite`, … */
+  format?: string | null;
 }
 
 /**

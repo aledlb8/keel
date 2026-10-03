@@ -62,6 +62,7 @@ import {
   gitStatusColor,
   parentRel,
 } from "@/lib/git";
+import { absolutePath } from "@/lib/preview";
 import { isRecent, recentAt } from "@/lib/recentFiles";
 import { bindingFor, matchesBinding } from "@/lib/keymap";
 import { cn } from "@/lib/utils";
@@ -79,13 +80,6 @@ const STEP = 14;
 
 function indentStyle(depth: number): CSSProperties {
   return { paddingLeft: 8 + depth * STEP };
-}
-
-function joinFs(root: string, rel: string): string {
-  if (/windows/i.test(navigator.userAgent)) {
-    return `${root}\\${rel.replace(/\//g, "\\")}`;
-  }
-  return `${root}/${rel}`;
 }
 
 function isControl(target: EventTarget): boolean {
@@ -123,7 +117,7 @@ function fileMenu(rel: string): MenuEntry[] {
       label: "Reveal in Explorer",
       icon: FolderOpen,
       onSelect: () => {
-        if (root) void revealItemInDir(joinFs(root, rel)).catch(() => {});
+        if (root) void revealItemInDir(absolutePath(root, rel)).catch(() => {});
       },
     },
     {
@@ -131,7 +125,7 @@ function fileMenu(rel: string): MenuEntry[] {
       label: "Copy path",
       icon: Copy,
       onSelect: () => {
-        if (root) copyText(joinFs(root, rel));
+        if (root) copyText(absolutePath(root, rel));
       },
     },
     { kind: "separator" },

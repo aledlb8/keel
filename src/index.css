@@ -1354,6 +1354,18 @@
         font-weight: 500;
     }
 
+    /* The ground under an image preview, so transparency reads as such. */
+    .k-checker {
+        background-color: var(--keel-term-solid);
+        background-image: conic-gradient(
+            var(--keel-veil-2) 25%,
+            transparent 0 50%,
+            var(--keel-veil-2) 0 75%,
+            transparent 0
+        );
+        background-size: 16px 16px;
+    }
+
     button.k-tag {
         transition:
             background-color 110ms ease,
