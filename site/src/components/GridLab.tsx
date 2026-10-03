@@ -2,13 +2,14 @@
 
 import { motion } from "motion/react";
 import { useState } from "react";
-import { Minus, Plus } from "lucide-react";
 
 import { AGENTS, AGENT_ORDER, AgentMark, gridRects, gridRows } from "./marks";
+import { AnimatedTabs } from "./rare/AnimatedTabs";
 import { Container, Heading } from "./ui";
 
 const MAX = 10;
 const ROSTER = [...AGENT_ORDER.slice(0, 5), "shell", ...AGENT_ORDER.slice(5)] as const;
+const COUNTS = Array.from({ length: MAX }, (_, i) => ({ value: i + 1, label: String(i + 1) }));
 
 /** A few rows of fake terminal, so a tile reads as a pane rather than a box. */
 function Ghost({ seed }: { seed: number }) {
@@ -30,7 +31,6 @@ export function GridLab() {
   const [count, setCount] = useState(7);
   const rows = gridRows(count);
   const rects = gridRects(count, 100, 100, 1.4);
-  const set = (n: number) => setCount(Math.max(1, Math.min(MAX, n)));
 
   return (
     <section id="layout" className="relative py-24 sm:py-36">
@@ -46,48 +46,18 @@ export function GridLab() {
 
         <div className="mt-16 grid gap-10 lg:mt-24 lg:grid-cols-12 lg:gap-14">
           <div className="flex flex-col justify-between gap-10 lg:col-span-3">
-            <div>
-              <div
-                className="flex items-end gap-4"
-                role="group"
-                aria-label="Number of panes"
-                onKeyDown={(e) => {
-                  if (e.key === "ArrowUp" || e.key === "ArrowRight") set(count + 1);
-                  if (e.key === "ArrowDown" || e.key === "ArrowLeft") set(count - 1);
-                }}
+            <div className="flex items-end gap-4">
+              <motion.span
+                key={count}
+                initial={{ opacity: 0, y: 18, filter: "blur(6px)" }}
+                animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+                transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+                className="display block text-[clamp(6rem,11vw,10rem)] tabular-nums"
+                aria-live="polite"
               >
-                <motion.span
-                  key={count}
-                  initial={{ opacity: 0, y: 18, filter: "blur(6px)" }}
-                  animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
-                  transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
-                  className="display block text-[clamp(6rem,11vw,10rem)] tabular-nums"
-                  aria-live="polite"
-                >
-                  {count}
-                </motion.span>
-                <span className="pb-4 text-[18px] text-dim">{count === 1 ? "pane" : "panes"}</span>
-              </div>
-              <div className="mt-6 flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => set(count - 1)}
-                  disabled={count <= 1}
-                  aria-label="Remove a pane"
-                  className="grid size-12 place-items-center rounded-[11px] text-ink shadow-[inset_0_0_0_1px_rgba(255,255,255,0.14)] transition-colors hover:bg-veil-2 disabled:opacity-30"
-                >
-                  <Minus size={18} />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => set(count + 1)}
-                  disabled={count >= MAX}
-                  aria-label="Add a pane"
-                  className="grid size-12 place-items-center rounded-[11px] bg-ink text-black transition-colors hover:bg-white disabled:opacity-30"
-                >
-                  <Plus size={18} />
-                </button>
-              </div>
+                {count}
+              </motion.span>
+              <span className="pb-4 text-[18px] text-dim">{count === 1 ? "pane" : "panes"}</span>
             </div>
 
             <dl className="grid grid-cols-2 gap-6 text-[15px] lg:grid-cols-1">
@@ -137,6 +107,16 @@ export function GridLab() {
                   );
                 })}
               </div>
+            </div>
+            <div className="mt-5 flex justify-center">
+              <AnimatedTabs
+                id="panes"
+                label="Number of panes"
+                options={COUNTS}
+                value={count}
+                onChange={setCount}
+                itemClassName="h-9 w-[30px] text-[14px] sm:h-10 sm:w-10 sm:text-[15px]"
+              />
             </div>
           </div>
         </div>
