@@ -10,6 +10,8 @@ import {
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { Workspace } from "./demo/Workspace";
+import { FeatureBadge } from "./rare/FeatureBadge";
+import { ShimmerLink } from "./rare/ShimmerLink";
 import { Container, GithubIcon, Kbd, RELEASES, REPO } from "./ui";
 
 function DemoFrame() {
@@ -82,6 +84,11 @@ export function Hero() {
       />
 
       <Container className="relative">
+        <div className="rise mb-8 sm:mb-10" style={{ animationDelay: "0.15s" }}>
+          <FeatureBadge href={REPO} badge="MIT">
+            Free and open source
+          </FeatureBadge>
+        </div>
         <h1 className="text-[clamp(2rem,9.3vw,9.4rem)]">
           <span className="display mass-in block whitespace-nowrap">Run ten agents.</span>
           <span
@@ -106,12 +113,7 @@ export function Hero() {
             className="rise flex flex-wrap items-center gap-3 md:col-span-5 md:justify-end"
             style={{ animationDelay: "1.05s" }}
           >
-            <a
-              href={RELEASES}
-              className="flex h-12 items-center rounded-[11px] bg-ink px-6 text-[16px] font-semibold text-black shadow-[0_10px_40px_-10px_rgba(255,255,255,0.35)] transition-[background-color,transform] hover:-translate-y-px hover:bg-white"
-            >
-              Download Keel
-            </a>
+            <ShimmerLink href={RELEASES}>Download Keel</ShimmerLink>
             <a
               href={REPO}
               className="flex h-12 items-center gap-2.5 rounded-[11px] px-5 text-[16px] text-ink shadow-[inset_0_0_0_1px_rgba(255,255,255,0.14)] transition-colors hover:bg-veil-2"
