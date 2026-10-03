@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
 
+import { ScatterText } from "./rare/ScatterText";
+
 export const REPO = "https://github.com/aledlb8/keel";
 export const RELEASES = `${REPO}/releases/latest`;
 
@@ -35,13 +37,16 @@ export function Container({
   return <div className={`mx-auto w-full max-w-[1320px] px-4 sm:px-8 ${className}`}>{children}</div>;
 }
 
-/** Section headings: the display face, one step down from the hero. */
+/**
+ * Section headings: the display face, one step down from the hero. The letters
+ * pull together the first time a heading scrolls into view.
+ */
 export function Heading({
   children,
   className = "",
   id,
 }: {
-  children: ReactNode;
+  children: string;
   className?: string;
   id?: string;
 }) {
@@ -50,7 +55,7 @@ export function Heading({
       id={id}
       className={`text-balance text-[clamp(2.25rem,5.2vw,4.5rem)] leading-[0.95] font-[800] tracking-[-0.035em] [font-stretch:118%] ${className}`}
     >
-      {children}
+      <ScatterText text={children} />
     </h2>
   );
 }
