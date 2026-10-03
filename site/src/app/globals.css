@@ -174,6 +174,64 @@ body {
   animation: caret 1.05s steps(1) infinite;
 }
 
+/*
+ * A band of light crossing a surface, then a long rest before the next pass.
+ * Used by the shimmer button and the feature badge (both adapted from RareUI).
+ */
+@keyframes sweep {
+  0% {
+    transform: translateX(-120%) skewX(-20deg);
+  }
+  55%,
+  100% {
+    transform: translateX(420%) skewX(-20deg);
+  }
+}
+.shimmer {
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.95), transparent);
+  animation: sweep 3.8s var(--ease-keel) infinite;
+}
+.glare {
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.16), transparent);
+  animation: sweep 4.6s linear infinite;
+}
+
+/*
+ * A card lit from wherever the pointer is. `--x` and `--y` are written by the
+ * card on pointer move; the light is a fill plus a ring masked down to the
+ * card's 1px edge, so the border brightens where you are.
+ */
+.spotlight {
+  --x: 50%;
+  --y: 0%;
+}
+.spotlight::before,
+.spotlight::after {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  opacity: 0;
+  transition: opacity 400ms var(--ease-keel);
+}
+.spotlight::before {
+  background: radial-gradient(420px circle at var(--x) var(--y), rgba(255, 255, 255, 0.055), transparent 60%);
+}
+.spotlight::after {
+  padding: 1px;
+  background: radial-gradient(300px circle at var(--x) var(--y), rgba(255, 255, 255, 0.28), transparent 70%);
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+.spotlight:hover::before,
+.spotlight:hover::after {
+  opacity: 1;
+}
+
 /* Film grain over the whole page — it keeps large flat darks from banding. */
 .grain {
   pointer-events: none;
@@ -200,7 +258,13 @@ body {
   .light-in,
   .rise,
   .pulse-dot,
-  .caret {
+  .caret,
+  .shimmer,
+  .glare {
     animation: none !important;
+  }
+  .shimmer,
+  .glare {
+    opacity: 0;
   }
 }
