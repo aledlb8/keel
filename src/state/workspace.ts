@@ -21,17 +21,68 @@ import { WorkspaceReads } from "../lib/workspaceReads.ts";
 import { sameWatchRoot } from "../lib/workspaceWatch.ts";
 import { deckOfPane, useKeel } from "./store.ts";
 import type {
+  CommitDetails,
+  CommitFile,
+  CommitOptions,
   FileContents,
   GitBranches,
   GitDiff,
+  GitRemote,
+  GitStash,
   GitStatus,
+  GitTag,
   GrepHit,
+  MergeMode,
+  OperationAction,
   PrList,
+  PullMode,
+  ResetMode,
   WorkspaceEntry,
 } from "@/lib/workspace";
 
 export type InspectorTab = "files" | "git" | "search";
-export type GitMetaSection = "branches" | "prs" | "history";
+export type GitMetaSection =
+  | "branches"
+  | "prs"
+  | "history"
+  | "stashes"
+  | "tags"
+  | "remotes";
+/** The git panel's pages. */
+export type GitView = "changes" | "history" | "branches" | "stashes" | "prs";
+export type ChangeLayout = "list" | "tree";
+
+/** Commits fetched at a time; scrolling to the end asks for the next lot. */
+export const HISTORY_PAGE = 100;
+
+const CHANGE_LAYOUT_KEY = "keel.git.changeLayout";
+const COMMIT_PREFS_KEY = "keel.git.commitPrefs";
+
+function readChangeLayout(): ChangeLayout {
+  try {
+    return localStorage.getItem(CHANGE_LAYOUT_KEY) === "tree" ? "tree" : "list";
+  } catch {
+    return "list";
+  }
+}
+
+/** Sign-off and hook skipping are habits, so they stick; amend never does. */
+function readCommitPrefs(): CommitOptions {
+  try {
+    const saved = JSON.parse(localStorage.getItem(COMMIT_PREFS_KEY) ?? "{}") as Partial<CommitOptions>;
+    return { amend: false, signoff: saved.signoff === true, noVerify: saved.noVerify === true };
+  } catch {
+    return { amend: false, signoff: false, noVerify: false };
+  }
+}
+
+function remember(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Storage unavailable: the choice just lasts for this session.
+  }
+}
 
 /** A view preference, so it lives with the window rather than in the projects. */
 const SHOW_HIDDEN_KEY = "keel.showHidden";
@@ -60,6 +111,8 @@ export interface EditorTab {
   kind: EditorKind;
   rel: string;
   staged: boolean;
+  /** A diff of this commit rather than of the working tree or index. */
+  rev?: string | undefined;
   name: string;
 }
 
@@ -96,6 +149,19 @@ interface WorkspaceState {
   metaLoading: Partial<Record<GitMetaSection, boolean>>;
   metaErrors: Partial<Record<GitMetaSection, string | null>>;
   commitMessage: string;
+  commitOptions: CommitOptions;
+  gitView: GitView;
+  changeLayout: ChangeLayout;
+  stashes: GitStash[] | null;
+  tags: GitTag[] | null;
+  remotes: GitRemote[] | null;
+  /** History across every branch rather than just HEAD's. */
+  historyAll: boolean;
+  historyQuery: string;
+  /** The last page came back full, so there may be more. */
+  historyMore: boolean;
+  historyPaging: boolean;
+  commitDetails: Record<string, CommitDetails>;
 
   editors: EditorTab[];
   activeEditor: string | null;
@@ -122,6 +188,20 @@ interface WorkspaceState {
   setShowHidden: (show: boolean) => Promise<void>;
   setQuery: (query: string) => void;
   setCommitMessage: (message: string) => void;
+  setCommitOption: (key: keyof CommitOptions, value: boolean) => void;
+  setGitView: (view: GitView) => void;
+  setChangeLayout: (layout: ChangeLayout) => void;
+  setHistoryAll: (all: boolean) => void;
+  setHistoryQuery: (query: string) => void;
+  loadMoreHistory: () => Promise<void>;
+  loadCommitDetails: (hash: string) => Promise<void>;
+  refreshStashes: (afterPending?: boolean) => Promise<void>;
+  refreshTags: (afterPending?: boolean) => Promise<void>;
+  refreshRemotes: (afterPending?: boolean) => Promise<void>;
+  openCommitDiff: (rev: string, file: Pick<CommitFile, "path">) => Promise<void>;
+  /** Switch to the files tab with this path unfolded and selected. */
+  revealInTree: (rel: string) => void;
+  initRepo: () => Promise<void>;
   setSelected: (rel: string | null) => void;
   toggleExpanded: (rel: string) => void;
   collapseAll: () => void;
@@ -176,12 +256,37 @@ interface WorkspaceState {
   unstage: (paths: string[]) => Promise<void>;
   discard: (paths: string[]) => Promise<void>;
   commit: (andPush?: boolean) => Promise<void>;
-  push: () => Promise<void>;
-  pull: () => Promise<void>;
+  /** Take the last commit back; its message returns to the box. */
+  undoCommit: () => Promise<void>;
+  push: (force?: boolean) => Promise<void>;
+  pull: (mode?: PullMode) => Promise<void>;
   fetch: () => Promise<void>;
   checkout: (name: string) => Promise<void>;
-  createBranch: (name: string, checkout: boolean) => Promise<void>;
+  checkoutRemote: (name: string) => Promise<void>;
+  checkoutRev: (rev: string) => Promise<void>;
+  createBranch: (name: string, checkout: boolean, start?: string | null) => Promise<void>;
+  renameBranch: (from: string, to: string) => Promise<void>;
+  /** Asks before forcing when the branch has commits nothing else has. */
   deleteBranch: (name: string) => Promise<void>;
+  deleteRemoteBranch: (name: string) => Promise<void>;
+  merge: (name: string, mode?: MergeMode) => Promise<void>;
+  rebase: (onto: string) => Promise<void>;
+  cherryPick: (rev: string) => Promise<void>;
+  revert: (rev: string) => Promise<void>;
+  reset: (rev: string, mode: ResetMode) => Promise<void>;
+  operation: (action: OperationAction) => Promise<void>;
+  resolve: (paths: string[], side: "ours" | "theirs") => Promise<void>;
+  ignore: (pattern: string) => Promise<void>;
+  stashPush: (args: {
+    message?: string | null;
+    includeUntracked: boolean;
+    paths?: string[] | null;
+  }) => Promise<void>;
+  stashApply: (stash: GitStash, pop: boolean) => Promise<void>;
+  stashDrop: (stash: GitStash) => Promise<void>;
+  createTag: (name: string, rev: string, message?: string | null) => Promise<void>;
+  deleteTag: (name: string) => Promise<void>;
+  pushTag: (name: string) => Promise<void>;
   createPr: (args: {
     title: string;
     body: string;
@@ -249,12 +354,13 @@ interface BrowseState {
   expanded: Record<string, boolean>;
   selectedRel: string | null;
   commitMessage: string;
+  amend: boolean;
 }
 
 const stashedBrowse = new Map<string, BrowseState>();
 
 function emptyBrowse(): BrowseState {
-  return { expanded: {}, selectedRel: null, commitMessage: "" };
+  return { expanded: {}, selectedRel: null, commitMessage: "", amend: false };
 }
 
 /** What to keep when leaving a folder. Reads still in flight are abandoned, so those load again. */
@@ -289,7 +395,12 @@ function revealInLayout(root: string, tab: EditorTab) {
   const keel = useKeel.getState();
   const project = keel.projects.find((item) => item.id === keel.activeProjectId);
   if (!project || project.path !== root) return;
-  keel.openInEditor(project.id, { kind: tab.kind, rel: tab.rel, staged: tab.staged });
+  keel.openInEditor(project.id, {
+    kind: tab.kind,
+    rel: tab.rel,
+    staged: tab.staged,
+    ...(tab.rev ? { rev: tab.rev } : {}),
+  });
 }
 
 /** Whether an editor pane in this folder's projects, other than `except`, shows a tab. */
@@ -352,6 +463,11 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** Where a file a commit renamed came from, so its diff can follow the rename. */
+function commitOrigPath(state: WorkspaceState, rev: string, rel: string): string | null {
+  return state.commitDetails[rev]?.files.find((file) => file.path === rel)?.origPath ?? null;
+}
+
 /**
  * Load a tab's contents. `reveal` is a click on a file or a change: it also puts
  * the tab on screen in the layout and makes it the one you are looking at.
@@ -398,7 +514,9 @@ function openEditor(
     const isOpen = () => isCurrent() && get().editors.includes(tab);
     try {
       if (tab.kind === "diff") {
-        const diff = await api.gitDiff(root, rel, tab.staged);
+        const diff = tab.rev
+          ? await api.gitDiffRev(root, tab.rev, rel, commitOrigPath(get(), tab.rev, rel))
+          : await api.gitDiff(root, rel, tab.staged);
         if (isOpen()) set({ diffs: { ...get().diffs, [id]: diff } });
       } else {
         const contents = await api.workspaceRead(root, rel);
@@ -697,6 +815,17 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   metaLoading: {},
   metaErrors: {},
   commitMessage: "",
+  commitOptions: readCommitPrefs(),
+  gitView: "changes",
+  changeLayout: readChangeLayout(),
+  stashes: null,
+  tags: null,
+  remotes: null,
+  historyAll: false,
+  historyQuery: "",
+  historyMore: false,
+  historyPaging: false,
+  commitDetails: {},
 
   editors: [],
   activeEditor: null,
@@ -722,8 +851,13 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     reads.reset();
     if (previous) {
       stashedDocs.set(previous, settledDocs(get()));
-      const { expanded, selectedRel, commitMessage } = get();
-      stashedBrowse.set(previous, { expanded: { ...expanded }, selectedRel, commitMessage });
+      const { expanded, selectedRel, commitMessage, commitOptions } = get();
+      stashedBrowse.set(previous, {
+        expanded: { ...expanded },
+        selectedRel,
+        commitMessage,
+        amend: commitOptions.amend,
+      });
     }
     // No project at all: nothing will come back for what was open.
     if (!root) {
@@ -744,6 +878,14 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       expanded: browse.expanded,
       selectedRel: browse.selectedRel,
       commitMessage: browse.commitMessage,
+      commitOptions: { ...get().commitOptions, amend: browse.amend },
+      stashes: null,
+      tags: null,
+      remotes: null,
+      historyQuery: "",
+      historyMore: false,
+      historyPaging: false,
+      commitDetails: {},
       creating: null,
       renaming: null,
       searchHits: null,
@@ -888,6 +1030,104 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     }
   },
   setCommitMessage: (commitMessage) => set({ commitMessage }),
+  setCommitOption: (key, value) => {
+    const commitOptions = { ...get().commitOptions, [key]: value };
+    set({ commitOptions });
+    if (key !== "amend") {
+      remember(
+        COMMIT_PREFS_KEY,
+        JSON.stringify({ signoff: commitOptions.signoff, noVerify: commitOptions.noVerify }),
+      );
+      return;
+    }
+    // Amending starts from the message being amended, unless one is already written.
+    const root = get().root;
+    if (!value || !root || get().commitMessage.trim()) return;
+    const version = projectVersion;
+    void api.gitHeadMessage(root).then(
+      (message) => {
+        if (version === projectVersion && get().commitOptions.amend && !get().commitMessage.trim()) {
+          set({ commitMessage: message });
+        }
+      },
+      () => {},
+    );
+  },
+  setGitView: (gitView) => set({ gitView }),
+  setChangeLayout: (changeLayout) => {
+    set({ changeLayout });
+    remember(CHANGE_LAYOUT_KEY, changeLayout);
+  },
+  setHistoryAll: (historyAll) => {
+    if (historyAll === get().historyAll) return;
+    set({ historyAll, commits: null, historyMore: false });
+    void get().refreshHistory();
+  },
+  setHistoryQuery: (historyQuery) => {
+    if (historyQuery === get().historyQuery) return;
+    set({ historyQuery, commits: null, historyMore: false });
+    void get().refreshHistory();
+  },
+  loadMoreHistory: async () => {
+    const root = get().root;
+    const loaded = get().commits;
+    if (!root || !loaded || !get().historyMore || get().historyPaging) return;
+    const version = projectVersion;
+    const { historyAll, historyQuery } = get();
+    set({ historyPaging: true });
+    try {
+      const page = await api.gitLog(root, HISTORY_PAGE, {
+        skip: loaded.length,
+        all: historyAll,
+        query: historyQuery,
+      });
+      const same = () =>
+        version === projectVersion &&
+        get().commits === loaded &&
+        get().historyAll === historyAll &&
+        get().historyQuery === historyQuery;
+      if (!same()) return;
+      set({ commits: [...loaded, ...page], historyMore: page.length === HISTORY_PAGE });
+    } catch (error) {
+      if (version === projectVersion) toast.error(errorMessage(error));
+    } finally {
+      if (version === projectVersion) set({ historyPaging: false });
+    }
+  },
+  loadCommitDetails: async (hash) => {
+    const root = get().root;
+    if (!root || get().commitDetails[hash]) return;
+    const version = projectVersion;
+    try {
+      const details = await api.gitCommitDetails(root, hash);
+      if (version === projectVersion) {
+        set({ commitDetails: { ...get().commitDetails, [hash]: details } });
+      }
+    } catch (error) {
+      if (version === projectVersion) toast.error(errorMessage(error));
+    }
+  },
+  revealInTree: (rel) => {
+    const parents: string[] = [];
+    for (let dir = parentRel(rel); dir; dir = parentRel(dir)) parents.unshift(dir);
+    const expanded = { ...get().expanded };
+    for (const dir of parents) expanded[dir] = true;
+    set({ tab: "files", expanded, selectedRel: rel });
+    for (const dir of parents) void get().loadDir(dir);
+  },
+  initRepo: () =>
+    runGit(set, get, async (root) => {
+      await api.gitInit(root);
+      return "Initialized a git repository";
+    }),
+  openCommitDiff: (rev, file) => openEditor({
+    id: diffTabId(file.path, false, rev),
+    kind: "diff",
+    rel: file.path,
+    staged: false,
+    rev,
+    name: fileName(file.path),
+  }, set, get),
   setSelected: (selectedRel) => set({ selectedRel }),
 
   toggleExpanded: (rel) => {
@@ -944,6 +1184,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       requested.branches !== undefined ? get().refreshBranches(true) : undefined,
       requested.prs !== undefined ? get().refreshPrs(true) : undefined,
       requested.history !== undefined ? get().refreshHistory(true) : undefined,
+      requested.stashes !== undefined ? get().refreshStashes(true) : undefined,
+      requested.tags !== undefined ? get().refreshTags(true) : undefined,
     ]);
   },
 
@@ -953,8 +1195,30 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   refreshPrs: (afterPending) => refreshMetadata(
     "prs", api.prList, (prs) => set({ prs }), set, get, afterPending,
   ),
-  refreshHistory: (afterPending) => refreshMetadata(
-    "history", (root) => api.gitLog(root, 20), (commits) => set({ commits }), set, get, afterPending,
+  refreshHistory: (afterPending) => {
+    const { historyAll, historyQuery } = get();
+    // A refresh after a commit or checkout keeps however much was scrolled in.
+    const shown = Math.max(HISTORY_PAGE, get().commits?.length ?? 0);
+    return refreshMetadata(
+      "history",
+      (root) => api.gitLog(root, shown, { all: historyAll, query: historyQuery }),
+      (commits) => {
+        if (get().historyAll !== historyAll || get().historyQuery !== historyQuery) return;
+        set({ commits, historyMore: commits.length === shown });
+      },
+      set,
+      get,
+      afterPending,
+    );
+  },
+  refreshStashes: (afterPending) => refreshMetadata(
+    "stashes", api.gitStashList, (stashes) => set({ stashes }), set, get, afterPending,
+  ),
+  refreshTags: (afterPending) => refreshMetadata(
+    "tags", api.gitTags, (tags) => set({ tags }), set, get, afterPending,
+  ),
+  refreshRemotes: (afterPending) => refreshMetadata(
+    "remotes", api.gitRemotes, (remotes) => set({ remotes }), set, get, afterPending,
   ),
 
   search: async (query) => {
@@ -1070,6 +1334,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         kind: ref.kind,
         rel: ref.rel,
         staged: ref.staged,
+        ...(ref.rev ? { rev: ref.rev } : {}),
         name: fileName(ref.rel),
       },
       set,
@@ -1333,24 +1598,35 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       return;
     }
     const git = get().git;
+    const options = get().commitOptions;
     const nothingStaged = !git?.files.some((file) => file.staged);
-    const hasChanges = (git?.files.length ?? 0) > 0;
+    // Conflicts are never swept into a commit-all; they have to be resolved.
+    const sweep = (git?.files ?? []).filter((file) => !file.conflict);
     set({ busy: true });
     try {
-      if (nothingStaged && hasChanges) {
-        await api.gitStage(
-          root,
-          git!.files.map((file) => file.path),
-        );
+      // Amending with nothing staged rewords the last commit, so leave it be.
+      if (nothingStaged && sweep.length > 0 && !options.amend) {
+        await api.gitStage(root, sweep.map((file) => file.path));
       }
-      const hash = await api.gitCommit(root, message);
+      const hash = await api.gitCommit(root, message, options);
       // Clear it in whichever project made the commit, even if you left it meanwhile.
-      if (get().root === root) set({ commitMessage: "" });
-      else {
+      if (get().root === root) {
+        set({ commitMessage: "", commitOptions: { ...get().commitOptions, amend: false } });
+      } else {
         const stashed = stashedBrowse.get(root);
-        if (stashed) stashed.commitMessage = "";
+        if (stashed) {
+          stashed.commitMessage = "";
+          stashed.amend = false;
+        }
       }
-      toast.success(`Committed ${hash}`);
+      toast.success(options.amend ? `Amended ${hash}` : `Committed ${hash}`, andPush ? {} : {
+        action: {
+          label: "Undo",
+          onClick: () => {
+            if (get().root === root) void get().undoCommit();
+          },
+        },
+      });
       if (andPush) {
         const pushed = await api.gitPush(root, !git?.upstream);
         toast.success(pushed);
@@ -1365,25 +1641,73 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     }
   },
 
-  push: () =>
-    runGit(set, get, (root) => api.gitPush(root, !get().git?.upstream)),
-  pull: () => runGit(set, get, (root) => api.gitPull(root)),
+  undoCommit: () => {
+    const version = projectVersion;
+    return runGit(set, get, async (root) => {
+      const message = await api.gitUndoCommit(root);
+      if (version === projectVersion && !get().commitMessage.trim()) {
+        set({ commitMessage: message, gitView: "changes" });
+      }
+      return "Undid the last commit. Its changes are staged.";
+    });
+  },
+  push: (force = false) =>
+    runGit(set, get, (root) => api.gitPush(root, !get().git?.upstream, force)),
+  pull: (mode = "ff-only") => runGit(set, get, (root) => api.gitPull(root, mode)),
   fetch: () => runGit(set, get, (root) => api.gitFetch(root)),
   checkout: (name) =>
     runGit(set, get, async (root) => {
       await api.gitCheckout(root, name);
       return `Checked out ${name}`;
     }),
-  createBranch: (name, checkout) =>
+  checkoutRemote: (name) => runGit(set, get, (root) => api.gitCheckoutRemote(root, name)),
+  checkoutRev: (rev) => runGit(set, get, (root) => api.gitCheckoutRev(root, rev)),
+  createBranch: (name, checkout, start = null) =>
     runGit(set, get, async (root) => {
-      await api.gitBranchCreate(root, name, checkout);
+      await api.gitBranchCreate(root, name, checkout, start);
       return checkout ? `On ${name}` : `Created ${name}`;
     }),
+  renameBranch: (from, to) => runGit(set, get, (root) => api.gitBranchRename(root, from, to)),
   deleteBranch: (name) =>
     runGit(set, get, async (root) => {
-      await api.gitBranchDelete(root, name);
+      try {
+        await api.gitBranchDelete(root, name);
+      } catch (error) {
+        if (!/not fully merged/i.test(errorMessage(error))) throw error;
+        const ok = window.confirm(
+          `${name} has commits that no other branch has. Delete it anyway? Those commits will be lost.`,
+        );
+        if (!ok) return;
+        await api.gitBranchDelete(root, name, true);
+      }
       return `Deleted ${name}`;
     }),
+  deleteRemoteBranch: (name) =>
+    runGit(set, get, (root) => api.gitBranchDeleteRemote(root, name)),
+  merge: (name, mode = "default") => runGit(set, get, (root) => api.gitMerge(root, name, mode)),
+  rebase: (onto) => runGit(set, get, (root) => api.gitRebase(root, onto)),
+  cherryPick: (rev) => runGit(set, get, (root) => api.gitCherryPick(root, rev)),
+  revert: (rev) => runGit(set, get, (root) => api.gitRevert(root, rev)),
+  reset: (rev, mode) => runGit(set, get, (root) => api.gitReset(root, rev, mode)),
+  operation: (action) => runGit(set, get, (root) => api.gitOperation(root, action)),
+  resolve: (paths, side) =>
+    runGit(set, get, async (root) => {
+      await api.gitResolve(root, paths, side);
+      const count = paths.length === 1 ? "1 file" : `${paths.length} files`;
+      return `Took ${side === "ours" ? "ours" : "theirs"} for ${count}`;
+    }),
+  ignore: (pattern) =>
+    runGit(set, get, async (root) => {
+      await api.gitIgnore(root, pattern);
+      return `Ignoring ${pattern}`;
+    }),
+  stashPush: (args) => runGit(set, get, (root) => api.gitStashPush(root, args)),
+  stashApply: (stash, pop) => runGit(set, get, (root) => api.gitStashApply(root, stash, pop)),
+  stashDrop: (stash) => runGit(set, get, (root) => api.gitStashDrop(root, stash)),
+  createTag: (name, rev, message = null) =>
+    runGit(set, get, (root) => api.gitTagCreate(root, name, rev, message)),
+  deleteTag: (name) => runGit(set, get, (root) => api.gitTagDelete(root, name)),
+  pushTag: (name) => runGit(set, get, (root) => api.gitTagPush(root, name)),
   createPr: (args) =>
     runGit(set, get, async (root) => {
       const pr = await api.prCreate(root, args);

@@ -1463,6 +1463,314 @@
         color: var(--keel-text);
     }
 
+    /*
+     * The git panel.
+     *
+     * It answers to its own width: in a narrow dock the pages are icons with
+     * only the current one spelled out, and they all get their names once
+     * there is room.
+     */
+    .k-git {
+        container: git / inline-size;
+    }
+
+    .k-gitnav {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+    }
+
+    .k-gitnav-btn {
+        position: relative;
+        display: flex;
+        flex: 0 0 auto;
+        align-items: center;
+        gap: 6px;
+        height: var(--keel-h-control);
+        padding-inline: 8px;
+        border-radius: var(--keel-r-control);
+        color: var(--keel-text-faint);
+        font-size: var(--keel-type-body);
+        font-weight: 500;
+        transition:
+            background-color 110ms ease,
+            color 110ms ease;
+    }
+
+    .k-gitnav-btn:hover {
+        background: var(--keel-veil-1);
+        color: var(--keel-text-dim);
+    }
+
+    .k-gitnav-btn[data-active="true"] {
+        background: var(--keel-veil-2);
+        box-shadow: inset 0 1px 0 0 var(--keel-sheen);
+        color: var(--keel-text);
+    }
+
+    .k-gitnav-label {
+        display: none;
+    }
+
+    .k-gitnav-btn[data-active="true"] .k-gitnav-label {
+        display: inline;
+    }
+
+    @container git (min-width: 520px) {
+        .k-gitnav-label {
+            display: inline;
+        }
+    }
+
+    /* A count tucked onto an icon-only page, so it still says "2 stashes". */
+    .k-gitnav-dot {
+        position: absolute;
+        top: 3px;
+        right: 3px;
+        width: 5px;
+        height: 5px;
+        border-radius: 999px;
+        background: var(--keel-text-dim);
+    }
+
+    .k-gitnav-btn[data-active="true"] .k-gitnav-dot {
+        display: none;
+    }
+
+    /* Counts ride beside a named page: always on the current one, on every
+     * one once they are all named. */
+    .k-gitnav-count {
+        display: none;
+    }
+
+    .k-gitnav-count[data-active="true"] {
+        display: inline-grid;
+    }
+
+    @container git (min-width: 520px) {
+        .k-gitnav-dot {
+            display: none;
+        }
+
+        .k-gitnav-count {
+            display: inline-grid;
+        }
+    }
+
+    /* A shorter well, for a filter riding in a toolbar. */
+    .k-field-sm {
+        height: var(--keel-h-control);
+        gap: 6px;
+        padding-inline: 8px;
+    }
+
+    .k-field-sm > input {
+        font-size: var(--keel-type-body);
+    }
+
+    /* "+12 −3", in the hues a diff uses, a step quieter. */
+    .k-stat {
+        display: inline-flex;
+        flex-shrink: 0;
+        align-items: center;
+        gap: 4px;
+        font-family: var(--keel-font-mono);
+        font-size: var(--keel-type-micro);
+        font-variant-numeric: tabular-nums;
+        line-height: 1;
+    }
+
+    .k-stat-add {
+        color: color-mix(in srgb, var(--keel-done) 85%, transparent);
+    }
+
+    .k-stat-del {
+        color: color-mix(in srgb, var(--keel-dead) 85%, transparent);
+    }
+
+    /* A branch, remote branch or tag riding on a commit. Set `--ref`. */
+    .k-ref {
+        display: inline-flex;
+        flex-shrink: 0;
+        align-items: center;
+        gap: 3px;
+        max-width: 132px;
+        height: 16px;
+        padding-inline: 5px;
+        border-radius: 4px;
+        background: color-mix(in srgb, var(--ref) 14%, transparent);
+        color: var(--ref);
+        font-size: var(--keel-type-micro);
+        font-weight: 500;
+        line-height: 1;
+    }
+
+    .k-ref > span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .k-ref[data-current="true"] {
+        box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ref) 50%, transparent);
+    }
+
+    /* A notice that has to be dealt with: a merge stopped halfway. Set `--tone`. */
+    .k-banner {
+        margin-inline: var(--keel-inset);
+        padding: 9px 10px;
+        border-radius: var(--keel-r-control);
+        background: color-mix(in srgb, var(--tone) 9%, transparent);
+        box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone) 26%, transparent);
+    }
+
+    /*
+     * A commit in the history. Rows butt against each other with no air, so
+     * the graph's lines run unbroken from one into the next.
+     */
+    .k-commit {
+        position: relative;
+        display: flex;
+        align-items: stretch;
+        height: 44px;
+        margin-inline: var(--keel-inset);
+        padding-right: 8px;
+        border-radius: var(--keel-r-control);
+        cursor: default;
+        transition: background-color 110ms ease;
+    }
+
+    .k-commit:hover {
+        background: var(--keel-veil-1);
+    }
+
+    .k-commit[data-open="true"] {
+        background: var(--keel-veil-2);
+        box-shadow: inset 0 1px 0 0 var(--keel-sheen);
+    }
+
+    .k-commit-subject {
+        overflow: hidden;
+        color: var(--keel-text-dim);
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        transition: color 110ms ease;
+    }
+
+    .k-commit:hover .k-commit-subject,
+    .k-commit[data-open="true"] .k-commit-subject {
+        color: var(--keel-text);
+    }
+
+    /* What opens under a commit: its message, its files, what you can do. */
+    .k-commit-card {
+        margin-block: 2px 6px;
+        border-radius: var(--keel-r-control);
+        background: var(--keel-veil-1);
+        box-shadow: inset 0 0 0 1px var(--keel-line);
+    }
+
+    /* An author, as a single letter on their own hue. Set `--hue`. */
+    .k-avatar {
+        display: grid;
+        flex-shrink: 0;
+        place-items: center;
+        width: 16px;
+        height: 16px;
+        border-radius: 999px;
+        background: hsl(var(--hue) 45% 30%);
+        color: hsl(var(--hue) 80% 86%);
+        font-size: var(--keel-type-micro);
+        font-weight: 600;
+        line-height: 1;
+    }
+
+    /* What is selected, and what you can do to all of it at once. */
+    .k-selbar {
+        position: sticky;
+        bottom: 8px;
+        z-index: 2;
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        margin: 6px var(--keel-inset) 0;
+        padding: 3px 3px 3px 10px;
+        border-radius: var(--keel-r-control);
+        background: var(--keel-chrome-strong);
+        box-shadow:
+            var(--keel-lift),
+            inset 0 0 0 1px var(--keel-line-strong);
+        animation: k-chip-in 180ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+    }
+
+    .k-selbar-btn {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        height: 24px;
+        padding-inline: 7px;
+        border-radius: var(--keel-r-chip);
+        color: var(--keel-text-dim);
+        font-size: var(--keel-type-body);
+        font-weight: 500;
+        transition:
+            background-color 110ms ease,
+            color 110ms ease;
+    }
+
+    .k-selbar-btn:hover {
+        background: var(--keel-veil-2);
+        color: var(--keel-text);
+    }
+
+    .k-selbar-btn[data-danger="true"]:hover {
+        background: color-mix(in srgb, var(--keel-dead) 20%, transparent);
+        color: var(--keel-dead);
+    }
+
+    /* A tick box in the chrome's language: a well that fills light when on. */
+    .k-check {
+        display: grid;
+        flex-shrink: 0;
+        place-items: center;
+        width: 14px;
+        height: 14px;
+        border-radius: 4px;
+        background: var(--keel-veil-1);
+        box-shadow: inset 0 0 0 1px var(--keel-line-strong);
+        color: var(--keel-void);
+        transition:
+            background-color 110ms ease,
+            box-shadow 110ms ease;
+    }
+
+    .k-check[aria-checked="true"] {
+        background: var(--keel-text);
+        box-shadow: none;
+    }
+
+    /* The subject-line meter in the commit box, warming as it runs long. */
+    .k-meter {
+        font-variant-numeric: tabular-nums;
+        color: var(--keel-text-faint);
+    }
+
+    .k-meter[data-level="long"] {
+        color: var(--keel-working);
+    }
+
+    .k-meter[data-level="over"] {
+        color: var(--keel-dead);
+    }
+
+    /* A wider row for a branch or a pull request: a name and a line under it. */
+    .k-row-two {
+        height: auto;
+        min-height: 40px;
+        align-items: flex-start;
+        padding-block: 5px;
+    }
+
     .cm-editor {
         height: 100%;
         background: transparent;

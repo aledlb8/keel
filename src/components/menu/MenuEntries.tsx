@@ -34,6 +34,18 @@ import {
   ContextMenuSubTrigger,
 } from "@/components/ui/context-menu";
 import {
+  DropdownMenuCheckboxItem,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuShortcut,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   MenubarCheckboxItem,
   MenubarItem,
   MenubarLabel,
@@ -139,6 +151,19 @@ const MENUBAR_KIT: Kit = {
   SubContent: MenubarSubContent,
   RadioGroup: MenubarRadioGroup,
   RadioItem: MenubarRadioItem,
+};
+
+const DROPDOWN_KIT: Kit = {
+  Item: DropdownMenuItem,
+  CheckboxItem: DropdownMenuCheckboxItem,
+  Label: DropdownMenuLabel,
+  Separator: DropdownMenuSeparator,
+  Shortcut: DropdownMenuShortcut,
+  Sub: DropdownMenuSub,
+  SubTrigger: DropdownMenuSubTrigger,
+  SubContent: DropdownMenuSubContent,
+  RadioGroup: DropdownMenuRadioGroup,
+  RadioItem: DropdownMenuRadioItem,
 };
 
 const KitContext = createContext<Kit>(CONTEXT_KIT);
@@ -293,5 +318,19 @@ function ConfirmItem({ entry }: { entry: MenuItemEntry }) {
       {Icon ? <Icon /> : null}
       <span className="truncate">{armed ? entry.confirm : entry.label}</span>
     </kit.Item>
+  );
+}
+
+/** The same entries in a menu that drops from a button. */
+export function DropdownMenuEntries({
+  entries,
+}: {
+  /** A function is only called once the menu is actually open. */
+  entries: MenuEntry[] | (() => MenuEntry[]);
+}) {
+  return (
+    <KitContext.Provider value={DROPDOWN_KIT}>
+      <Entries entries={entries} />
+    </KitContext.Provider>
   );
 }
