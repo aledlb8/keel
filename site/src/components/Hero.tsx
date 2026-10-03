@@ -63,16 +63,20 @@ function DemoFrame() {
 }
 
 export function Hero() {
-  const reduce = useReducedMotion();
+  // The server cannot know the preference, so the first client render matches
+  // it (tilted) and only then lays the window flat.
+  const prefersReduced = useReducedMotion();
+  const [reduce, setReduce] = useState(false);
+  useEffect(() => setReduce(!!prefersReduced), [prefersReduced]);
   const stage = useRef<HTMLDivElement>(null);
   const { scrollYProgress } = useScroll({
     target: stage,
     offset: ["start end", "start 0.18"],
   });
   const eased = useSpring(scrollYProgress, { stiffness: 120, damping: 30, mass: 0.4 });
-  const rotateX = useTransform(eased, [0, 1], [reduce ? 0 : 26, 0]);
-  const scale = useTransform(eased, [0, 1], [reduce ? 1 : 0.88, 1]);
-  const y = useTransform(eased, [0, 1], [reduce ? 0 : 60, 0]);
+  const rotateX = useTransform(eased, [0, 1], [26, 0]);
+  const scale = useTransform(eased, [0, 1], [0.88, 1]);
+  const y = useTransform(eased, [0, 1], [60, 0]);
   const glow = useTransform(eased, [0, 1], [0.35, 1]);
 
   return (
@@ -128,7 +132,11 @@ export function Hero() {
       <div id="demo" ref={stage} className="relative mt-20 sm:mt-28" style={{ perspective: 1600 }}>
         <Container>
           <motion.div
-            style={{ rotateX, scale, y, transformOrigin: "50% 0%" }}
+            style={
+              reduce
+                ? { rotateX: 0, scale: 1, y: 0, transformOrigin: "50% 0%" }
+                : { rotateX, scale, y, transformOrigin: "50% 0%" }
+            }
             className="relative"
           >
             <motion.div
