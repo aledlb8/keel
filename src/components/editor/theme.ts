@@ -5,7 +5,8 @@ import type { Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { tags as t } from "@lezer/highlight";
 
-const highlight = HighlightStyle.define([
+/** Syntax colours, shared with the diff view so code reads the same in both. */
+export const SYNTAX_STYLES = [
   { tag: t.comment, color: "#707070" },
   { tag: t.lineComment, color: "#707070" },
   { tag: t.blockComment, color: "#707070" },
@@ -37,7 +38,9 @@ const highlight = HighlightStyle.define([
   { tag: t.emphasis, fontStyle: "italic" },
   { tag: t.strong, fontWeight: "600" },
   { tag: t.invalid, color: "#ec5d5e" },
-]);
+];
+
+const highlight = HighlightStyle.define(SYNTAX_STYLES);
 
 const chrome = EditorView.theme(
   {

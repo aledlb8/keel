@@ -35,6 +35,8 @@ import type {
   GitTag,
   GrepHit,
   GrepOptions,
+  LineAction,
+  LineSelection,
   MergeMode,
   OperationAction,
   PrList,
@@ -59,6 +61,28 @@ export type ChangeLayout = "list" | "tree";
 export const HISTORY_PAGE = 100;
 
 const CHANGE_LAYOUT_KEY = "keel.git.changeLayout";
+const DIFF_LAYOUT_KEY = "keel.diff.layout";
+const DIFF_CONTEXT_KEY = "keel.diff.context";
+
+export type DiffLayout = "inline" | "split";
+
+function readDiffLayout(): DiffLayout {
+  try {
+    return localStorage.getItem(DIFF_LAYOUT_KEY) === "split" ? "split" : "inline";
+  } catch {
+    return "inline";
+  }
+}
+
+function readDiffContext(): number {
+  try {
+    const saved = Number(localStorage.getItem(DIFF_CONTEXT_KEY));
+    return saved > 0 ? saved : 3;
+  } catch {
+    return 3;
+  }
+}
+
 const GREP_TOGGLES_KEY = "keel.search.toggles";
 const GREP_HISTORY_KEY = "keel.search.history";
 /** Recent searches kept for the empty search page. */
@@ -201,6 +225,9 @@ interface WorkspaceState {
   historyMore: boolean;
   historyPaging: boolean;
   commitDetails: Record<string, CommitDetails>;
+  diffLayout: DiffLayout;
+  /** Unchanged lines shown around each change; `FULL_CONTEXT` for all of them. */
+  diffContext: number;
 
   editors: EditorTab[];
   activeEditor: string | null;
@@ -240,6 +267,12 @@ interface WorkspaceState {
   openCommitDiff: (rev: string, file: Pick<CommitFile, "path">) => Promise<void>;
   /** Switch to the files tab with this path unfolded and selected. */
   revealInTree: (rel: string) => void;
+  setDiffLayout: (layout: DiffLayout) => void;
+  setDiffContext: (lines: number) => void;
+  /** Re-read an open diff in place, without a loading flash. */
+  refreshDiff: (id: string) => Promise<void>;
+  /** Stage, unstage or discard some hunks or lines of an open diff. */
+  applyLines: (id: string, action: LineAction, selection: LineSelection[]) => Promise<void>;
   initRepo: () => Promise<void>;
   setSelected: (rel: string | null) => void;
   toggleExpanded: (rel: string) => void;
@@ -567,9 +600,10 @@ function openEditor(
     const isOpen = () => isCurrent() && get().editors.includes(tab);
     try {
       if (tab.kind === "diff") {
+        const context = get().diffContext;
         const diff = tab.rev
-          ? await api.gitDiffRev(root, tab.rev, rel, commitOrigPath(get(), tab.rev, rel))
-          : await api.gitDiff(root, rel, tab.staged);
+          ? await api.gitDiffRev(root, tab.rev, rel, commitOrigPath(get(), tab.rev, rel), context)
+          : await api.gitDiff(root, rel, tab.staged, context);
         if (isOpen()) set({ diffs: { ...get().diffs, [id]: diff } });
       } else {
         const contents = await api.workspaceRead(root, rel);
@@ -885,6 +919,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   historyMore: false,
   historyPaging: false,
   commitDetails: {},
+  diffLayout: readDiffLayout(),
+  diffContext: readDiffContext(),
 
   editors: [],
   activeEditor: null,
@@ -1167,6 +1203,53 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       }
     } catch (error) {
       if (version === projectVersion) toast.error(errorMessage(error));
+    }
+  },
+  setDiffLayout: (diffLayout) => {
+    set({ diffLayout });
+    remember(DIFF_LAYOUT_KEY, diffLayout);
+  },
+  setDiffContext: (diffContext) => {
+    if (diffContext === get().diffContext) return;
+    set({ diffContext });
+    remember(DIFF_CONTEXT_KEY, String(diffContext));
+    for (const tab of get().editors) {
+      if (tab.kind === "diff") void get().refreshDiff(tab.id);
+    }
+  },
+  refreshDiff: async (id) => {
+    const root = get().root;
+    const tab = get().editors.find((item) => item.id === id);
+    if (!root || !tab || tab.kind !== "diff") return;
+    const version = projectVersion;
+    const context = get().diffContext;
+    try {
+      const diff = tab.rev
+        ? await api.gitDiffRev(root, tab.rev, tab.rel, commitOrigPath(get(), tab.rev, tab.rel), context)
+        : await api.gitDiff(root, tab.rel, tab.staged, context);
+      if (version !== projectVersion || !get().editors.includes(tab)) return;
+      // An unchanged diff keeps its identity, so what was picked in it survives.
+      const shown = get().diffs[id];
+      if (shown && JSON.stringify(shown) === JSON.stringify(diff)) return;
+      set({ diffs: { ...get().diffs, [id]: diff } });
+    } catch {
+      // The diff on screen stays; the next change on disk tries again.
+    }
+  },
+  applyLines: async (id, action, selection) => {
+    const tab = get().editors.find((item) => item.id === id);
+    const diff = get().diffs[id];
+    if (!tab || !diff || tab.kind !== "diff" || tab.rev) return;
+    const headers = diff.hunks.map((hunk) => hunk.header);
+    const context = get().diffContext;
+    await runGit(set, get, (root) =>
+      api.gitApplyLines(root, tab.rel, action, selection, headers, context),
+    );
+    // Both sides of this file move: what left one diff arrives in the other.
+    for (const other of get().editors) {
+      if (other.kind === "diff" && !other.rev && other.rel === tab.rel) {
+        void get().refreshDiff(other.id);
+      }
     }
   },
   revealInTree: (rel) => {

@@ -338,12 +338,16 @@ export function gitStatus(root: string): Promise<GitStatus> {
   return invoke("git_status", { root });
 }
 
+/** Context lines that stand for "the whole file". */
+export const FULL_CONTEXT = 1_000_000;
+
 export function gitDiff(
   root: string,
   path: string,
   staged: boolean,
+  context = 3,
 ): Promise<GitDiff> {
-  return invoke("git_diff", { root, path, staged });
+  return invoke("git_diff", { root, path, staged, context });
 }
 
 /**
@@ -479,8 +483,9 @@ export function gitDiffRev(
   rev: string,
   path: string,
   origPath: string | null = null,
+  context = 3,
 ): Promise<GitDiff> {
-  return invoke("git_diff_rev", { root, rev, path, origPath });
+  return invoke("git_diff_rev", { root, rev, path, origPath, context });
 }
 
 export function gitStashList(root: string): Promise<GitStash[]> {
@@ -526,6 +531,31 @@ export function gitTagDelete(root: string, name: string): Promise<string> {
 
 export function gitTagPush(root: string, name: string): Promise<string> {
   return invoke("git_tag_push", { root, name });
+}
+
+export interface LineSelection {
+  /** Which hunk, in the order the diff lists them. */
+  hunk: number;
+  /** Indices into that hunk's lines; the whole hunk when absent. */
+  lines?: number[] | null;
+}
+
+export type LineAction = "stage" | "unstage" | "discard";
+
+/**
+ * Stage, unstage or discard some hunks or lines of one file. `headers` are
+ * the hunk headers the selection was made against, so a diff that changed
+ * underneath is refused rather than misapplied.
+ */
+export function gitApplyLines(
+  root: string,
+  path: string,
+  action: LineAction,
+  selection: LineSelection[],
+  headers: string[],
+  context = 3,
+): Promise<string> {
+  return invoke("git_apply_lines", { root, path, action, selection, headers, context });
 }
 
 export function gitInit(root: string): Promise<void> {

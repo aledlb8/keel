@@ -1961,6 +1961,206 @@
         padding-right: 20px;
     }
 
+    /* The strip over a diff: layout, context, and stepping between changes. */
+    .k-diff-bar {
+        display: flex;
+        flex-shrink: 0;
+        align-items: center;
+        gap: 6px;
+        height: 34px;
+        padding-inline: 10px 8px;
+        border-bottom: 1px solid var(--keel-line);
+    }
+
+    .k-diff-bar-btn {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        height: 24px;
+        padding-inline: 8px 6px;
+        border-radius: var(--keel-r-chip);
+        color: var(--keel-text-faint);
+        font-size: var(--keel-type-small);
+        transition:
+            background-color 110ms ease,
+            color 110ms ease;
+    }
+
+    .k-diff-bar-btn:hover,
+    .k-diff-bar-btn[data-state="open"] {
+        background: var(--keel-veil-2);
+        color: var(--keel-text-dim);
+    }
+
+    /* Where git left unchanged lines out between two hunks. */
+    .k-diff-gap {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        height: 26px;
+        padding-inline: 14px;
+        background: repeating-linear-gradient(
+            -45deg,
+            transparent 0 6px,
+            rgba(255, 255, 255, 0.018) 6px 12px
+        );
+        color: var(--keel-text-faint);
+        font-family: var(--font-sans);
+        font-size: var(--keel-type-small);
+    }
+
+    .k-diff-hunk-btn {
+        display: flex;
+        flex-shrink: 0;
+        align-items: center;
+        gap: 4px;
+        height: 20px;
+        padding-inline: 7px;
+        border-radius: var(--keel-r-chip);
+        background: var(--keel-veil-1);
+        color: var(--keel-text-dim);
+        font-family: var(--font-sans);
+        font-size: var(--keel-type-small);
+        opacity: 0;
+        transition:
+            opacity 110ms ease,
+            background-color 110ms ease,
+            color 110ms ease;
+    }
+
+    section:hover > .k-diff-hunk .k-diff-hunk-btn,
+    .k-diff-hunk:focus-within .k-diff-hunk-btn {
+        opacity: 1;
+    }
+
+    .k-diff-hunk-btn:hover {
+        background: var(--keel-veil-3);
+        color: var(--keel-text);
+    }
+
+    .k-diff-hunk-btn[data-danger="true"]:hover {
+        background: color-mix(in srgb, var(--keel-dead) 20%, transparent);
+        color: var(--keel-dead);
+    }
+
+    .k-diff-hunk-btn:disabled {
+        opacity: 0.35;
+    }
+
+    /* The line numbers and sign, which pick a line when it can be staged. */
+    .k-diff-gutter {
+        display: flex;
+        flex-shrink: 0;
+        user-select: none;
+    }
+
+    .k-diff-gutter[data-pick="true"] {
+        cursor: pointer;
+    }
+
+    .k-diff-gutter[data-pick="true"]:hover .k-diff-no {
+        color: var(--keel-text);
+    }
+
+    /* A picked line: a bar down its edge and a stronger wash of its hue. */
+    [data-selected="true"].k-diff-line,
+    [data-selected="true"].k-diff-half {
+        box-shadow: inset 3px 0 0 0 var(--keel-text-dim);
+    }
+
+    .k-diff-line[data-kind="add"][data-selected="true"],
+    .k-diff-half[data-kind="add"][data-selected="true"] {
+        background: color-mix(in srgb, var(--keel-done) 22%, transparent);
+    }
+
+    .k-diff-line[data-kind="del"][data-selected="true"],
+    .k-diff-half[data-kind="del"][data-selected="true"] {
+        background: color-mix(in srgb, var(--keel-dead) 22%, transparent);
+    }
+
+    /* The change you stepped to with F7. */
+    [data-current="true"] .k-diff-sign {
+        box-shadow: inset 2px 0 0 0 var(--keel-text);
+    }
+
+    /* The words that changed inside an edited line. */
+    .k-diff-line[data-kind="add"] .k-diff-word,
+    .k-diff-half[data-kind="add"] .k-diff-word {
+        border-radius: 2px;
+        background: color-mix(in srgb, var(--keel-done) 30%, transparent);
+    }
+
+    .k-diff-line[data-kind="del"] .k-diff-word,
+    .k-diff-half[data-kind="del"] .k-diff-word {
+        border-radius: 2px;
+        background: color-mix(in srgb, var(--keel-dead) 30%, transparent);
+    }
+
+    /* Side by side: two columns that wrap rather than scroll apart. */
+    .k-diff-split {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    }
+
+    .k-diff-half {
+        display: flex;
+        min-width: 0;
+        color: var(--keel-term-fg);
+    }
+
+    .k-diff-half + .k-diff-half {
+        border-left: 1px solid var(--keel-line);
+    }
+
+    .k-diff-half .k-diff-text {
+        min-width: 0;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+    }
+
+    .k-diff-half[data-kind="ctx"] {
+        color: var(--keel-text-dim);
+    }
+
+    .k-diff-half[data-kind="meta"] {
+        color: var(--keel-text-faint);
+        font-style: italic;
+    }
+
+    .k-diff-half[data-kind="blank"] {
+        background: repeating-linear-gradient(
+            -45deg,
+            transparent 0 6px,
+            rgba(255, 255, 255, 0.02) 6px 12px
+        );
+    }
+
+    .k-diff-half[data-kind="add"] {
+        background: color-mix(in srgb, var(--keel-done) 9%, transparent);
+    }
+
+    .k-diff-half[data-kind="del"] {
+        background: color-mix(in srgb, var(--keel-dead) 9%, transparent);
+    }
+
+    .k-diff-half[data-kind="add"] .k-diff-no {
+        background: color-mix(in srgb, var(--keel-done) 12%, transparent);
+        color: color-mix(in srgb, var(--keel-done) 55%, var(--keel-text-faint));
+    }
+
+    .k-diff-half[data-kind="del"] .k-diff-no {
+        background: color-mix(in srgb, var(--keel-dead) 12%, transparent);
+        color: color-mix(in srgb, var(--keel-dead) 55%, var(--keel-text-faint));
+    }
+
+    .k-diff-half[data-kind="add"] .k-diff-sign {
+        color: var(--keel-done);
+    }
+
+    .k-diff-half[data-kind="del"] .k-diff-sign {
+        color: var(--keel-dead);
+    }
+
     /*
      * A place on a rail: a tile. It borrows the row's states exactly — veil on
      * hover, brighter veil and the sheen when current — so folding a dock
