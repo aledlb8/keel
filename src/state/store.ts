@@ -39,7 +39,7 @@ import {
   isGenericLabel,
   type TitleSource,
 } from "../lib/paneTitle.ts";
-import { editorRefId, editorRefName } from "../lib/editorRefs.ts";
+import { editorRefId, editorRefName, isRev } from "../lib/editorRefs.ts";
 import { moveTo, swapAt } from "../lib/order.ts";
 import { killPty } from "../lib/pty.ts";
 import { pathWithin } from "../lib/terminalCwd.ts";
@@ -496,7 +496,12 @@ function normalizeEditor(editor: PaneEditor): PaneEditor {
         typeof tab.rel === "string" &&
         (tab.kind === "file" || tab.kind === "diff"),
     )
-    .map((tab) => ({ kind: tab.kind, rel: tab.rel, staged: tab.staged === true }));
+    .map((tab) => ({
+      kind: tab.kind,
+      rel: tab.rel,
+      staged: tab.staged === true,
+      ...(tab.kind === "diff" && isRev(tab.rev) ? { rev: tab.rev } : {}),
+    }));
   const ids = tabs.map(editorRefId);
   return {
     tabs,

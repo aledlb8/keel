@@ -89,6 +89,8 @@ export interface EditorRef {
   rel: string;
   /** For a diff: the staged side rather than the working tree. */
   staged: boolean;
+  /** For a diff: the commit it shows, against its first parent. */
+  rev?: string | undefined;
 }
 
 /** What an editor pane shows. Only this is saved; the text is read from disk. */

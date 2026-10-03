@@ -342,7 +342,11 @@ function TabChip({
       role="tab"
       aria-selected={active}
       data-active={active}
-      title={tab.kind === "diff" ? `Changes in ${tab.rel}` : tab.rel}
+      title={
+        tab.kind === "diff"
+          ? `Changes in ${tab.rel}${tab.rev ? ` at ${tab.rev.slice(0, 7)}` : ""}`
+          : tab.rel
+      }
       className="k-tab group/tab"
       onClick={(event) => {
         if ((event.target as HTMLElement).closest("button")) return;
@@ -423,12 +427,13 @@ export function EditorBody({
   const kind = active?.kind;
   const rel = active?.rel;
   const staged = active?.staged;
+  const rev = active?.rev;
   useEffect(() => {
     if (!here || !visible || !kind || rel === undefined || known) return;
     void useWorkspace
       .getState()
-      .ensureDocument({ kind, rel, staged: Boolean(staged) });
-  }, [here, visible, kind, rel, staged, known]);
+      .ensureDocument({ kind, rel, staged: Boolean(staged), ...(rev ? { rev } : {}) });
+  }, [here, visible, kind, rel, staged, rev, known]);
 
   return (
     <div
@@ -542,7 +547,9 @@ function PathBar({
                 <span className="text-[color:var(--keel-dead)]">−{stats.removed}</span>
               </span>
             ) : null}
-            <span className="k-tag">{tab.staged ? "Staged" : "Working tree"}</span>
+            <span className={cn("k-tag", tab.rev && "font-mono")}>
+              {tab.rev ? tab.rev.slice(0, 7) : tab.staged ? "Staged" : "Working tree"}
+            </span>
           </>
         ) : dirty && !truncated ? (
           <>
