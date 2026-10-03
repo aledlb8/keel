@@ -59,9 +59,9 @@ const STRETCH_LIMIT = 0.15;
  * Cells that fit in the host, using the whole area.
  *
  * FitAddon always subtracts a 14px scrollbar gutter. Agent TUIs (Claude, Codex,
- * Grok, …) paint every column of the PTY, so that gutter plus any CSS padding
- * is a dead frame of pane around their own chrome. The scrollbar is an overlay;
- * it does not get a reserved column.
+ * Grok, …) paint every column of the PTY, so that gutter would be a dead strip
+ * beside their own chrome. The scrollbar is an overlay; it does not get a
+ * reserved column. The pane's inset sits outside `host`, so it is not counted.
  */
 function proposeGrid(term: Terminal, host: HTMLElement) {
   const width = host.clientWidth;
@@ -475,7 +475,8 @@ export const TerminalSurface = memo(function TerminalSurface({
       fontFamily: getComputedStyle(document.documentElement)
         .getPropertyValue("--keel-font-term")
         .trim(),
-      fontSize: 13,
+      // 15px is 11.25pt, Alacritty's default, so a pane matches that terminal.
+      fontSize: 15,
       // Exactly 1. Agent TUIs draw their boxes and bars out of line-drawing
       // glyphs, and any extra leading shows up as a gap through every one of them.
       lineHeight: 1,
@@ -885,9 +886,7 @@ export const TerminalSurface = memo(function TerminalSurface({
   }, [focused]);
 
   return (
-    // No inset. Agent TUIs draw a full-screen frame; padding around the grid
-    // is a second frame of pane around theirs. `isolate` keeps xterm's
-    // z-indexed layers from stacking over the header.
+    // `isolate` keeps xterm's z-indexed layers from stacking over the header.
     <div
       className="relative isolate flex h-full w-full flex-col overflow-hidden"
       data-terminal-pane={paneId}
@@ -905,7 +904,9 @@ export const TerminalSurface = memo(function TerminalSurface({
           </button>
         </div>
       ) : null}
-      <div className="relative flex min-h-0 w-full flex-1 flex-col overflow-hidden">
+      {/* Alacritty's 10px inset, so text never touches the pane's edge. It is
+          painted by the pane, which is the terminal's own colour. */}
+      <div className="relative flex min-h-0 w-full flex-1 flex-col overflow-hidden p-[10px]">
         {searchOpen ? (
           <TerminalSearch
             value={searchTerm}
