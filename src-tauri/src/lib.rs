@@ -64,6 +64,7 @@ pub fn run() {
             workspace::workspace_rename,
             workspace::workspace_search,
             grep::workspace_grep,
+            grep::workspace_replace,
             watch::workspace_watch,
             watch::workspace_unwatch,
             git::git_status,

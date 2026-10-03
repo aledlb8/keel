@@ -63,7 +63,7 @@ fn keel_tmp_path(path: &Path, pid: u32, nanos: u128) -> PathBuf {
     parent.join(format!(".{name}.{pid}.{nanos}.keel-tmp"))
 }
 
-fn write_atomic(path: &Path, contents: &str) -> Result<(), String> {
+pub(crate) fn write_atomic(path: &Path, contents: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|err| err.to_string())?;
     }
