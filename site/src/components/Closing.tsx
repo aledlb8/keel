@@ -4,7 +4,14 @@ import { useState } from "react";
 import { Check, Copy } from "lucide-react";
 
 import { KeelMark } from "./marks";
+import { LiquidMetal } from "./rare/LiquidMetal";
+import { ScatterText } from "./rare/ScatterText";
+import { ShimmerLink } from "./rare/ShimmerLink";
 import { Container, GithubIcon, RELEASES, REPO } from "./ui";
+
+/** The display face at full mass, in the page's own loaded family. */
+const wordmarkFont = (el: HTMLElement) =>
+  `expanded 850 220px ${getComputedStyle(el).fontFamily}`;
 
 const STEPS = [
   "git clone https://github.com/aledlb8/keel",
@@ -54,19 +61,14 @@ export function Closing() {
         <div className="grid gap-14 lg:grid-cols-12 lg:items-end">
           <div className="min-w-0 lg:col-span-7">
             <h2 className="display text-[clamp(2.4rem,7vw,6.5rem)] text-balance">
-              Put every agent where you can see it.
+              <ScatterText text="Put every agent where you can see it." />
             </h2>
             <p className="mt-8 max-w-[32rem] text-[18px] leading-[1.65] text-dim">
               Keel is free and open source under the MIT license. Download a
               release, or build it yourself in four commands.
             </p>
             <div className="mt-10 flex flex-wrap gap-3">
-              <a
-                href={RELEASES}
-                className="flex h-12 items-center rounded-[11px] bg-ink px-6 text-[16px] font-semibold text-black shadow-[0_10px_40px_-10px_rgba(255,255,255,0.35)] transition-[background-color,transform] hover:-translate-y-px hover:bg-white"
-              >
-                Download Keel
-              </a>
+              <ShimmerLink href={RELEASES}>Download Keel</ShimmerLink>
               <a
                 href={REPO}
                 className="flex h-12 items-center gap-2.5 rounded-[11px] px-5 text-[16px] text-ink shadow-[inset_0_0_0_1px_rgba(255,255,255,0.14)] transition-colors hover:bg-veil-2"
@@ -95,18 +97,31 @@ export function Closing() {
         </footer>
       </Container>
 
-      {/* The wordmark, sitting low like a hull below the waterline. */}
-      <div aria-hidden className="pointer-events-none relative mt-10 h-[17vw] select-none">
-        <span
-          className="display absolute inset-x-0 top-0 block text-center text-[31vw] leading-[0.8] text-transparent"
-          style={{
-            backgroundImage: "linear-gradient(180deg, #202020 0%, #111 38%, rgba(5,5,5,0) 62%)",
-            WebkitBackgroundClip: "text",
-            backgroundClip: "text",
-          }}
-        >
-          Keel
-        </span>
+      {/*
+        The wordmark, sitting low like a hull below the waterline — now in
+        liquid metal, fading out the deeper it goes.
+      */}
+      <div
+        aria-hidden
+        className="pointer-events-none relative mt-10 h-[19vw] overflow-hidden select-none [mask-image:linear-gradient(180deg,#000_20%,transparent_92%)]"
+      >
+        <LiquidMetal
+          text="Keel"
+          font={wordmarkFont}
+          className="mx-auto aspect-[3.3/1] w-[96vw] opacity-80"
+          fallback={
+            <span
+              className="display block text-center text-[31vw] leading-[0.8] text-transparent"
+              style={{
+                backgroundImage: "linear-gradient(180deg, #202020 0%, #111 38%, rgba(5,5,5,0) 62%)",
+                WebkitBackgroundClip: "text",
+                backgroundClip: "text",
+              }}
+            >
+              Keel
+            </span>
+          }
+        />
       </div>
     </section>
   );
