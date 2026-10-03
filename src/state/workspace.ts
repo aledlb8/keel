@@ -240,20 +240,21 @@ function emptyDocs(): EditorDocs {
 }
 
 /**
- * Where you were in a folder you are not looking at: the folders left open and
- * the row under the cursor. Like the open documents beside it, it comes back
+ * Where you were in a folder you are not looking at: the folders left open, the
+ * row under the cursor and the commit message you were writing. Like the open documents beside it, it comes back
  * when you return to the project — and only for this session, because a fresh
  * launch starts every project folded at its root.
  */
 interface BrowseState {
   expanded: Record<string, boolean>;
   selectedRel: string | null;
+  commitMessage: string;
 }
 
 const stashedBrowse = new Map<string, BrowseState>();
 
 function emptyBrowse(): BrowseState {
-  return { expanded: {}, selectedRel: null };
+  return { expanded: {}, selectedRel: null, commitMessage: "" };
 }
 
 /** What to keep when leaving a folder. Reads still in flight are abandoned, so those load again. */
@@ -721,8 +722,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     reads.reset();
     if (previous) {
       stashedDocs.set(previous, settledDocs(get()));
-      const { expanded, selectedRel } = get();
-      stashedBrowse.set(previous, { expanded: { ...expanded }, selectedRel });
+      const { expanded, selectedRel, commitMessage } = get();
+      stashedBrowse.set(previous, { expanded: { ...expanded }, selectedRel, commitMessage });
     }
     // No project at all: nothing will come back for what was open.
     if (!root) {
@@ -742,6 +743,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       tree: {},
       expanded: browse.expanded,
       selectedRel: browse.selectedRel,
+      commitMessage: browse.commitMessage,
       creating: null,
       renaming: null,
       searchHits: null,
@@ -1342,7 +1344,12 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         );
       }
       const hash = await api.gitCommit(root, message);
-      if (version === projectVersion) set({ commitMessage: "" });
+      // Clear it in whichever project made the commit, even if you left it meanwhile.
+      if (get().root === root) set({ commitMessage: "" });
+      else {
+        const stashed = stashedBrowse.get(root);
+        if (stashed) stashed.commitMessage = "";
+      }
       toast.success(`Committed ${hash}`);
       if (andPush) {
         const pushed = await api.gitPush(root, !git?.upstream);
