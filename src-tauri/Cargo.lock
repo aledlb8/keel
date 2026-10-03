@@ -2106,6 +2106,7 @@ dependencies = [
  "tauri-plugin-opener",
  "time",
  "toml_edit 0.25.13+spec-1.1.0",
+ "url",
  "uuid",
  "webview2-com",
  "winapi",

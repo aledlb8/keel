@@ -4,7 +4,7 @@
 //! Nothing here follows a `..` out of that folder.
 
 use std::fs::{self, OpenOptions};
-use std::io::{ErrorKind, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -16,6 +16,8 @@ use crate::paths::{
 };
 
 const MAX_READ: u64 = 2_000_000;
+/// Enough of a file to recognise it, and to tell binary from text when it is.
+const SNIFF_LEN: u64 = 4096;
 const MAX_SEARCH: usize = 200;
 
 #[derive(Debug, Serialize)]
@@ -35,6 +37,9 @@ pub struct FileContents {
     pub truncated: bool,
     pub size: u64,
     pub mtime_ms: u64,
+    /// What a binary file looks like it is (`image`, `sqlite`, …), from its
+    /// first bytes. `None` for text and for binary nothing recognises.
+    pub format: Option<&'static str>,
 }
 
 fn mtime_ms(meta: &fs::Metadata) -> u64 {
@@ -192,23 +197,32 @@ fn workspace_read_blocking(root: String, rel: String) -> Result<FileContents, St
     let meta = fs::metadata(&path).map_err(|err| err.to_string())?;
     let size = meta.len();
     let mtime_ms = mtime_ms(&meta);
-    let bytes = if size > MAX_READ {
-        let mut file = fs::File::open(&path).map_err(|err| err.to_string())?;
-        let mut buf = vec![0u8; MAX_READ as usize];
-        use std::io::Read;
-        file.read_exact(&mut buf).map_err(|err| err.to_string())?;
-        buf
-    } else {
-        fs::read(&path).map_err(|err| err.to_string())?
+    let binary = |format: Option<&'static str>| FileContents {
+        text: String::new(),
+        binary: true,
+        truncated: size > MAX_READ,
+        size,
+        mtime_ms,
+        format,
     };
+    let file = fs::File::open(&path).map_err(|err| err.to_string())?;
+    let mut reader = file.take(MAX_READ);
+    // A recognised format is settled by its head: a video is not read two
+    // megabytes deep only to be handed to another viewer.
+    let mut bytes = Vec::new();
+    (&mut reader)
+        .take(SNIFF_LEN)
+        .read_to_end(&mut bytes)
+        .map_err(|err| err.to_string())?;
+    let format = crate::preview::sniff(&bytes);
+    if format == Some("pdf") || (format.is_some() && looks_binary(&bytes)) {
+        return Ok(binary(format));
+    }
+    reader
+        .read_to_end(&mut bytes)
+        .map_err(|err| err.to_string())?;
     if looks_binary(&bytes) {
-        return Ok(FileContents {
-            text: String::new(),
-            binary: true,
-            truncated: size > MAX_READ,
-            size,
-            mtime_ms,
-        });
+        return Ok(binary(format));
     }
     let text = String::from_utf8_lossy(&bytes).into_owned();
     Ok(FileContents {
@@ -217,6 +231,7 @@ fn workspace_read_blocking(root: String, rel: String) -> Result<FileContents, St
         truncated: size > MAX_READ,
         size,
         mtime_ms,
+        format: None,
     })
 }
 
@@ -605,6 +620,30 @@ mod tests {
         assert!(!file.binary);
         assert_eq!(file.size, over as u64);
         assert_eq!(file.text.len(), MAX_READ as usize);
+    }
+
+    #[test]
+    fn binary_reads_name_their_format() {
+        let dir = Scratch::new("format");
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+        png.resize(10_000, 7);
+        fs::write(dir.0.join("logo.png"), &png).unwrap();
+        fs::write(dir.0.join("app.db"), b"SQLite format 3\0\x10\0\x01\x01").unwrap();
+        fs::write(dir.0.join("blob.bin"), b"\x01\x02\0\x03").unwrap();
+        fs::write(dir.0.join("BM.txt"), "BM is how this text starts").unwrap();
+        let root = dir.root_str();
+
+        let image = block_read(&root, "logo.png").expect("png");
+        assert!(image.binary);
+        assert_eq!(image.format, Some("image"));
+        assert_eq!(image.size, 10_000);
+        let db = block_read(&root, "app.db").expect("db");
+        assert_eq!((db.binary, db.format), (true, Some("sqlite")));
+        let blob = block_read(&root, "blob.bin").expect("bin");
+        assert_eq!((blob.binary, blob.format), (true, None));
+        let text = block_read(&root, "BM.txt").expect("text");
+        assert_eq!((text.binary, text.format), (false, None));
+        assert!(text.text.starts_with("BM is"));
     }
 
     #[test]

@@ -32,22 +32,24 @@
       "csp": {
         "default-src": "'self'",
         "connect-src": "ipc: http://ipc.localhost",
-        "font-src": "'self' data:",
-        "img-src": "'self' data:",
+        "font-src": "'self' data: keel-file: http://keel-file.localhost",
+        "img-src": "'self' data: keel-file: http://keel-file.localhost",
+        "media-src": "'self' keel-file: http://keel-file.localhost",
         "style-src": "'self' 'unsafe-inline'",
         "object-src": "'none'",
         "base-uri": "'none'",
-        "frame-src": "'none'"
+        "frame-src": "keel-file: http://keel-file.localhost"
       },
       "devCsp": {
         "default-src": "'self'",
         "connect-src": "ipc: http://ipc.localhost ws://localhost:1420",
-        "font-src": "'self' data:",
-        "img-src": "'self' data:",
+        "font-src": "'self' data: keel-file: http://keel-file.localhost",
+        "img-src": "'self' data: keel-file: http://keel-file.localhost",
+        "media-src": "'self' keel-file: http://keel-file.localhost",
         "style-src": "'self' 'unsafe-inline'",
         "object-src": "'none'",
         "base-uri": "'none'",
-        "frame-src": "'none'"
+        "frame-src": "keel-file: http://keel-file.localhost"
       }
     }
   },

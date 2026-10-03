@@ -6,6 +6,7 @@ mod git_ops;
 mod grep;
 mod hook_config;
 mod paths;
+mod preview;
 mod procs;
 mod pty;
 mod roots;
@@ -33,6 +34,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        .register_asynchronous_uri_scheme_protocol(preview::SCHEME, preview::protocol)
         .setup(|app| {
             app.manage(WatchManager::new(app.handle().clone()));
             // Tauri 2 does not wrap wry's with_browser_accelerator_keys.
@@ -63,6 +65,7 @@ pub fn run() {
             workspace::workspace_delete,
             workspace::workspace_rename,
             workspace::workspace_search,
+            preview::workspace_read_bytes,
             grep::workspace_grep,
             grep::workspace_replace,
             watch::workspace_watch,
