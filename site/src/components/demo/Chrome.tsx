@@ -416,6 +416,7 @@ function Ring({ value, agent }: { value: number; agent: "claude" | "codex" }) {
             strokeWidth="1.6"
             strokeLinecap="round"
             strokeDasharray={c}
+            initial={false}
             animate={{ strokeDashoffset: c * (1 - value / 100) }}
             transition={{ duration: 0.8 }}
           />
