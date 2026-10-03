@@ -47,6 +47,7 @@ import {
 import { fileName, parentRel, parseRef, relativeTime, remoteWebUrl } from "@/lib/git";
 import { layoutGraph, type GraphEdge, type GraphRow } from "@/lib/gitGraph";
 import { cn } from "@/lib/utils";
+import { ask } from "@/lib/ask";
 import type { CommitDetails, GitCommit, GitStatus } from "@/lib/workspace";
 import { useWorkspace } from "@/state/workspace";
 
@@ -547,9 +548,10 @@ function CardAction({
 
 // ---- What a commit offers -----------------------------------------------------
 
-function checkoutCommit(commit: GitCommit) {
-  const ok = window.confirm(
-    `Check out ${commit.short}? You'll be on a detached HEAD: commits made there belong to no branch until you create one.`,
+async function checkoutCommit(commit: GitCommit) {
+  const ok = await ask(
+    "You'll be on a detached HEAD: commits made there belong to no branch until you create one.",
+    { title: `Check out ${commit.short}?`, confirm: "Check out", destructive: false },
   );
   if (ok) void workspace().checkoutRev(commit.hash);
 }

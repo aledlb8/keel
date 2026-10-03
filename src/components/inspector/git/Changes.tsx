@@ -75,6 +75,7 @@ import {
   type ChangeNode,
 } from "@/lib/git";
 import { cn } from "@/lib/utils";
+import { ask } from "@/lib/ask";
 import type { GitFile, GitStatus } from "@/lib/workspace";
 import { useWorkspace } from "@/state/workspace";
 
@@ -129,10 +130,15 @@ function discardWarning(files: GitFile[]): string {
   }`;
 }
 
-function confirmDiscard(files: GitFile[]) {
+async function confirmDiscard(files: GitFile[]) {
   const safe = files.filter((file) => !file.conflict);
   if (safe.length === 0) return;
-  if (window.confirm(discardWarning(safe))) void workspace().discard(pathsOf(safe));
+  const ok = await ask(discardWarning(safe), {
+    title: "Discard changes?",
+    confirm: "Discard",
+    destructive: true,
+  });
+  if (ok) void workspace().discard(pathsOf(safe));
 }
 
 /** Rows in the order they are on screen, so shift-click selects what you see. */

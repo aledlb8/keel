@@ -17,6 +17,7 @@ import { fileName, joinRel, parentRel } from "../lib/git.ts";
 import { noteRecent, pruneRecent } from "../lib/recentFiles.ts";
 import type { EditorRef } from "../lib/types.ts";
 import * as api from "../lib/workspace.ts";
+import { ask } from "../lib/ask.ts";
 import { WorkspaceReads } from "../lib/workspaceReads.ts";
 import { sameWatchRoot } from "../lib/workspaceWatch.ts";
 import { deckOfPane, useKeel } from "./store.ts";
@@ -273,17 +274,17 @@ interface WorkspaceState {
   openFile: (rel: string) => Promise<void>;
   openDiff: (rel: string, staged: boolean) => Promise<void>;
   /** Close a file everywhere it is open, asking first if it has unsaved edits. */
-  closeEditor: (id: string) => void;
+  closeEditor: (id: string) => Promise<void>;
   /** Load a tab's contents without moving focus or touching the layout. */
   ensureDocument: (ref: EditorRef) => Promise<void>;
   /** Close one tab of an editor pane, asking first if that drops unsaved edits. */
-  closeTab: (projectId: string, paneId: string, id: string) => void;
+  closeTab: (projectId: string, paneId: string, id: string) => Promise<void>;
   /** Close any pane from the UI. Asks before dropping unsaved edits or killing an agent. */
-  closePaneSafely: (projectId: string, paneId: string) => void;
+  closePaneSafely: (projectId: string, paneId: string) => Promise<void>;
   /** Drop a project after confirming unsaved files in it. */
-  removeProjectSafely: (projectId: string) => void;
+  removeProjectSafely: (projectId: string) => Promise<void>;
   /** Drop a deck after confirming unsaved files it uniquely holds. */
-  removeDeckSafely: (projectId: string, deckId: string) => void;
+  removeDeckSafely: (projectId: string, deckId: string) => Promise<void>;
   setActiveEditor: (id: string) => void;
   setBuffer: (id: string, value: string) => void;
   saveActive: () => Promise<void>;
@@ -1463,11 +1464,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     id: diffTabId(rel, staged), kind: "diff", rel, staged, name: fileName(rel),
   }, set, get),
 
-  closeEditor: (id) => {
+  closeEditor: async (id) => {
     const state = get();
     if (isDirty(state, id)) {
       const tab = state.editors.find((item) => item.id === id);
-      const ok = window.confirm(
+      const ok = await ask(
         `Discard unsaved changes to ${tab?.name ?? "this file"}?`,
       );
       if (!ok) return;
@@ -1495,7 +1496,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       false,
     ),
 
-  closeTab: (projectId, paneId, id) => {
+  closeTab: async (projectId, paneId, id) => {
     const keel = useKeel.getState();
     const project = keel.projects.find((item) => item.id === projectId);
     if (!project) return;
@@ -1504,7 +1505,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const last = root !== null && project.path === root && !tabShown(root, id, paneId);
     if (last && isDirty(get(), id)) {
       const tab = get().editors.find((item) => item.id === id);
-      const ok = window.confirm(
+      const ok = await ask(
         `Discard unsaved changes to ${tab?.name ?? "this file"}?`,
       );
       if (!ok) return;
@@ -1513,7 +1514,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     if (last && root) releaseLater(root, [id], set, get);
   },
 
-  closePaneSafely: (projectId, paneId) => {
+  closePaneSafely: async (projectId, paneId) => {
     const keel = useKeel.getState();
     const project = keel.projects.find((item) => item.id === projectId);
     const pane = project ? deckOfPane(project, paneId)?.panes[paneId] : undefined;
@@ -1528,7 +1529,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       );
       if (dirty.length) {
         const first = dirty[0];
-        const ok = window.confirm(
+        const ok = await ask(
           dirty.length === 1 && first
             ? `Discard unsaved changes to ${first.name}?`
             : `Discard unsaved changes in ${dirty.length} files?`,
@@ -1544,7 +1545,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       !(paneId in keel.exited) &&
       !(paneId in keel.closing)
     ) {
-      const ok = window.confirm(
+      const ok = await ask(
         `Closing ${pane.title || "this terminal"} stops the agent. There is no undo.`,
       );
       if (!ok) return;
@@ -1552,7 +1553,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     keel.dismissPane(projectId, paneId);
   },
 
-  removeProjectSafely: (projectId) => {
+  removeProjectSafely: async (projectId) => {
     const keel = useKeel.getState();
     const project = keel.projects.find((item) => item.id === projectId);
     if (!project) return;
@@ -1563,7 +1564,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         : [];
     if (dirty.length) {
       const first = dirty[0];
-      const ok = window.confirm(
+      const ok = await ask(
         dirty.length === 1 && first
           ? `Remove this project and discard unsaved changes to ${first.name}?`
           : `Remove this project and discard unsaved changes in ${dirty.length} files?`,
@@ -1573,7 +1574,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     keel.removeProject(projectId);
   },
 
-  removeDeckSafely: (projectId, deckId) => {
+  removeDeckSafely: async (projectId, deckId) => {
     const keel = useKeel.getState();
     const project = keel.projects.find((item) => item.id === projectId);
     const deck = project?.decks.find((item) => item.id === deckId);
@@ -1590,7 +1591,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         : [];
     if (dirty.length) {
       const first = dirty[0];
-      const ok = window.confirm(
+      const ok = await ask(
         dirty.length === 1 && first
           ? `Remove this deck and discard unsaved changes to ${first.name}?`
           : `Remove this deck and discard unsaved changes in ${dirty.length} files?`,
@@ -1827,7 +1828,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         await api.gitBranchDelete(root, name);
       } catch (error) {
         if (!/not fully merged/i.test(errorMessage(error))) throw error;
-        const ok = window.confirm(
+        const ok = await ask(
           `${name} has commits that no other branch has. Delete it anyway? Those commits will be lost.`,
         );
         if (!ok) return;

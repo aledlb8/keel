@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { ask } from "@/lib/ask";
 import {
   Dialog,
   DialogContent,
@@ -192,9 +193,10 @@ export function VpnDialog() {
             <Button
               size="sm"
               variant="outline"
-              onClick={() => {
-                const ok = window.confirm(
-                  "Disconnect the private VPN? Keel terminals will use this PC's normal connection.",
+              onClick={async () => {
+                const ok = await ask(
+                  "Keel terminals will use this PC's normal connection.",
+                  { title: "Disconnect the private VPN?", confirm: "Disconnect", destructive: false },
                 );
                 if (!ok) return;
                 void useKeel.getState().disconnectVpn();

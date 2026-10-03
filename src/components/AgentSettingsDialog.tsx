@@ -46,6 +46,7 @@ import {
 import { AgentMark } from "@/components/AgentMark";
 import { InlineRename } from "@/components/InlineRename";
 import { Button } from "@/components/ui/button";
+import { ask } from "@/lib/ask";
 import {
   Dialog,
   DialogContent,
@@ -378,7 +379,7 @@ export function AgentSettingsDialog() {
         invalid.length === 1
           ? `${firstInvalid.name.trim() || "Untitled"} has errors and will not be saved.`
           : `${invalid.length} agents have errors and will not be saved.`;
-      if (!window.confirm(`${label} Close anyway?`)) {
+      if (!(await ask(label, { title: "Close anyway?", confirm: "Close", destructive: false }))) {
         setSelectedId(firstInvalid.id);
         return;
       }

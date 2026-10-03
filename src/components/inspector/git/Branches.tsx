@@ -41,6 +41,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { relativeTime, remoteWebUrl } from "@/lib/git";
+import { ask } from "@/lib/ask";
 import { cn } from "@/lib/utils";
 import type { GitBranch as Branch, GitStatus, GitTag } from "@/lib/workspace";
 import { useWorkspace } from "@/state/workspace";
@@ -310,11 +311,14 @@ function branchMenu(
         kind: "item",
         label: `Rebase ${here} onto this`,
         icon: GitPullRequestArrow,
-        onSelect: () => {
-          if (window.confirm(`Rebase ${here} onto ${branch.name}? Its commits will be rewritten on top.`)) {
-            void state.rebase(branch.name);
-          }
-        },
+        onSelect: () =>
+          void ask(`Its commits will be rewritten on top of ${branch.name}.`, {
+            title: `Rebase ${here} onto ${branch.name}?`,
+            confirm: "Rebase",
+            destructive: false,
+          }).then((ok) => {
+            if (ok) void state.rebase(branch.name);
+          }),
       },
     );
   }

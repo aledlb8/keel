@@ -284,7 +284,7 @@ describe("persist after restore", () => {
 });
 
 describe("removeProject unsaved confirm", () => {
-  it("keeps the project when confirm is cancelled", () => {
+  it("keeps the project when confirm is cancelled", async () => {
     confirmAnswer = false;
     useKeel.setState({
       ready: true,
@@ -294,12 +294,12 @@ describe("removeProject unsaved confirm", () => {
       activeProjectId: "web",
     });
     dirtyAt("/code/web");
-    useWorkspace.getState().removeProjectSafely("web");
+    await useWorkspace.getState().removeProjectSafely("web");
     assert.equal(confirmCalls, 1);
     assert.ok(state().projects.some((project) => project.id === "web"));
   });
 
-  it("removes the project when confirm is accepted", () => {
+  it("removes the project when confirm is accepted", async () => {
     confirmAnswer = true;
     useKeel.setState({
       ready: true,
@@ -309,12 +309,12 @@ describe("removeProject unsaved confirm", () => {
       activeProjectId: "web",
     });
     dirtyAt("/code/web");
-    useWorkspace.getState().removeProjectSafely("web");
+    await useWorkspace.getState().removeProjectSafely("web");
     assert.equal(confirmCalls, 1);
     assert.ok(!state().projects.some((project) => project.id === "web"));
   });
 
-  it("does not prompt when the on-screen folder is a different project", () => {
+  it("does not prompt when the on-screen folder is a different project", async () => {
     useKeel.setState({
       ready: true,
       restoreStatus: "idle",
@@ -326,12 +326,12 @@ describe("removeProject unsaved confirm", () => {
       activeProjectId: "web",
     });
     dirtyAt("/code/api");
-    useWorkspace.getState().removeProjectSafely("web");
+    await useWorkspace.getState().removeProjectSafely("web");
     assert.equal(confirmCalls, 0);
     assert.ok(!state().projects.some((project) => project.id === "web"));
   });
 
-  it("keeps a deck when confirm is cancelled", () => {
+  it("keeps a deck when confirm is cancelled", async () => {
     confirmAnswer = false;
     useKeel.setState({
       ready: true,
@@ -350,7 +350,7 @@ describe("removeProject unsaved confirm", () => {
       activeProjectId: "web",
     });
     dirtyAt("/code/web");
-    useWorkspace.getState().removeDeckSafely("web", "deck");
+    await useWorkspace.getState().removeDeckSafely("web", "deck");
     assert.equal(confirmCalls, 1);
     assert.equal(state().projects[0]?.decks[0]?.id, "deck");
     assert.ok(state().projects[0]?.decks[0]?.panes.ed);

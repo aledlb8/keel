@@ -7,6 +7,8 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { toast } from "sonner";
 
+import { ask } from "@/lib/ask";
+
 import { useKeel } from "@/state/store";
 import { useWorkspace } from "@/state/workspace";
 
@@ -32,7 +34,7 @@ function dirtyNames(): string[] {
   return [...new Set([...open, ...extra].map((file) => file.name))];
 }
 
-export function confirmUnsaved(action: string): boolean {
+export async function confirmUnsaved(action: string): Promise<boolean> {
   const names = dirtyNames();
   if (names.length === 0) return true;
   const list =
@@ -41,16 +43,18 @@ export function confirmUnsaved(action: string): boolean {
       : names.length <= 3
         ? names.join(", ")
         : `${names.slice(0, 3).join(", ")} and ${names.length - 3} more`;
-  return window.confirm(
-    `${action} discards unsaved changes to ${list}. Continue?`,
-  );
+  return ask(`${action} discards unsaved changes to ${list}.`, {
+    title: "Discard unsaved changes?",
+    confirm: action,
+    destructive: true,
+  });
 }
 
 export async function handleCloseRequested(): Promise<void> {
   if (closing) return;
   closing = true;
   try {
-    if (!confirmUnsaved("Quit")) {
+    if (!(await confirmUnsaved("Quit"))) {
       closing = false;
       return;
     }

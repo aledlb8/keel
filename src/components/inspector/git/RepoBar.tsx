@@ -38,6 +38,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { relativeTime, remoteWebUrl } from "@/lib/git";
 import { cn } from "@/lib/utils";
+import { ask } from "@/lib/ask";
 import type { GitBranch as Branch, GitStatus } from "@/lib/workspace";
 import { useWorkspace } from "@/state/workspace";
 
@@ -617,10 +618,13 @@ export function OperationBanner({ git, busy }: { git: GitStatus; busy: boolean }
           size="xs"
           variant="ghost"
           disabled={busy}
-          onClick={() => {
-            if (window.confirm(`Abort the ${name.toLowerCase()}? Its changes so far will be thrown away.`)) {
-              void workspace().operation("abort");
-            }
+          onClick={async () => {
+            const ok = await ask("Its changes so far will be thrown away.", {
+              title: `Abort the ${name.toLowerCase()}?`,
+              confirm: "Abort",
+              destructive: true,
+            });
+            if (ok) void workspace().operation("abort");
           }}
         >
           Abort

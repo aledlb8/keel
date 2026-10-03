@@ -41,6 +41,7 @@ import { Titlebar, type TitlebarActions } from "@/components/Titlebar";
 import { VpnDialog } from "@/components/VpnDialog";
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
+import { AskHost } from "@/components/AskHost";
 import {
   isAppModalOpen,
   isBrowserChromeKey,
@@ -674,6 +675,7 @@ export default function App() {
       <ShortcutsDialog open={shortcuts} onOpenChange={setShortcuts} />
       <AgentSettingsDialog />
       <VpnDialog />
+      <AskHost />
       <Toaster />
     </div>
   );
