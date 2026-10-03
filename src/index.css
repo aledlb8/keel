@@ -1773,6 +1773,83 @@
         padding-block: 5px;
     }
 
+    /*
+     * Find in files.
+     *
+     * The match switches ride inside the search well, lit while on. A match
+     * in a result is a warm wash — the colour the eye goes looking for —
+     * and, while replacing, the old text is struck in red with the new in
+     * green beside it, the way a diff says the same thing.
+     */
+    .k-search-toggle {
+        display: grid;
+        flex-shrink: 0;
+        place-items: center;
+        width: 22px;
+        height: 22px;
+        border-radius: var(--keel-r-chip);
+        color: var(--keel-text-faint);
+        transition:
+            background-color 110ms ease,
+            color 110ms ease,
+            box-shadow 110ms ease;
+    }
+
+    .k-search-toggle:hover {
+        background: var(--keel-veil-2);
+        color: var(--keel-text-dim);
+    }
+
+    .k-search-toggle[data-on="true"] {
+        background: var(--keel-veil-3);
+        box-shadow: inset 0 0 0 1px var(--keel-line-strong);
+        color: var(--keel-text);
+    }
+
+    /* A filter is narrowing the search, though its fields are folded away. */
+    .k-search-dot {
+        position: absolute;
+        top: 3px;
+        right: 3px;
+        width: 5px;
+        height: 5px;
+        border-radius: 999px;
+        background: var(--keel-working);
+    }
+
+    /* Results on screen are being refreshed. */
+    .k-search-pulse {
+        width: 6px;
+        height: 6px;
+        flex-shrink: 0;
+        margin-right: 4px;
+        border-radius: 999px;
+        background: var(--keel-text-dim);
+        animation: k-search-pulse 900ms ease-in-out infinite;
+    }
+
+    .k-search-mark {
+        border-radius: 3px;
+        background: color-mix(in srgb, var(--keel-working) 26%, transparent);
+        box-shadow: 0 0 0 1px color-mix(in srgb, var(--keel-working) 30%, transparent);
+        color: var(--keel-text);
+    }
+
+    .k-search-del {
+        border-radius: 3px;
+        background: color-mix(in srgb, var(--keel-dead) 20%, transparent);
+        color: color-mix(in srgb, var(--keel-dead) 70%, var(--keel-text));
+        text-decoration: line-through;
+        text-decoration-color: color-mix(in srgb, var(--keel-dead) 70%, transparent);
+    }
+
+    .k-search-ins {
+        border-radius: 3px;
+        background: color-mix(in srgb, var(--keel-done) 20%, transparent);
+        color: color-mix(in srgb, var(--keel-done) 60%, var(--keel-text));
+        text-decoration: none;
+    }
+
     .cm-editor {
         height: 100%;
         background: transparent;
@@ -2151,6 +2228,16 @@
 @keyframes k-fade-in {
     from {
         opacity: 0;
+    }
+}
+
+@keyframes k-search-pulse {
+    0%,
+    100% {
+        opacity: 0.25;
+    }
+    50% {
+        opacity: 1;
     }
 }
 

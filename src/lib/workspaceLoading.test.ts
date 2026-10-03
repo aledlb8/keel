@@ -544,14 +544,46 @@ it("clears old search hits when a new query fails", async () => {
   ipc({ workspace_grep: () => ({ hits: [{ rel: "a.ts", line: 1, column: 1, text: "old" }], truncated: false }) });
   await state().grep("old");
   ipc({ workspace_grep: () => Promise.reject("Invalid search pattern") });
-  state().setGrepRegex(true);
+  state().setGrepOption("regex", true);
   await state().grep("[broken");
   assert.equal(state().grepHits, null);
   assert.equal(state().grepError, "Invalid search pattern");
 });
 
+it("replaces only the results still on screen", async () => {
+  let targets: unknown = null;
+  ipc({
+    workspace_grep: () => ({
+      hits: [
+        { rel: "a.ts", line: 1, column: 1, text: "xx" },
+        { rel: "a.ts", line: 2, column: 1, text: "xx" },
+        { rel: "b.ts", line: 4, column: 1, text: "xx" },
+        { rel: "c.ts", line: 9, column: 1, text: "xx" },
+      ],
+      truncated: false,
+    }),
+    workspace_replace: (args) => {
+      targets = args.targets;
+      return { files: 2, replacements: 2, skipped: [] };
+    },
+  });
+  await state().grep("xx");
+  state().dismissGrep("a.ts:2");
+  state().dismissGrep("b.ts");
+  await state().replaceGrep();
+  assert.deepEqual(targets, [
+    { rel: "a.ts", lines: [1] },
+    { rel: "c.ts", lines: [9] },
+  ]);
+  await state().replaceGrep({ rel: "c.ts" });
+  assert.deepEqual(targets, [{ rel: "c.ts", lines: [9] }]);
+});
+
 it("invalidates a pending search immediately when the query or regex mode changes", async () => {
-  for (const change of [() => state().setGrepQuery("new"), () => state().setGrepRegex(!state().grepRegex)]) {
+  for (const change of [
+    () => state().setGrepQuery("new"),
+    () => state().setGrepOption("regex", !state().grepOptions.regex),
+  ]) {
     const pending = deferred<{ hits: []; truncated: boolean }>();
     ipc({ workspace_grep: () => pending.promise });
     const search = state().grep("old");

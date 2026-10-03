@@ -20,6 +20,7 @@ import * as api from "../lib/workspace.ts";
 import { WorkspaceReads } from "../lib/workspaceReads.ts";
 import { sameWatchRoot } from "../lib/workspaceWatch.ts";
 import { deckOfPane, useKeel } from "./store.ts";
+import { DEFAULT_GREP_OPTIONS } from "../lib/workspace.ts";
 import type {
   CommitDetails,
   CommitFile,
@@ -32,6 +33,7 @@ import type {
   GitStatus,
   GitTag,
   GrepHit,
+  GrepOptions,
   MergeMode,
   OperationAction,
   PrList,
@@ -56,6 +58,34 @@ export type ChangeLayout = "list" | "tree";
 export const HISTORY_PAGE = 100;
 
 const CHANGE_LAYOUT_KEY = "keel.git.changeLayout";
+const GREP_TOGGLES_KEY = "keel.search.toggles";
+const GREP_HISTORY_KEY = "keel.search.history";
+/** Recent searches kept for the empty search page. */
+const GREP_HISTORY_MAX = 12;
+
+/** How you like to match is a habit, so case, word and regex stick. */
+function readGrepOptions(): GrepOptions {
+  try {
+    const saved = JSON.parse(localStorage.getItem(GREP_TOGGLES_KEY) ?? "{}") as Partial<GrepOptions>;
+    return {
+      ...DEFAULT_GREP_OPTIONS,
+      caseSensitive: saved.caseSensitive === true,
+      wholeWord: saved.wholeWord === true,
+      regex: saved.regex === true,
+    };
+  } catch {
+    return { ...DEFAULT_GREP_OPTIONS };
+  }
+}
+
+function readGrepHistory(): string[] {
+  try {
+    const saved = JSON.parse(localStorage.getItem(GREP_HISTORY_KEY) ?? "[]") as unknown;
+    return Array.isArray(saved) ? saved.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
 const COMMIT_PREFS_KEY = "keel.git.commitPrefs";
 
 function readChangeLayout(): ChangeLayout {
@@ -134,11 +164,19 @@ interface WorkspaceState {
   rowMotion: Record<string, "enter" | "leave">;
 
   grepQuery: string;
-  grepRegex: boolean;
+  grepOptions: GrepOptions;
+  /** The replace field is showing; results then preview what it would do. */
+  grepReplaceOpen: boolean;
+  grepReplace: string;
   grepHits: GrepHit[] | null;
   grepTruncated: boolean;
   grepLoading: boolean;
   grepError: string | null;
+  grepStats: { files: number; ms: number } | null;
+  /** Results put aside for this search: a file (`rel`) or one line (`rel:line`). */
+  grepDismissed: Record<string, true>;
+  grepHistory: string[];
+  grepReplacing: boolean;
 
   git: GitStatus | null;
   gitLoading: boolean;
@@ -214,9 +252,23 @@ interface WorkspaceState {
   refreshHistory: (afterPending?: boolean) => Promise<void>;
   search: (query: string) => Promise<void>;
   setGrepQuery: (query: string) => void;
-  setGrepRegex: (on: boolean) => void;
+  setGrepOption: <K extends keyof GrepOptions>(key: K, value: GrepOptions[K]) => void;
+  setGrepReplaceOpen: (open: boolean) => void;
+  setGrepReplace: (replace: string) => void;
   grep: (query: string) => Promise<void>;
-  openFileAt: (rel: string, line: number, column?: number) => Promise<void>;
+  /** Put a file (`rel`) or a line (`rel:line`) aside for this search. */
+  dismissGrep: (key: string) => void;
+  /** Bring back everything dismissed for this search. */
+  restoreGrep: () => void;
+  /** Remember a search worth coming back to. */
+  rememberGrep: (query: string) => void;
+  forgetGrepHistory: () => void;
+  /**
+   * Replace what the results show: everything, one file, or one line. Lines
+   * and files that were dismissed are left alone.
+   */
+  replaceGrep: (scope?: { rel: string; line?: number }) => Promise<void>;
+  openFileAt: (rel: string, line: number, column?: number, length?: number) => Promise<void>;
 
   openFile: (rel: string) => Promise<void>;
   openDiff: (rel: string, staged: boolean) => Promise<void>;
@@ -800,11 +852,17 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   rowMotion: {},
 
   grepQuery: "",
-  grepRegex: false,
+  grepOptions: readGrepOptions(),
+  grepReplaceOpen: false,
+  grepReplace: "",
   grepHits: null,
   grepTruncated: false,
   grepLoading: false,
   grepError: null,
+  grepStats: null,
+  grepDismissed: {},
+  grepHistory: readGrepHistory(),
+  grepReplacing: false,
 
   git: null,
   gitLoading: false,
@@ -896,6 +954,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       grepTruncated: false,
       grepLoading: false,
       grepError: null,
+      grepStats: null,
+      grepDismissed: {},
+      grepReplacing: false,
       git: null,
       ...docs,
       gitLoading: false,
@@ -1250,12 +1311,38 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       grepTruncated: false,
       grepLoading: false,
       grepError: null,
+      grepStats: null,
+      grepDismissed: {},
     });
   },
-  setGrepRegex: (grepRegex) => {
+  setGrepOption: (key, value) => {
     grepGeneration += 1;
-    set({ grepRegex, grepHits: null, grepTruncated: false, grepLoading: false, grepError: null });
+    const grepOptions = { ...get().grepOptions, [key]: value };
+    set({
+      grepOptions,
+      grepHits: null,
+      grepTruncated: false,
+      grepLoading: false,
+      grepError: null,
+      grepStats: null,
+      grepDismissed: {},
+    });
+    remember(
+      GREP_TOGGLES_KEY,
+      JSON.stringify({
+        caseSensitive: grepOptions.caseSensitive,
+        wholeWord: grepOptions.wholeWord,
+        regex: grepOptions.regex,
+      }),
+    );
   },
+  setGrepReplaceOpen: (grepReplaceOpen) => {
+    if (grepReplaceOpen === get().grepReplaceOpen) return;
+    set({ grepReplaceOpen });
+    // Opening or closing replace changes what the results preview.
+    if (get().grepQuery.trim().length >= 2) void get().grep(get().grepQuery);
+  },
+  setGrepReplace: (grepReplace) => set({ grepReplace }),
   grep: async (query) => {
     const root = get().root;
     const needle = query.trim();
@@ -1267,31 +1354,97 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         grepTruncated: false,
         grepLoading: false,
         grepError: null,
+        grepStats: null,
       });
       return;
     }
     const generation = ++grepGeneration;
     const version = projectVersion;
-    const isRegex = get().grepRegex;
-    set({ grepLoading: true, grepError: null, grepHits: null, grepTruncated: false });
+    const { grepOptions, grepReplaceOpen, grepReplace } = get();
+    // Results already on screen for this exact search stay while it refreshes.
+    set({ grepLoading: true, grepError: null });
     try {
-      const results = await api.workspaceGrep(root, query, { regex: isRegex });
+      const results = await api.workspaceGrep(
+        root,
+        query,
+        grepOptions,
+        grepReplaceOpen ? grepReplace : null,
+      );
       if (generation !== grepGeneration || version !== projectVersion) return;
+      if (results.cancelled) return;
       set({
         grepHits: results.hits,
         grepTruncated: results.truncated,
         grepLoading: false,
         grepError: null,
+        grepStats: { files: results.filesSearched ?? 0, ms: results.elapsedMs ?? 0 },
       });
     } catch (error) {
       if (generation !== grepGeneration || version !== projectVersion) return;
       const grepError = errorMessage(error);
-      toast.error(grepError);
-      set({ grepError, grepLoading: false });
+      set({ grepError, grepLoading: false, grepHits: null, grepStats: null });
+    }
+  },
+  dismissGrep: (key) => set({ grepDismissed: { ...get().grepDismissed, [key]: true } }),
+  restoreGrep: () => set({ grepDismissed: {} }),
+  rememberGrep: (query) => {
+    const needle = query.trim();
+    if (needle.length < 2) return;
+    const grepHistory = [needle, ...get().grepHistory.filter((item) => item !== needle)].slice(
+      0,
+      GREP_HISTORY_MAX,
+    );
+    set({ grepHistory });
+    remember(GREP_HISTORY_KEY, JSON.stringify(grepHistory));
+  },
+  forgetGrepHistory: () => {
+    set({ grepHistory: [] });
+    remember(GREP_HISTORY_KEY, "[]");
+  },
+  replaceGrep: async (scope) => {
+    const state = get();
+    const root = state.root;
+    const hits = state.grepHits;
+    if (!root || !hits || state.grepReplacing) return;
+    const dismissed = state.grepDismissed;
+    // Group what is still showing by file, keeping only the lines asked for.
+    const byFile = new Map<string, number[]>();
+    for (const hit of hits) {
+      if (dismissed[hit.rel] || dismissed[`${hit.rel}:${hit.line}`]) continue;
+      if (scope && (hit.rel !== scope.rel || (scope.line !== undefined && hit.line !== scope.line))) {
+        continue;
+      }
+      const lines = byFile.get(hit.rel) ?? [];
+      lines.push(hit.line);
+      byFile.set(hit.rel, lines);
+    }
+    if (byFile.size === 0) return;
+    const query = state.grepQuery;
+    const version = projectVersion;
+    get().rememberGrep(query);
+    set({ grepReplacing: true });
+    try {
+      const summary = await api.workspaceReplace(
+        root,
+        query,
+        state.grepOptions,
+        state.grepReplace,
+        [...byFile].map(([rel, lines]) => ({ rel, lines })),
+      );
+      if (version !== projectVersion) return;
+      const files = summary.files === 1 ? "1 file" : `${summary.files} files`;
+      const count = summary.replacements === 1 ? "1 match" : `${summary.replacements} matches`;
+      if (summary.replacements > 0) toast.success(`Replaced ${count} in ${files}`);
+      for (const skipped of summary.skipped) toast.error(`Skipped ${skipped}`);
+      await get().grep(query);
+    } catch (error) {
+      if (version === projectVersion) toast.error(errorMessage(error));
+    } finally {
+      if (version === projectVersion) set({ grepReplacing: false });
     }
   },
 
-  openFileAt: async (rel, line, column) => {
+  openFileAt: async (rel, line, column, length) => {
     const version = projectVersion;
     const loading = get().openFile(rel);
     const navigation = editorNavigation;
@@ -1299,7 +1452,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     await (tab ? editorLoads.get(tab) ?? loading : loading);
     if (version !== projectVersion || navigation !== editorNavigation ||
       get().activeEditor !== fileTabId(rel) || get().editorErrors[fileTabId(rel)]) return;
-    revealInEditor(fileTabId(rel), line, column);
+    revealInEditor(fileTabId(rel), line, column, length);
   },
 
   openFile: (rel) => openEditor({
