@@ -725,7 +725,9 @@
         flex-shrink: 0;
         width: var(--dock-width);
         margin: 6px;
-        overflow: hidden;
+        /* Clipped, not hidden: a hidden box can still be scrolled, and focus
+         * landing near the edge slid the whole dock sideways under the rail. */
+        overflow: clip;
         border: 1px solid var(--keel-term-border);
         border-radius: var(--keel-r-window);
         background: var(--keel-chrome);
