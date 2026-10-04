@@ -100,6 +100,9 @@ auto-detection did not manage for the short Spanish ones), images were read by
 Claude, Codex, opencode and Pi, and albums and declined videos went through
 the stand-in.
 
-Grok Build's adapter follows its headless-mode guide (1.0.46) and has not run a
-live turn. Grok loads a folder's MCP config only once the folder is trusted, so
-its Keel tools may be missing until then. Gemini CLI is not supported.
+Grok Build ran live turns with 1.0.46. Grok loads a folder's MCP config only
+once the folder is trusted, so Keel launches it with `--trust`, which records
+the main agent's folder in Grok's `trusted_folders.toml`. Without it Grok had
+no Keel tools and spent minutes per message looking for another way. Every
+supported CLI lists Keel's tools as it starts, so when a turn ends without that,
+Keel logs it and warns on the phone once per run. Gemini CLI is not supported.
