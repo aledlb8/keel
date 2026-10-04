@@ -54,13 +54,14 @@ of files older than a week.
 
 Every message is one headless turn of the chosen CLI in
 `<config>/assistant/`, continuing the same conversation (`--resume`,
-`exec resume`, `--session`, `--session-id`). While it works, the phone only
-shows "typing" (the tools it uses go to the activity log in Keel), so a
-message gets a 👀 reaction and then one reply: no extra notifications. The
-agent is told to answer in a sentence or two unless asked for detail, such as
-console output. The reply goes out as soon as the CLI reports the turn
-finished (Claude, Codex, Grok) or closes its output (opencode, Pi), without
-waiting for the process to exit. A conversation the CLI no longer has is
+`exec resume`, `--session`, `--session-id`). A task gets two messages: a
+one-line "got it, doing X" the agent sends with `tell_user` once it is sure
+what was meant (or a short question when it isn't), and the outcome. Quick
+answers are just the answer. In between the phone only shows "typing"; the
+tools it uses go to the activity log in Keel. The agent is told to answer in
+a sentence or two unless asked for detail, such as console output. The reply
+goes out as soon as the CLI reports the turn finished (Claude, Codex, Grok) or
+closes its output (opencode, Pi), without waiting for the process to exit. A conversation the CLI no longer has is
 replaced once, automatically.
 
 Claude runs with `--strict-mcp-config`, so it loads only Keel's MCP server and
@@ -70,6 +71,8 @@ and one that was slow to fail held every message for about 20 seconds.
 Keel's tools reach the agent as an MCP server on `127.0.0.1` with a per-launch
 bearer token. Calls are answered by the window, which owns the workspace:
 
+- `tell_user` — message the phone mid-turn. Answered in Rust, not by the
+  window.
 - `list_projects`, `read_pane` — see projects, panes, agent status, screens.
 - `start_agent` — open a pane in a project, wait for the agent to settle, type
   the first prompt.
