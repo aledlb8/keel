@@ -234,6 +234,63 @@ fn builtin_catalogue() -> Vec<AgentSpec> {
     serde_json::from_str(BUILTIN_CATALOGUE).expect("builtin agent catalogue is valid json")
 }
 
+/// A catalogue agent's executable, for running it directly rather than typing
+/// it into a shell. On Windows that has to be something `CreateProcess` can
+/// start: an `.exe`, or a `.cmd`/`.bat` shim — never the extensionless shell
+/// script npm and pnpm drop beside them.
+pub(crate) fn executable(app: &AppHandle, agent_id: &str) -> Option<(AgentSpec, PathBuf)> {
+    let spec = catalogue(app)
+        .into_iter()
+        .find(|spec| spec.id == agent_id)?;
+    let guessed: Vec<String> = spec
+        .command
+        .split_whitespace()
+        .take(1)
+        .map(str::to_owned)
+        .collect();
+    let bins = if spec.bins.is_empty() {
+        &guessed
+    } else {
+        &spec.bins
+    };
+    let candidates = |bin: &str| -> Vec<String> {
+        #[cfg(windows)]
+        {
+            if let Some(ext) = Path::new(bin).extension().and_then(|ext| ext.to_str()) {
+                return if matches!(ext.to_ascii_lowercase().as_str(), "exe" | "cmd" | "bat") {
+                    vec![bin.to_string()]
+                } else {
+                    Vec::new()
+                };
+            }
+            [".exe", ".cmd", ".bat"]
+                .iter()
+                .map(|ext| format!("{bin}{ext}"))
+                .collect()
+        }
+        #[cfg(not(windows))]
+        {
+            vec![bin.to_string()]
+        }
+    };
+    let dirs: Vec<PathBuf> = spec
+        .paths
+        .iter()
+        .filter_map(|pattern| expand(pattern))
+        .filter(|path| path.is_dir())
+        .collect();
+    let found = bins.iter().find_map(|bin| {
+        candidates(bin).into_iter().find_map(|name| {
+            crate::pty::which(&name).map(PathBuf::from).or_else(|| {
+                dirs.iter()
+                    .map(|dir| dir.join(&name))
+                    .find(|file| file.is_file())
+            })
+        })
+    })?;
+    Some((spec, found))
+}
+
 /// Executable stems the process watcher matches against a live shell's children.
 pub(crate) fn agent_needles(app: &AppHandle) -> Vec<crate::procs::AgentNeedle> {
     catalogue(app)

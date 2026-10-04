@@ -108,6 +108,15 @@ pub fn is_under_registered(path: &Path) -> bool {
         .any(|allowed| paths_equal(allowed, &canon) || path_is_inside(&canon, allowed))
 }
 
+/// Every registered project folder, for an agent that may work in any of them.
+pub fn registered() -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = lock_roots()
+        .map(|roots| roots.iter().cloned().collect())
+        .unwrap_or_default();
+    roots.sort();
+    roots
+}
+
 /// Project root named by the webview. Rejects anything not on the allowlist.
 pub fn require(root: &str) -> Result<PathBuf, String> {
     let canon = canonicalize_dir(Path::new(root))?;

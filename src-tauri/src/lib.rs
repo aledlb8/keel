@@ -1,5 +1,9 @@
 mod agent_hooks;
 mod agents;
+mod assistant;
+mod assistant_agents;
+mod assistant_mcp;
+mod assistant_media;
 mod blocking;
 mod git;
 mod git_ops;
@@ -13,6 +17,7 @@ mod roots;
 mod sessions;
 mod sqlite;
 mod store;
+mod telegram;
 mod usage;
 mod vpn;
 mod vpn_profile;
@@ -25,6 +30,7 @@ use tauri::{Emitter, Manager};
 
 pub use agent_hooks::run_helper as run_agent_hook_helper;
 
+use assistant::AssistantManager;
 use pty::PtyManager;
 use vpn::VpnManager;
 use watch::WatchManager;
@@ -38,6 +44,7 @@ pub fn run() {
         .register_asynchronous_uri_scheme_protocol(preview::SCHEME, preview::protocol)
         .setup(|app| {
             app.manage(WatchManager::new(app.handle().clone()));
+            app.manage(AssistantManager::start(app.handle().clone()));
             // Tauri 2 does not wrap wry's with_browser_accelerator_keys.
             #[cfg(windows)]
             disable_browser_accelerator_keys(app);
@@ -123,6 +130,19 @@ pub fn run() {
             vpn::vpn_snapshot,
             vpn::vpn_connect,
             vpn::vpn_disconnect,
+            assistant::assistant_snapshot,
+            assistant::assistant_log,
+            assistant::assistant_set_token,
+            assistant::assistant_pair,
+            assistant::assistant_unpair,
+            assistant::assistant_configure,
+            assistant::assistant_check_voice,
+            assistant::assistant_new_conversation,
+            assistant::assistant_stop,
+            assistant::assistant_send,
+            assistant::assistant_tool_result,
+            assistant::assistant_delegated,
+            assistant::assistant_pane_event,
         ])
         .on_window_event(|window, event| {
             // CloseRequested is a *request*. Killing PTYs here would destroy
@@ -188,5 +208,8 @@ fn shutdown_managed(app: &tauri::AppHandle) {
     }
     if let Some(watch) = app.try_state::<WatchManager>() {
         watch.shutdown();
+    }
+    if let Some(assistant) = app.try_state::<AssistantManager>() {
+        assistant.shutdown();
     }
 }
