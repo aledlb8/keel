@@ -250,6 +250,8 @@ pub struct Reading {
     /// A final answer the CLI reported as such, which wins over `reply`.
     result: Option<String>,
     pub error: Option<String>,
+    /// The CLI said the turn is over. It may still take a while to exit.
+    pub done: bool,
     /// opencode tags each text part with the message it belongs to.
     message: Option<String>,
 }
@@ -323,6 +325,7 @@ pub fn read_line(agent_id: &str, line: &str, reading: &mut Reading) -> Option<St
                     });
                 } else {
                     reading.result = Some(text);
+                    reading.done = true;
                 }
                 None
             }
@@ -368,6 +371,10 @@ pub fn read_line(agent_id: &str, line: &str, reading: &mut Reading) -> Option<St
                     }
                     _ => None,
                 }
+            }
+            "turn.completed" => {
+                reading.done = true;
+                None
             }
             "turn.failed" => {
                 reading.error = str_at(&event, "/error/message").map(str::to_owned);
@@ -462,6 +469,7 @@ pub fn read_line(agent_id: &str, line: &str, reading: &mut Reading) -> Option<St
             }
             "end" => {
                 reading.session = str_at(&event, "/sessionId").map(str::to_owned);
+                reading.done = true;
                 None
             }
             "error" => {
@@ -549,6 +557,7 @@ mod tests {
         assert_eq!(reading.reply(), "All green.");
         assert_eq!(labels, ["looking at Keel", "$ pnpm test"]);
         assert!(reading.error.is_none());
+        assert!(reading.done);
     }
 
     #[test]
@@ -560,6 +569,7 @@ mod tests {
             ],
         );
         assert_eq!(reading.error.as_deref(), Some("error_during_execution"));
+        assert!(!reading.done);
     }
 
     #[test]
@@ -581,6 +591,7 @@ mod tests {
         );
         assert_eq!(reading.reply(), "PINGED-42");
         assert_eq!(labels, ["reading a pane"]);
+        assert!(reading.done);
     }
 
     #[test]
@@ -610,6 +621,8 @@ mod tests {
         );
         assert_eq!(reading.reply(), "Started Codex.");
         assert_eq!(labels, ["starting an agent"]);
+        // No end-of-turn event: the reply waits for the output to close.
+        assert!(!reading.done);
     }
 
     #[test]
@@ -629,6 +642,8 @@ mod tests {
         );
         assert_eq!(reading.reply(), "pong");
         assert_eq!(labels, ["showing a pane"]);
+        // One process can end several turns, so none of them is the last.
+        assert!(!reading.done);
     }
 
     #[test]
@@ -646,6 +661,7 @@ mod tests {
         assert_eq!(reading.session.as_deref(), Some("abc123"));
         assert_eq!(reading.reply(), "Here's a summary");
         assert_eq!(labels, ["read_file"]);
+        assert!(reading.done);
 
         let (failed, _) = read(
             "grok",

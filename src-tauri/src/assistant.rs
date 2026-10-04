@@ -1102,8 +1102,8 @@ impl Progress<'_> {
         text
     }
 
-    fn finish(&self) {
-        if let Some(id) = self.message {
+    fn finish(&mut self) {
+        if let Some(id) = self.message.take() {
             let _ = self.bot.delete(self.chat, id);
         }
     }
@@ -1149,20 +1149,18 @@ fn run_turn(inner: &Arc<Inner>, prompt: &str, images: &[PathBuf], retry_fresh: b
     set_busy(inner, false, None);
 
     match outcome {
-        Outcome::Reply { reply, session: id } => {
+        Outcome::Reply {
+            reply,
+            session: id,
+            sent,
+        } => {
             if let Some(id) = id.filter(|id| Some(id) != session.as_ref()) {
                 let _ = inner.update(|s| {
                     s.sessions.insert(session_key.clone(), id);
                 });
             }
-            let reply = if reply.is_empty() {
-                "Done.".to_string()
-            } else {
-                reply
-            };
-            inner.log("out", reply.clone());
-            if let Err(err) = bot.send_markdown(chat, &reply) {
-                inner.log("error", format!("Couldn't send the reply: {err}"));
+            if !sent {
+                deliver(inner, &bot, chat, reply);
             }
         }
         // Whoever stopped it already said so.
@@ -1192,10 +1190,35 @@ fn run_turn(inner: &Arc<Inner>, prompt: &str, images: &[PathBuf], retry_fresh: b
     }
 }
 
+fn deliver(inner: &Arc<Inner>, bot: &Bot, chat: i64, reply: String) {
+    let reply = if reply.is_empty() {
+        "Done.".to_string()
+    } else {
+        reply
+    };
+    inner.log("out", reply.clone());
+    if let Err(err) = bot.send_markdown(chat, &reply) {
+        inner.log("error", format!("Couldn't send the reply: {err}"));
+    }
+}
+
+/// The reply, once it can go out before the CLI exits: the CLI said the turn
+/// is over, or its output closed on an answer. Never an error, which the turn
+/// may still retry in a new conversation.
+fn ready_reply(reading: &Reading, closed: bool) -> Option<String> {
+    if reading.error.is_some() {
+        return None;
+    }
+    let reply = reading.reply();
+    (reading.done || (closed && !reply.is_empty())).then_some(reply)
+}
+
 enum Outcome {
     Reply {
         reply: String,
         session: Option<String>,
+        /// Already on the phone, sent before the CLI exited.
+        sent: bool,
     },
     Stopped,
     Failed {
@@ -1374,6 +1397,7 @@ fn execute(
     }
 
     let mut reading = Reading::default();
+    let mut sent = false;
     let mut progress = Progress {
         bot,
         chat,
@@ -1393,11 +1417,29 @@ fn execute(
                     live.activity = Some(label.clone());
                 }
                 inner.publish();
-                progress.note(&label);
+                if !sent {
+                    progress.note(&label);
+                }
+            }
+            // The answer goes out now; some CLIs take seconds more to exit.
+            if !sent && reading.done && !stopped.load(Ordering::SeqCst) {
+                if let Some(reply) = ready_reply(&reading, false) {
+                    typing.store(false, Ordering::SeqCst);
+                    progress.finish();
+                    deliver(inner, bot, chat, reply);
+                    sent = true;
+                }
             }
         }
     }
     typing.store(false, Ordering::SeqCst);
+    if !sent && !stopped.load(Ordering::SeqCst) {
+        if let Some(reply) = ready_reply(&reading, true) {
+            progress.finish();
+            deliver(inner, bot, chat, reply);
+            sent = true;
+        }
+    }
     let status = child
         .lock()
         .ok()
@@ -1417,27 +1459,31 @@ fn execute(
         .lock()
         .map(|tail| tail.clone())
         .unwrap_or_default();
-    if let Some(error) = reading.error.clone() {
+    let succeeded = status.is_some_and(|status| status.success());
+    let failure = if let Some(error) = reading.error.clone() {
         // Some CLIs report only an error kind on stdout and the reason on stderr.
         let detail = last_lines(&tail, 3);
-        let error = if detail.is_empty() || error.contains(' ') {
+        Some(if detail.is_empty() || error.contains(' ') {
             error
         } else {
             format!("{error}: {detail}")
-        };
-        return Outcome::Failed { error, session };
-    }
-    let succeeded = status.is_some_and(|status| status.success());
-    if !succeeded && reply.is_empty() {
+        })
+    } else if !succeeded && reply.is_empty() {
         let detail = last_lines(&tail, 6);
-        return Outcome::Failed {
-            error: if detail.is_empty() {
-                format!("{} stopped without answering.", spec.name)
-            } else {
-                format!("{} stopped without answering:\n{detail}", spec.name)
-            },
-            session,
-        };
+        Some(if detail.is_empty() {
+            format!("{} stopped without answering.", spec.name)
+        } else {
+            format!("{} stopped without answering:\n{detail}", spec.name)
+        })
+    } else {
+        None
+    };
+    if let Some(error) = failure {
+        if !sent {
+            return Outcome::Failed { error, session };
+        }
+        // The phone already has the answer: one reply per message.
+        inner.log("error", format!("After the reply: {error}"));
     }
     // Every supported CLI lists the tools as it starts, whether or not the
     // turn uses them. One that never did was cut off from Keel and has to
@@ -1453,7 +1499,11 @@ fn execute(
             let _ = bot.send(chat, &format!("⚠️ {warning}"), false);
         }
     }
-    Outcome::Reply { reply, session }
+    Outcome::Reply {
+        reply,
+        session,
+        sent,
+    }
 }
 
 /// The CLI could not find the conversation it was asked to continue — deleted,
@@ -1939,6 +1989,48 @@ mod tests {
             "🎤 Voice message (1:07)"
         );
         assert_eq!(incoming_label("hi", &[]), "hi");
+    }
+
+    #[test]
+    fn replies_go_out_when_the_turn_ends_never_errors() {
+        let read = |agent: &str, lines: &[&str]| {
+            let mut reading = Reading::default();
+            for line in lines {
+                agents::read_line(agent, line, &mut reading);
+            }
+            reading
+        };
+        let working = read(
+            "codex",
+            &[r#"{"type":"item.completed","item":{"type":"agent_message","text":"Done it."}}"#],
+        );
+        assert_eq!(ready_reply(&working, false), None);
+        assert_eq!(ready_reply(&working, true).as_deref(), Some("Done it."));
+
+        let finished = read(
+            "codex",
+            &[
+                r#"{"type":"item.completed","item":{"type":"agent_message","text":"Done it."}}"#,
+                r#"{"type":"turn.completed","usage":{}}"#,
+            ],
+        );
+        assert_eq!(ready_reply(&finished, false).as_deref(), Some("Done it."));
+
+        // Run again in a new conversation, so it must not reach the phone yet.
+        let lost = read(
+            "claude",
+            &[
+                r#"{"type":"result","is_error":true,"result":"No conversation found with session ID: x"}"#,
+            ],
+        );
+        assert_eq!(ready_reply(&lost, true), None);
+
+        // An empty answer still waits for the exit status.
+        let silent = read(
+            "opencode",
+            &[r#"{"type":"step_start","sessionID":"ses_1"}"#],
+        );
+        assert_eq!(ready_reply(&silent, true), None);
     }
 
     #[test]
