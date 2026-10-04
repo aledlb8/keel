@@ -54,12 +54,14 @@ of files older than a week.
 
 Every message is one headless turn of the chosen CLI in
 `<config>/assistant/`, continuing the same conversation (`--resume`,
-`exec resume`, `--session`, `--session-id`). While it works, the phone shows
-"typing" and a progress line of the tools it uses; the final answer is the
-reply. It goes out as soon as the CLI reports the turn finished (Claude,
-Codex, Grok) or closes its output (opencode, Pi), without waiting for the
-process to exit. A conversation the CLI no longer has is replaced once,
-automatically.
+`exec resume`, `--session`, `--session-id`). While it works, the phone only
+shows "typing" (the tools it uses go to the activity log in Keel), so a
+message gets a 👀 reaction and then one reply: no extra notifications. The
+agent is told to answer in a sentence or two unless asked for detail, such as
+console output. The reply goes out as soon as the CLI reports the turn
+finished (Claude, Codex, Grok) or closes its output (opencode, Pi), without
+waiting for the process to exit. A conversation the CLI no longer has is
+replaced once, automatically.
 
 Claude runs with `--strict-mcp-config`, so it loads only Keel's MCP server and
 not the ones in `~/.claude.json`: it connects them all before the turn starts,
