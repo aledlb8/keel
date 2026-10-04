@@ -56,7 +56,14 @@ Every message is one headless turn of the chosen CLI in
 `<config>/assistant/`, continuing the same conversation (`--resume`,
 `exec resume`, `--session`, `--session-id`). While it works, the phone shows
 "typing" and a progress line of the tools it uses; the final answer is the
-reply. A conversation the CLI no longer has is replaced once, automatically.
+reply. It goes out as soon as the CLI reports the turn finished (Claude,
+Codex, Grok) or closes its output (opencode, Pi), without waiting for the
+process to exit. A conversation the CLI no longer has is replaced once,
+automatically.
+
+Claude runs with `--strict-mcp-config`, so it loads only Keel's MCP server and
+not the ones in `~/.claude.json`: it connects them all before the turn starts,
+and one that was slow to fail held every message for about 20 seconds.
 
 Keel's tools reach the agent as an MCP server on `127.0.0.1` with a per-launch
 bearer token. Calls are answered by the window, which owns the workspace:
