@@ -102,6 +102,9 @@ pub fn prepare(agent_id: &str, turn: &Turn) -> Result<Launch, String> {
                 "--mcp-config",
             ]);
             launch.args.push(config.to_string_lossy().into_owned());
+            // Only Keel's server: the user's own MCP servers are connected
+            // before the turn starts, and a slow one held every message.
+            launch.args.push("--strict-mcp-config".into());
             launch.args.push("--append-system-prompt".into());
             launch.args.push(turn.rules.into());
             for dir in turn.projects {
@@ -707,6 +710,7 @@ mod tests {
             .windows(2)
             .any(|pair| pair[0] == "--session-id" && pair[1] == chosen));
         assert!(first.args.windows(2).any(|pair| pair[0] == "--add-dir"));
+        assert!(first.args.contains(&"--strict-mcp-config".to_string()));
         let again = prepare("claude", &turn(Some(&chosen))).unwrap();
         assert!(again
             .args
