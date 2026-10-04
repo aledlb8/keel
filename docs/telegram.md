@@ -19,6 +19,24 @@ or the Ctrl+P switcher.
 Bot commands: `/status` (what's running, answered without a model), `/stop`,
 `/new` (fresh conversation), `/agent`, `/help`.
 
+## Bob
+
+The main agent is Bob: a coworker who texts, not a help desk. Short, plain,
+opinionated, allowed a joke or a swear when it lands, and never opening with
+"Great question". Two files in `<config>/assistant/` shape him, and both go
+into his instructions on every turn (up to 4,000 characters each):
+
+- `SOUL.md` — his personality. Written from `src-tauri/src/assistant_soul.md`
+  the first time; after that the copy in the folder is the one used. Edit it,
+  or ask Bob to change how he talks. Delete it to get the default back.
+- `USER.md` — what he knows about you. Bob adds a line when he learns
+  something lasting (how you like things done, which agent for what, your
+  projects) and fixes lines that stop being true. It survives `/new`, which
+  only forgets the conversation.
+
+The working rules (short replies, the acknowledgement, passing your words on
+unchanged) stay in `RULES` in `assistant.rs`, ahead of both files.
+
 ## Images and voice messages
 
 - **Images** (photos, or images sent as files to keep their quality) are saved
