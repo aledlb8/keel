@@ -410,7 +410,7 @@ fn tools() -> Vec<Value> {
             json!({
                 "project": { "type": "string", "description": "Project id, name or folder." },
                 "agent": { "type": "string", "description": "Agent id (see list_projects -> agents). Leave out for a plain shell." },
-                "prompt": { "type": "string", "description": "First message to give the agent." },
+                "prompt": { "type": "string", "description": "First message to give the agent: the user's request in their own words, not rewritten or expanded." },
                 "title": { "type": "string", "description": "Short pane name." },
             }),
             &["project"],
@@ -420,7 +420,7 @@ fn tools() -> Vec<Value> {
             "Type text into a terminal pane, as if the user typed it, and press Enter unless submit is false. Use it to answer an agent that is waiting, or give it a follow-up instruction.",
             json!({
                 "pane_id": pane,
-                "text": { "type": "string" },
+                "text": { "type": "string", "description": "When passing on something the user said, keep their wording." },
                 "submit": { "type": "boolean", "description": "Press Enter after the text. Default true." },
             }),
             &["pane_id", "text"],
