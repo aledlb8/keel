@@ -5,6 +5,7 @@ import { GridLab } from "@/components/GridLab";
 import { Hero } from "@/components/Hero";
 import { Keys } from "@/components/Keys";
 import { Nav } from "@/components/Nav";
+import { Phone } from "@/components/Phone";
 
 export default function Home() {
   return (
@@ -15,6 +16,7 @@ export default function Home() {
         <Agents />
         <GridLab />
         <Features />
+        <Phone />
         <Keys />
         <Closing />
       </main>

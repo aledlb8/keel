@@ -12,6 +12,7 @@ const LINKS = [
   ["Agents", "agents"],
   ["Layout", "layout"],
   ["Features", "features"],
+  ["Phone", "phone"],
   ["Keys", "keys"],
 ] as const;
 
