@@ -210,10 +210,13 @@ pub fn prepare(agent_id: &str, turn: &Turn) -> Result<Launch, String> {
                 "--prompt-file".into(),
                 prompt.to_string_lossy().into_owned(),
             ];
+            // Grok skips a folder's `.grok/config.toml` until the folder is
+            // trusted, which would leave the agent without Keel's tools.
             launch.args.extend(args(&[
                 "--output-format",
                 "streaming-json",
                 "--always-approve",
+                "--trust",
                 "--rules",
             ]));
             launch.args.push(turn.rules.into());
@@ -723,6 +726,10 @@ mod tests {
         let id = pi.session.clone().unwrap();
         assert!(pi.args.contains(&id));
         assert!(home.join(".pi").join("mcp.json").is_file());
+
+        let grok = prepare("grok", &turn(None)).unwrap();
+        assert!(grok.args.contains(&"--trust".to_string()));
+        assert!(home.join(".grok").join("config.toml").is_file());
 
         assert!(prepare("aider", &turn(None)).is_err());
         let _ = std::fs::remove_dir_all(&home);

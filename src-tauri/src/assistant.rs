@@ -266,6 +266,8 @@ struct Inner {
     delegated: Mutex<Vec<String>>,
     /// Looked for at launch, and again when a voice message needs it.
     whisper: Mutex<Option<Whisper>>,
+    /// The phone has been told the agent ran without Keel's tools.
+    warned_tools: AtomicBool,
 }
 
 pub struct AssistantManager {
@@ -325,6 +327,7 @@ impl AssistantManager {
             auto_turns: Mutex::new(0),
             delegated: Mutex::new(Vec::new()),
             whisper: Mutex::new(media::find()),
+            warned_tools: AtomicBool::new(false),
         });
         let poller = inner.clone();
         let _ = std::thread::Builder::new()
@@ -1225,11 +1228,14 @@ fn execute(
         error,
         session: None,
     };
-    let mcp = match &inner.mcp {
-        Ok(mcp) => Mcp {
-            url: mcp.url(),
-            token: mcp.token.clone(),
-        },
+    let (mcp, listed_before) = match &inner.mcp {
+        Ok(mcp) => (
+            Mcp {
+                url: mcp.url(),
+                token: mcp.token.clone(),
+            },
+            mcp.listings(),
+        ),
         Err(err) => return failed(format!("Keel's tools aren't available: {err}")),
     };
     let Some((spec, program)) = crate::agents::executable(&inner.app, agent_id) else {
@@ -1432,6 +1438,20 @@ fn execute(
             },
             session,
         };
+    }
+    // Every supported CLI lists the tools as it starts, whether or not the
+    // turn uses them. One that never did was cut off from Keel and has to
+    // work around it, which makes every message slow.
+    let listed = inner.mcp.as_ref().map_or(0, McpServer::listings);
+    if listed == listed_before {
+        let warning = format!(
+            "{} ran without Keel's tools: it never loaded Keel's MCP server, so it can't see or start panes.",
+            spec.name
+        );
+        inner.log("error", warning.clone());
+        if !inner.warned_tools.swap(true, Ordering::SeqCst) {
+            let _ = bot.send(chat, &format!("⚠️ {warning}"), false);
+        }
     }
     Outcome::Reply { reply, session }
 }

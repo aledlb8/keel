@@ -41,6 +41,9 @@ pub struct McpServer {
     pub port: u16,
     pub token: String,
     pending: Pending,
+    /// How many times an agent has asked for the tools, so a turn that never
+    /// did can be told apart from one that had them.
+    listed: Arc<AtomicUsize>,
 }
 
 impl McpServer {
@@ -50,9 +53,11 @@ impl McpServer {
         let token = uuid::Uuid::new_v4().simple().to_string();
         let pending: Pending = Arc::default();
         let open = Arc::new(AtomicUsize::new(0));
+        let listed = Arc::new(AtomicUsize::new(0));
 
         let worker_token = token.clone();
         let worker_pending = pending.clone();
+        let worker_listed = listed.clone();
         std::thread::Builder::new()
             .name("keel-assistant-mcp".into())
             .spawn(move || {
@@ -67,10 +72,11 @@ impl McpServer {
                     let app = app.clone();
                     let token = worker_token.clone();
                     let pending = worker_pending.clone();
+                    let listed = worker_listed.clone();
                     let _ = std::thread::Builder::new()
                         .name("keel-assistant-mcp-call".into())
                         .spawn(move || {
-                            serve(stream, &app, &token, &pending);
+                            serve(stream, &app, &token, &pending, &listed);
                             open.fetch_sub(1, Ordering::SeqCst);
                         });
                 }
@@ -81,11 +87,17 @@ impl McpServer {
             port,
             token,
             pending,
+            listed,
         })
     }
 
     pub fn url(&self) -> String {
         format!("http://127.0.0.1:{}/mcp", self.port)
+    }
+
+    /// Times an agent has listed the tools since Keel started.
+    pub fn listings(&self) -> usize {
+        self.listed.load(Ordering::SeqCst)
     }
 
     /// Run a tool for Keel itself, not for the agent.
@@ -186,7 +198,13 @@ fn token_matches(header: Option<&str>, token: &str) -> bool {
             == 0
 }
 
-fn serve(mut stream: TcpStream, app: &AppHandle, token: &str, pending: &Pending) {
+fn serve(
+    mut stream: TcpStream,
+    app: &AppHandle,
+    token: &str,
+    pending: &Pending,
+    listed: &AtomicUsize,
+) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
     let Some(request) = read_request(&mut stream) else {
@@ -221,6 +239,9 @@ fn serve(mut stream: TcpStream, app: &AppHandle, token: &str, pending: &Pending)
         );
         return;
     };
+    if message.get("method").and_then(Value::as_str) == Some("tools/list") {
+        listed.fetch_add(1, Ordering::SeqCst);
+    }
     match handle(message, |call| forward(app, pending, call)) {
         Some(reply) => respond(&mut stream, "200 OK", Some(&reply)),
         None => respond(&mut stream, "202 Accepted", None),
