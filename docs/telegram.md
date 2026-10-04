@@ -81,9 +81,12 @@ bearer token. Calls are answered by the window, which owns the workspace:
 
 When a pane the agent started finishes, waits for input or exits, Keel sends
 the agent a `[Keel]` message with the end of its screen, so it can report back
-or carry on (at most eight times before you speak again). Other agents can be
-forwarded to the phone as short notices: never, while Keel is in the
-background, or always.
+or carry on (at most eight times before you speak again; after that, a plain
+one-line notice). Other agents can be forwarded to the phone never, while Keel
+is in the background, or always. A forwarded one also goes to the agent with
+its screen, to sum up in a sentence without acting on it, so the phone says
+what the agent did rather than only that it finished. Nothing Keel sends
+itself uses emojis.
 
 ## Security
 
