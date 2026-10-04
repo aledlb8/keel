@@ -67,14 +67,15 @@ const COMMANDS: &[(&str, &str)] = &[
 ];
 
 const RULES: &str = "\
-You are the user's main agent in Keel, a desktop app where they run many coding agents side by side. \
-They are talking to you from Telegram on their phone.
+You are Bob, the user's main agent in Keel, a desktop app where they run many coding agents side by side. \
+They are talking to you from Telegram on their phone. \
+How you talk is in SOUL.md, and what you know about them is in USER.md; both are below these rules.
 
 Messages can carry images (attached, and saved in your folder) and voice notes, which arrive already transcribed and may contain small transcription mistakes.
 
 Replies:
-- Text like a coworker messaging their manager: one or two short, plain sentences. \
-No headings, no bullet lists, no emojis, no recaps of what you did step by step, no filler or sign-offs. \
+- One or two short sentences, like a coworker texting their manager. \
+No headings, no bullet lists, no emojis, no recaps of what you did step by step. \
 \"Done, tests pass.\" or \"Started Codex on the login bug, I'll ping you when it's done.\" is the right size.
 - Only go longer when the user asks for detail, e.g. the console output, a diff, a file or a full explanation. \
 Then give exactly that, in a code block if it's output. Telegram shows **bold**, `code`, code blocks and links. No tables.
@@ -112,7 +113,55 @@ Rewrite or elaborate only when the user asks you to.
 - Don't read the code yourself before handing it off; that agent will.
 - Don't push, deploy, publish, or delete things the task didn't call for unless the user asked.
 - After changing something, say what changed in a sentence; the details only if asked.
+
+Memory:
+- USER.md in your folder is what you know about the user. It's shown to you every turn and is the only thing \
+that carries over when the conversation is reset.
+- When you learn something lasting about them (how they like things done, which agent they want for what, \
+their projects, a correction they gave you), add it to USER.md right away as a short line, like \
+\"- Prefers Codex for frontend work.\" Change or remove a line when it stops being true; never keep two that disagree. \
+Facts and preferences only, not a log of what happened, and under about 3000 characters.
+- Don't mention saving to USER.md unless they asked you to remember something.
+- SOUL.md in your folder is your personality. Change it only when they ask you to talk or act differently, and say you did.
 ";
+
+/// Bob's personality until the user (or Bob, when asked) changes the copy in
+/// his folder.
+const DEFAULT_SOUL: &str = include_str!("assistant_soul.md");
+/// The most of SOUL.md or USER.md that goes into the rules. Some CLIs take the
+/// rules on the command line, which Windows caps at 32,767 characters.
+const NOTES_CHARS: usize = 4000;
+
+/// The rules, then SOUL.md and USER.md from the agent's folder. SOUL.md is
+/// written out the first time so there is a file to edit.
+fn standing_rules(home: &std::path::Path) -> String {
+    let soul_file = home.join("SOUL.md");
+    if !soul_file.exists() {
+        let _ = crate::store::write_atomic(&soul_file, DEFAULT_SOUL);
+    }
+    let soul = std::fs::read_to_string(&soul_file).unwrap_or_else(|_| DEFAULT_SOUL.to_string());
+    let user = std::fs::read_to_string(home.join("USER.md")).unwrap_or_default();
+    format!(
+        "{RULES}\n# SOUL.md (your personality)\n\n{}\n\n# USER.md (what you know about the user)\n\n{}\n",
+        notes(&soul, "SOUL.md"),
+        if user.trim().is_empty() {
+            "(Nothing yet.)".to_string()
+        } else {
+            notes(&user, "USER.md")
+        }
+    )
+}
+
+/// A notes file as it goes into the rules: trimmed, and cut short with a
+/// warning when it has grown past what fits.
+fn notes(text: &str, name: &str) -> String {
+    let text = text.trim();
+    if text.chars().count() <= NOTES_CHARS {
+        return text.to_string();
+    }
+    let cut: String = text.chars().take(NOTES_CHARS).collect();
+    format!("{cut}\n\n({name} is too long and was cut here. Tighten it.)")
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -775,7 +824,7 @@ fn receive(inner: &Arc<Inner>, bot: &Bot, message: telegram::Message) {
                 inner.log("event", "New conversation");
                 let _ = bot.send(
                     message.chat_id,
-                    "Starting fresh — I won't remember what we said before.",
+                    "Starting fresh. I'll forget this chat but keep my notes on you.",
                     false,
                 );
                 return;
@@ -887,7 +936,7 @@ fn agent_line(inner: &Arc<Inner>) -> String {
 
 fn help_text(inner: &Arc<Inner>, first: bool) -> String {
     let opening = if first {
-        "**Paired with Keel.** Only you can talk to me now.\n\n"
+        "**Paired with Keel.** I'm Bob, and only you can talk to me now.\n\n"
     } else {
         ""
     };
@@ -1256,8 +1305,9 @@ fn execute(
         Ok(home) => home,
         Err(err) => return failed(err),
     };
+    let rules = standing_rules(&home);
     // Codex, opencode and Pi read their standing instructions from here.
-    let _ = crate::store::write_atomic(&home.join("AGENTS.md"), RULES);
+    let _ = crate::store::write_atomic(&home.join("AGENTS.md"), &rules);
     let projects = crate::roots::registered();
     let launch = match agents::prepare(
         agent_id,
@@ -1267,7 +1317,7 @@ fn execute(
             home: &home,
             mcp: &mcp,
             projects: &projects,
-            rules: RULES,
+            rules: &rules,
             images,
         },
     ) {
@@ -1902,6 +1952,33 @@ mod tests {
         let text = serde_json::to_string(&fresh).unwrap();
         let back: Settings = serde_json::from_str(&text).unwrap();
         assert_eq!(back.agent_id.as_deref(), Some("claude"));
+    }
+
+    #[test]
+    fn rules_carry_bobs_soul_and_notes() {
+        let home = std::env::temp_dir().join(format!("keel-assistant-soul-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+
+        let fresh = standing_rules(&home);
+        assert!(fresh.starts_with(RULES));
+        assert!(fresh.contains("You're Bob."));
+        assert!(fresh.ends_with("(Nothing yet.)\n"));
+        assert_eq!(
+            std::fs::read_to_string(home.join("SOUL.md")).unwrap(),
+            DEFAULT_SOUL
+        );
+
+        std::fs::write(home.join("SOUL.md"), "Talk like a pirate.").unwrap();
+        std::fs::write(home.join("USER.md"), "- Prefers Codex.\n").unwrap();
+        let edited = standing_rules(&home);
+        assert!(edited.contains("Talk like a pirate."));
+        assert!(!edited.contains("You're Bob."));
+        assert!(edited.ends_with("- Prefers Codex.\n"));
+
+        std::fs::write(home.join("USER.md"), "x".repeat(NOTES_CHARS + 50)).unwrap();
+        assert!(standing_rules(&home).contains("USER.md is too long and was cut here."));
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]
