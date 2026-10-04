@@ -280,7 +280,7 @@ fn str_at<'a>(value: &'a Value, pointer: &str) -> Option<&'a str> {
 }
 
 /// Read one line of a CLI's output. Returns a short label when it shows the
-/// agent starting a tool, for the progress line on the phone.
+/// agent starting a tool, for the activity log.
 pub fn read_line(agent_id: &str, line: &str, reading: &mut Reading) -> Option<String> {
     let event: Value = serde_json::from_str(line.trim()).ok()?;
     let kind = str_at(&event, "/type").unwrap_or("");

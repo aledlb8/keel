@@ -255,22 +255,6 @@ impl Bot {
         Ok(())
     }
 
-    pub fn edit(&self, chat_id: i64, message_id: i64, text: &str) -> Result<(), ApiError> {
-        self.call(
-            "editMessageText",
-            json!({ "chat_id": chat_id, "message_id": message_id, "text": text }),
-        )
-        .map(|_| ())
-    }
-
-    pub fn delete(&self, chat_id: i64, message_id: i64) -> Result<(), ApiError> {
-        self.call(
-            "deleteMessage",
-            json!({ "chat_id": chat_id, "message_id": message_id }),
-        )
-        .map(|_| ())
-    }
-
     /// "typing…" under the bot's name, for about five seconds.
     pub fn typing(&self, chat_id: i64) {
         let _ = self.call(

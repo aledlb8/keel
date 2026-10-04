@@ -8,8 +8,8 @@
 //!   no model (`/stop`, `/new`, `/status`) are answered here.
 //! - **Worker.** Runs one turn at a time: the chosen CLI in headless mode, in
 //!   Keel's folder for it, continuing the same conversation each time. Its
-//!   events become a progress line on the phone and the activity log here; its
-//!   final answer becomes the reply.
+//!   events become the activity log here; the phone only sees "typing" until
+//!   its final answer, the reply, so a turn is one notification.
 //! - **MCP server** (`assistant_mcp`). The agent's tools for seeing and driving
 //!   Keel, answered by the window.
 //!
@@ -43,7 +43,6 @@ const STALE_SECS: i64 = 10 * 60;
 const LOG_LIMIT: usize = 300;
 /// Follow-up turns Keel may start on its own before a person speaks again.
 const AUTO_TURN_LIMIT: u32 = 8;
-const PROGRESS_EDIT_EVERY: Duration = Duration::from_millis(2500);
 
 /// Set by a running Claude Code for its own children.
 const CLAUDE_SESSION_MARKERS: &[&str] = &[
@@ -1065,54 +1064,6 @@ fn attachment_prompt(text: &str, transcripts: &[Transcript], images: &[PathBuf])
     parts.join("\n\n")
 }
 
-struct Progress<'a> {
-    bot: &'a Bot,
-    chat: i64,
-    message: Option<i64>,
-    lines: Vec<String>,
-    edited: Option<Instant>,
-    started: Instant,
-}
-
-impl Progress<'_> {
-    fn note(&mut self, label: &str) {
-        self.lines.push(label.to_string());
-        if self.lines.len() > 4 {
-            self.lines.remove(0);
-        }
-        if self
-            .edited
-            .is_some_and(|at| at.elapsed() < PROGRESS_EDIT_EVERY)
-        {
-            return;
-        }
-        self.edited = Some(Instant::now());
-        let text = self.text();
-        match self.message {
-            Some(id) => {
-                let _ = self.bot.edit(self.chat, id, &text);
-            }
-            None => self.message = self.bot.send(self.chat, &text, false).ok(),
-        }
-    }
-
-    fn text(&self) -> String {
-        let seconds = self.started.elapsed().as_secs();
-        let mut text = format!("⏳ Working · {}:{:02}", seconds / 60, seconds % 60);
-        for line in &self.lines {
-            text.push_str("\n• ");
-            text.push_str(line);
-        }
-        text
-    }
-
-    fn finish(&mut self) {
-        if let Some(id) = self.message.take() {
-            let _ = self.bot.delete(self.chat, id);
-        }
-    }
-}
-
 fn set_busy(inner: &Arc<Inner>, busy: bool, activity: Option<String>) {
     if let Ok(mut live) = inner.live.lock() {
         live.busy = busy;
@@ -1402,14 +1353,6 @@ fn execute(
 
     let mut reading = Reading::default();
     let mut sent = false;
-    let mut progress = Progress {
-        bot,
-        chat,
-        message: None,
-        lines: Vec::new(),
-        edited: None,
-        started: Instant::now(),
-    };
     if let Some(stdout) = stdout {
         for line in BufReader::new(stdout).lines() {
             let Ok(line) = line else {
@@ -1421,15 +1364,11 @@ fn execute(
                     live.activity = Some(label.clone());
                 }
                 inner.publish();
-                if !sent {
-                    progress.note(&label);
-                }
             }
             // The answer goes out now; some CLIs take seconds more to exit.
             if !sent && reading.done && !stopped.load(Ordering::SeqCst) {
                 if let Some(reply) = ready_reply(&reading, false) {
                     typing.store(false, Ordering::SeqCst);
-                    progress.finish();
                     deliver(inner, bot, chat, reply);
                     sent = true;
                 }
@@ -1439,7 +1378,6 @@ fn execute(
     typing.store(false, Ordering::SeqCst);
     if !sent && !stopped.load(Ordering::SeqCst) {
         if let Some(reply) = ready_reply(&reading, true) {
-            progress.finish();
             deliver(inner, bot, chat, reply);
             sent = true;
         }
@@ -1452,7 +1390,6 @@ fn execute(
     if let Ok(mut running) = inner.running.lock() {
         *running = None;
     }
-    progress.finish();
 
     let session = reading.session.clone().or(launch.session);
     if stopped.load(Ordering::SeqCst) {
