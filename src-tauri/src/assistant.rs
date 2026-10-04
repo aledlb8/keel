@@ -74,7 +74,7 @@ Messages can carry images (attached, and saved in your folder) and voice notes, 
 
 Replies:
 - Text like a coworker messaging their manager: one or two short, plain sentences. \
-No headings, no bullet lists, no recaps of what you did step by step, no filler or sign-offs. \
+No headings, no bullet lists, no emojis, no recaps of what you did step by step, no filler or sign-offs. \
 \"Done, tests pass.\" or \"Started Codex on the login bug, I'll ping you when it's done.\" is the right size.
 - Only go longer when the user asks for detail, e.g. the console output, a diff, a file or a full explanation. \
 Then give exactly that, in a code block if it's output. Telegram shows **bold**, `code`, code blocks and links. No tables.
@@ -953,7 +953,7 @@ fn handle_job(inner: &Arc<Inner>, job: Job) {
         Ok((prompt, images)) => run_turn(inner, &prompt, &images, true),
         Err(error) => {
             inner.log("error", error.clone());
-            let _ = bot.send(chat, &format!("⚠️ {error}"), false);
+            let _ = bot.send(chat, &error, false);
         }
     }
 }
@@ -1012,7 +1012,7 @@ fn attachments(
                 // So a misheard word is caught before the agent acts on it.
                 let _ = bot.send(
                     chat,
-                    &format!("🎤 \u{201c}{}\u{201d}", transcript.text),
+                    &format!("Heard: \u{201c}{}\u{201d}", transcript.text),
                     false,
                 );
             }
@@ -1170,7 +1170,7 @@ fn run_turn(inner: &Arc<Inner>, prompt: &str, images: &[PathBuf], retry_fresh: b
                 });
             }
             inner.log("error", error.clone());
-            let _ = bot.send(chat, &format!("⚠️ {error}"), false);
+            let _ = bot.send(chat, &error, false);
         }
     }
 }
@@ -1467,7 +1467,7 @@ fn execute(
         );
         inner.log("error", warning.clone());
         if !inner.warned_tools.swap(true, Ordering::SeqCst) {
-            let _ = bot.send(chat, &format!("⚠️ {warning}"), false);
+            let _ = bot.send(chat, &warning, false);
         }
     }
     Outcome::Reply {
@@ -1551,7 +1551,9 @@ pub struct PaneEvent {
     window_focused: bool,
 }
 
-fn pane_report(event: &PaneEvent) -> String {
+/// What the agent is told about a pane: one it started, to check and report
+/// on, or one the user opened, only to sum up for the phone.
+fn pane_report(event: &PaneEvent, delegated: bool) -> String {
     let what = match event.kind.as_str() {
         "waiting" => "is waiting for input (a question or a permission)",
         "exited" => "has exited",
@@ -1562,24 +1564,36 @@ fn pane_report(event: &PaneEvent) -> String {
     } else {
         format!("\nEnd of its screen:\n```\n{}\n```", event.tail.trim_end())
     };
-    let next = match event.kind.as_str() {
-        "waiting" => "If what the user asked for answers it, answer with send_to_pane. Otherwise ask the user.",
-        _ => "Tell the user how it went in a few lines. If their request still needs more steps, carry on.",
+    let (whose, next) = match (delegated, event.kind.as_str()) {
+        (true, "waiting") => (
+            "The agent you started",
+            "If what the user asked for answers it, answer with send_to_pane. Otherwise ask the user.",
+        ),
+        (true, _) => (
+            "The agent you started",
+            "Tell the user how it went in a sentence or two. If their request still needs more steps, carry on.",
+        ),
+        (false, _) => (
+            "An agent the user started themselves",
+            "Tell the user in one short sentence what it did or said, going by its screen, and if it's asking something, what. \
+Name the agent and project. Don't act on it or touch the pane unless they ask.",
+        ),
     };
     format!(
-        "[Keel] The agent you started {what}.\nPane \"{}\" ({}) in project {}, pane id {}.{screen}\n\n{next}",
+        "[Keel] {whose} {what}.\nPane \"{}\" ({}) in project {}, pane id {}.{screen}\n\n{next}",
         event.title, event.agent, event.project, event.pane_id
     )
 }
 
+/// The plain line, for the log and for when the agent can't sum it up.
 fn pane_notice(event: &PaneEvent) -> String {
-    let (mark, what) = match event.kind.as_str() {
-        "waiting" => ("⏸", "needs you"),
-        "exited" => ("⏹", "exited"),
-        _ => ("✅", "finished"),
+    let what = match event.kind.as_str() {
+        "waiting" => "needs you",
+        "exited" => "exited",
+        _ => "finished",
     };
     format!(
-        "{mark} **{}** {what} · {} — {}",
+        "{} {what} in {} ({}).",
         event.agent, event.project, event.title
     )
 }
@@ -1831,8 +1845,8 @@ pub fn assistant_pane_event(manager: Assistant<'_>, event: PaneEvent) {
             })
             .unwrap_or(false);
         if allowed {
-            inner.log("event", pane_notice(&event).replace("**", ""));
-            inner.enqueue(Job::text(pane_report(&event)));
+            inner.log("event", pane_notice(&event));
+            inner.enqueue(Job::text(pane_report(&event, true)));
             return;
         }
     }
@@ -1842,7 +1856,13 @@ pub fn assistant_pane_event(manager: Assistant<'_>, event: PaneEvent) {
         Forward::Background => !event.window_focused,
         Forward::Always => true,
     };
-    if send || delegated {
+    if send && !delegated {
+        // The agent reads the screen and sums it up, so the phone gets what
+        // happened, not just that something did.
+        inner.log("event", pane_notice(&event));
+        inner.enqueue(Job::text(pane_report(&event, false)));
+    } else if delegated {
+        // Past the limit on turns Keel starts by itself.
         let inner = inner.clone();
         let notice = pane_notice(&event);
         std::thread::spawn(move || inner.tell(&notice));
@@ -1895,14 +1915,13 @@ mod tests {
             tail: "All tests passed\n".into(),
             window_focused: false,
         };
-        let report = pane_report(&event);
+        let report = pane_report(&event, true);
         assert!(report.starts_with("[Keel] The agent you started has finished."));
+        assert!(pane_report(&event, false)
+            .starts_with("[Keel] An agent the user started themselves has finished."));
         assert!(report.contains("pane id p1"));
         assert!(report.contains("```\nAll tests passed\n```"));
-        assert_eq!(
-            pane_notice(&event),
-            "✅ **Codex** finished · keel — Fix login"
-        );
+        assert_eq!(pane_notice(&event), "Codex finished in keel (Fix login).");
     }
 
     #[test]
