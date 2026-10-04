@@ -491,6 +491,7 @@ fn tool_label(name: &str, input: Option<&Value>) -> String {
         .unwrap_or(name)
         .trim_start_matches("keel_");
     let keel = match bare {
+        "tell_user" => Some("messaging you"),
         "list_projects" => Some("looking at Keel"),
         "read_pane" => Some("reading a pane"),
         "start_agent" => Some("starting an agent"),

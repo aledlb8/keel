@@ -263,17 +263,6 @@ impl Bot {
         );
     }
 
-    pub fn react(&self, chat_id: i64, message_id: i64, emoji: &str) {
-        let _ = self.call(
-            "setMessageReaction",
-            json!({
-                "chat_id": chat_id,
-                "message_id": message_id,
-                "reaction": [{ "type": "emoji", "emoji": emoji }],
-            }),
-        );
-    }
-
     /// Download an attachment to `dest`. Telegram serves bots files up to 20 MB.
     pub fn download(&self, file_id: &str, dest: &std::path::Path) -> Result<u64, ApiError> {
         let file = self.call("getFile", json!({ "file_id": file_id }))?;

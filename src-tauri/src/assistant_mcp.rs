@@ -7,7 +7,8 @@
 //!
 //! The tools describe and change the workspace, and the workspace is owned by
 //! the webview's store. So a call is handed to the window as an event, and the
-//! HTTP request waits for the window's answer.
+//! HTTP request waits for the window's answer. `tell_user` is the exception:
+//! it goes straight to the phone through the notifier the assistant sets.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -15,7 +16,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -28,6 +29,9 @@ const MAX_CONNECTIONS: usize = 16;
 const CALL_TIMEOUT: Duration = Duration::from_secs(90);
 
 type Pending = Arc<Mutex<HashMap<String, Sender<Result<String, String>>>>>;
+/// Sends the user a message on the phone, for `tell_user`.
+pub type Notifier = Box<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
+type Notify = Arc<OnceLock<Notifier>>;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -44,6 +48,7 @@ pub struct McpServer {
     /// How many times an agent has asked for the tools, so a turn that never
     /// did can be told apart from one that had them.
     listed: Arc<AtomicUsize>,
+    notify: Notify,
 }
 
 impl McpServer {
@@ -54,10 +59,12 @@ impl McpServer {
         let pending: Pending = Arc::default();
         let open = Arc::new(AtomicUsize::new(0));
         let listed = Arc::new(AtomicUsize::new(0));
+        let notify: Notify = Arc::default();
 
         let worker_token = token.clone();
         let worker_pending = pending.clone();
         let worker_listed = listed.clone();
+        let worker_notify = notify.clone();
         std::thread::Builder::new()
             .name("keel-assistant-mcp".into())
             .spawn(move || {
@@ -73,10 +80,11 @@ impl McpServer {
                     let token = worker_token.clone();
                     let pending = worker_pending.clone();
                     let listed = worker_listed.clone();
+                    let notify = worker_notify.clone();
                     let _ = std::thread::Builder::new()
                         .name("keel-assistant-mcp-call".into())
                         .spawn(move || {
-                            serve(stream, &app, &token, &pending, &listed);
+                            serve(stream, &app, &token, &pending, &listed, &notify);
                             open.fetch_sub(1, Ordering::SeqCst);
                         });
                 }
@@ -88,7 +96,13 @@ impl McpServer {
             token,
             pending,
             listed,
+            notify,
         })
+    }
+
+    /// Where `tell_user` messages go. Set once.
+    pub fn set_notifier(&self, notifier: Notifier) {
+        let _ = self.notify.set(notifier);
     }
 
     pub fn url(&self) -> String {
@@ -102,7 +116,7 @@ impl McpServer {
 
     /// Run a tool for Keel itself, not for the agent.
     pub fn ask(&self, app: &AppHandle, call: ToolCall) -> Result<String, String> {
-        forward(app, &self.pending, call)
+        forward(app, &self.pending, &self.notify, call)
     }
 
     /// The window's answer to a call it was handed.
@@ -204,6 +218,7 @@ fn serve(
     token: &str,
     pending: &Pending,
     listed: &AtomicUsize,
+    notify: &Notify,
 ) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
@@ -242,13 +257,30 @@ fn serve(
     if message.get("method").and_then(Value::as_str) == Some("tools/list") {
         listed.fetch_add(1, Ordering::SeqCst);
     }
-    match handle(message, |call| forward(app, pending, call)) {
+    match handle(message, |call| forward(app, pending, notify, call)) {
         Some(reply) => respond(&mut stream, "200 OK", Some(&reply)),
         None => respond(&mut stream, "202 Accepted", None),
     }
 }
 
-fn forward(app: &AppHandle, pending: &Pending, call: ToolCall) -> Result<String, String> {
+fn forward(
+    app: &AppHandle,
+    pending: &Pending,
+    notify: &Notify,
+    call: ToolCall,
+) -> Result<String, String> {
+    if call.name == "tell_user" {
+        let text = call
+            .arguments
+            .get("text")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .ok_or("Give the message as `text`.")?;
+        let notifier = notify.get().ok_or("Telegram isn't connected.")?;
+        notifier(text)?;
+        return Ok("Sent. Carry on; your final reply still goes to the user.".into());
+    }
     if call.name == "open_project" {
         // The folder allowlist is Rust's: register it here, then let the
         // window add the project the same way a folder pick would.
@@ -352,6 +384,12 @@ fn tools() -> Vec<Value> {
     let pane = json!({ "type": "string", "description": "Pane id from list_projects." });
     vec![
         tool(
+            "tell_user",
+            "Send the user a short message on Telegram right away, without ending your turn. Use it once, at the start of a task that takes work, to confirm in a sentence what you understood and what you're doing now. Not for the final answer.",
+            json!({ "text": { "type": "string", "description": "One short sentence." } }),
+            &["text"],
+        ),
+        tool(
             "list_projects",
             "Everything open in Keel: workspaces, projects (name, folder), and every terminal pane in them with its agent, status (working, waiting for input, done, idle) and folder. Call this first to find project and pane ids.",
             json!({}),
@@ -438,6 +476,7 @@ mod tests {
             .collect();
         assert!(names.contains(&"list_projects"));
         assert!(names.contains(&"start_agent"));
+        assert!(names.contains(&"tell_user"));
     }
 
     #[test]

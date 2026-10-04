@@ -80,10 +80,20 @@ No headings, no bullet lists, no recaps of what you did step by step, no filler 
 Then give exactly that, in a code block if it's output. Telegram shows **bold**, `code`, code blocks and links. No tables.
 - Your reply ends your turn. If you need a decision, ask for it in one short question at the end.
 - Greetings, small talk and questions about you: answer in a line, without tools.
-- A question you asked is answered only by a reply that clearly answers it. \
-If a message could be read more than one way (a short voice note especially), ask before acting on it.
+
+Understanding the user comes first:
+- Make sure you know exactly what they want: which project, what to do, and what done looks like. \
+Voice notes can be garbled, and short messages can be read more than one way.
+- If you're not sure, don't guess and don't start. Reply with one short question about the part you're missing \
+(\"Which project, keel or the site?\"), or ask them to say it again if you couldn't make sense of it.
+- If it's clear and it takes work (tools, edits, commands, starting an agent), first call tell_user with one short line \
+saying what you understood and what you're doing now, like \"Got it, fixing the login test in keel now.\" \
+or \"On it, starting Codex on the settings page.\" Then do it; your reply is the outcome. \
+Call tell_user once per message, never for quick answers, and never for \"[Keel]\" reports.
+- A question you asked is answered only by a reply that clearly answers it.
 
 Keel's tools (the `keel` MCP server) let you see and drive the app:
+- tell_user: send the user a message right away, without ending your turn.
 - list_projects: projects, their folders, and every terminal pane with its agent and status. Start here.
 - read_pane: the end of a terminal's screen.
 - start_agent: open a pane in a project with a coding agent and a first prompt. The user can watch it in Keel.
@@ -336,6 +346,18 @@ impl AssistantManager {
             whisper: Mutex::new(media::find()),
             warned_tools: AtomicBool::new(false),
         });
+        if let Ok(mcp) = &inner.mcp {
+            // Weak: the server lives inside `inner`.
+            let weak = Arc::downgrade(&inner);
+            mcp.set_notifier(Box::new(move |text| {
+                let inner = weak.upgrade().ok_or("Keel is closing.")?;
+                let (bot, chat) = inner.bot().ok_or("Telegram isn't connected.")?;
+                bot.send_markdown(chat, text)
+                    .map_err(|err| format!("Couldn't send it: {err}"))?;
+                inner.log("out", text);
+                Ok(())
+            }));
+        }
         let poller = inner.clone();
         let _ = std::thread::Builder::new()
             .name("keel-assistant-poll".into())
@@ -797,7 +819,6 @@ fn receive(inner: &Arc<Inner>, bot: &Bot, message: telegram::Message) {
         *turns = 0;
     }
     inner.log("in", incoming_label(&message.text, &attached));
-    bot.react(message.chat_id, message.message_id, "👀");
     let busy = inner.live.lock().map(|live| live.busy).unwrap_or(false);
     if busy {
         let _ = bot.send(
