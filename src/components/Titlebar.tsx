@@ -59,6 +59,7 @@ export interface TitlebarActions {
   showShortcuts: () => void;
   openCatalogue: () => void;
   openVpn: () => void;
+  openTelegram: () => void;
   openConfig: () => void;
   goTo: () => void;
   filterSidebar: () => void;

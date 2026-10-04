@@ -26,6 +26,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { startChimeAudio } from "@/lib/chime";
 
 import { AgentSettingsDialog } from "@/components/AgentSettingsDialog";
+import { AssistantDialog } from "@/components/AssistantDialog";
 import { Canvas } from "@/components/Canvas";
 import { DockSeam, useDockWidth } from "@/components/Dock";
 import { focusTerminal, Island } from "@/components/Island";
@@ -66,6 +67,7 @@ import {
   onWorkspaceChanged,
   reconcileWorkspaceWatches,
 } from "@/lib/workspaceWatch";
+import { startAssistant, useAssistant } from "@/state/assistant";
 import {
   activeDeck,
   deckOfPane,
@@ -203,6 +205,7 @@ export default function App() {
     const stopTracking = startAttentionTracking();
     const stopAudio = startChimeAudio();
     const stopFocus = startWindowFocusTracking();
+    const stopAssistant = startAssistant();
     const unlisten = onPtyExit((paneId, generation) => {
       useKeel.getState().notePaneExit(paneId, generation);
     });
@@ -222,6 +225,7 @@ export default function App() {
       stopTracking();
       stopAudio();
       stopFocus();
+      stopAssistant();
       stopHost();
       stopClose();
       window.removeEventListener("contextmenu", blockNativeMenu);
@@ -511,6 +515,7 @@ export default function App() {
     showShortcuts: () => setShortcuts(true),
     openCatalogue: () => useKeel.getState().openAgentSettings(null),
     openVpn: () => useKeel.getState().openVpnSettings(),
+    openTelegram: () => useAssistant.getState().openDialog(),
     // Reveal rather than open: the interesting thing is the folder it sits in.
     openConfig: () => void statePath().then(revealItemInDir),
     selectDeck: (deckId) => {
@@ -675,6 +680,7 @@ export default function App() {
       <ShortcutsDialog open={shortcuts} onOpenChange={setShortcuts} />
       <AgentSettingsDialog />
       <VpnDialog />
+      <AssistantDialog />
       <AskHost />
       <Toaster />
     </div>

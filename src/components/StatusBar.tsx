@@ -24,12 +24,14 @@
 
 import { Grid2X2, Plus } from "lucide-react";
 
+import { assistantView } from "@/components/AssistantDialog";
 import { UsageMeter } from "@/components/UsageMeter";
 import { StatusLight, vpnView } from "@/components/VpnDialog";
 import { withShortcut } from "@/lib/keymap";
 import { statusPlace } from "@/lib/statusPath";
 import { cn } from "@/lib/utils";
 import type { Deck, Project } from "@/lib/types";
+import { useAssistant } from "@/state/assistant";
 import { useKeel } from "@/state/store";
 
 export interface StatusBarProps {
@@ -93,6 +95,7 @@ export function StatusBar({
       ) : null}
 
       <div className="ml-auto flex min-w-0 items-center gap-1.5">
+        <AssistantChip />
         <VpnChip />
         {/* Brings its own divider, so there is none when it has nothing to show. */}
         <UsageMeter />
@@ -147,6 +150,32 @@ function DeckPill({
       )}
     >
       {index + 1}
+    </button>
+  );
+}
+
+function AssistantChip() {
+  const snapshot = useAssistant((state) => state.snapshot);
+  const { tone, color, headline } = assistantView(snapshot);
+  const title = snapshot?.busy && snapshot.activity
+    ? `Main agent · ${snapshot.activity}`
+    : snapshot?.phase === "error" && snapshot.error
+      ? `Telegram: ${snapshot.error}`
+      : `Telegram · ${headline}`;
+
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      onClick={() => useAssistant.getState().openDialog()}
+      className={cn(
+        "flex h-[var(--keel-h-chip)] shrink-0 items-center gap-2 rounded-[var(--keel-r-chip)] px-2 text-small font-medium transition-colors hover:bg-veil-2 hover:text-foreground",
+        tone === "idle" ? "text-faint" : "text-dim",
+      )}
+    >
+      <StatusLight tone={tone} color={color} size={7} />
+      Telegram
     </button>
   );
 }

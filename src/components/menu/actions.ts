@@ -36,6 +36,7 @@ import {
   Plus,
   RotateCw,
   Search,
+  Send,
   Settings2,
   ShieldCheck,
   SplitSquareHorizontal,
@@ -374,6 +375,12 @@ export function helpBarMenu(actions: TitlebarActions): MenuEntry[] {
       label: "Private VPN…",
       icon: ShieldCheck,
       onSelect: actions.openVpn,
+    },
+    {
+      kind: "item",
+      label: "Telegram…",
+      icon: Send,
+      onSelect: actions.openTelegram,
     },
     { kind: "separator" },
     {

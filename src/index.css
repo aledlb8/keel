@@ -1385,6 +1385,43 @@
      * A recessed track of options where one is lit: the files/git tabs, the
      * sync buttons, ready/draft.
      */
+    /*
+     * Text that is still being written: a soft highlight sweeps across it.
+     * Used for what the main agent is doing right now.
+     */
+    .k-shimmer-text {
+        background: linear-gradient(
+                90deg,
+                var(--keel-text-faint) 0%,
+                var(--keel-text-faint) 40%,
+                var(--keel-text) 50%,
+                var(--keel-text-faint) 60%,
+                var(--keel-text-faint) 100%
+            )
+            0 0 / 300% 100%;
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+        animation: k-shimmer 2.4s linear infinite;
+    }
+
+    @keyframes k-shimmer {
+        from {
+            background-position: 100% 0;
+        }
+        to {
+            background-position: 0% 0;
+        }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .k-shimmer-text {
+            animation: none;
+            color: var(--keel-text-faint);
+            background: none;
+        }
+    }
+
     .k-seg {
         display: flex;
         align-items: center;

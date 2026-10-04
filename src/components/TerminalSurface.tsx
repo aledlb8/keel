@@ -158,6 +158,78 @@ function searchOptions(incremental: boolean, caseSensitive: boolean) {
   };
 }
 
+/**
+ * The bottom of a pane's screen as plain text, trailing blank rows dropped.
+ * `null` when the pane has no terminal. This is what the main agent reads.
+ */
+export function terminalText(paneId: string, lines: number): string | null {
+  const term = terminals.get(paneId)?.term;
+  if (!term) return null;
+  const buffer = term.buffer.active;
+  const rows: string[] = [];
+  const from = Math.max(0, buffer.length - lines - term.rows);
+  for (let index = from; index < buffer.length; index++) {
+    rows.push(buffer.getLine(index)?.translateToString(true) ?? "");
+  }
+  while (rows.length && !rows[rows.length - 1]!.trim()) rows.pop();
+  return rows.slice(-lines).join("\n");
+}
+
+/**
+ * Type into a pane as a paste followed by Enter — the same path a person's
+ * paste takes, so bracketed paste and turn tracking both see it. The Enter
+ * goes separately, late enough that a TUI reads it as a submit rather than a
+ * newline inside the paste.
+ */
+export async function terminalType(
+  paneId: string,
+  text: string,
+  submit: boolean,
+): Promise<boolean> {
+  const term = terminals.get(paneId)?.term;
+  if (!term) return false;
+  if (text) term.paste(capPaste(text));
+  if (submit) {
+    await new Promise((resolve) => setTimeout(resolve, text ? 350 : 0));
+    terminals.get(paneId)?.term.input("\r");
+  }
+  return true;
+}
+
+/**
+ * Resolve once a pane has a terminal and its output has gone quiet: a freshly
+ * started agent has drawn its prompt and is waiting. False if it never did.
+ */
+export async function terminalSettled(
+  paneId: string,
+  { minMs = 2500, quietMs = 1200, maxMs = 30_000 } = {},
+): Promise<boolean> {
+  const started = Date.now();
+  const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  while (!terminals.get(paneId)) {
+    if (Date.now() - started > maxMs) return false;
+    await pause(100);
+  }
+  const term = terminals.get(paneId)!.term;
+  let last = Date.now();
+  let wrote = false;
+  const watch = term.onWriteParsed(() => {
+    last = Date.now();
+    wrote = true;
+  });
+  try {
+    for (;;) {
+      const now = Date.now();
+      if (now - started > maxMs) return false;
+      if (wrote && now - started >= minMs && now - last >= quietMs) return true;
+      if (!terminals.has(paneId)) return false;
+      await pause(150);
+    }
+  } finally {
+    watch.dispose();
+  }
+}
+
 /** Clipboard, buffer and scrollback-find commands for one pane's terminal. */
 export function terminalCommands(paneId: string) {
   const slot = () => terminals.get(paneId);
