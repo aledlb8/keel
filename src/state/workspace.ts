@@ -13,7 +13,7 @@ import { toast } from "sonner";
 
 import { diffTabId, editorRefId, fileTabId } from "../lib/editorRefs.ts";
 import { clearEditorReveals, revealInEditor } from "../lib/editorViews.ts";
-import { fileName, joinRel, parentRel } from "../lib/git.ts";
+import { changesTruncated, fileName, joinRel, parentRel } from "../lib/git.ts";
 import { noteRecent, pruneRecent } from "../lib/recentFiles.ts";
 import type { EditorRef } from "../lib/types.ts";
 import * as api from "../lib/workspace.ts";
@@ -338,8 +338,9 @@ interface WorkspaceState {
   /** Move a file or folder into another folder (`""` is the project root). */
   moveEntry: (rel: string, targetDir: string) => Promise<void>;
 
-  stage: (paths: string[]) => Promise<void>;
-  unstage: (paths: string[]) => Promise<void>;
+  /** `all` covers every change, including any the status list left out. */
+  stage: (paths: string[], all?: boolean) => Promise<void>;
+  unstage: (paths: string[], all?: boolean) => Promise<void>;
   discard: (paths: string[]) => Promise<void>;
   commit: (andPush?: boolean) => Promise<void>;
   /** Take the last commit back; its message returns to the box. */
@@ -1818,10 +1819,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     await settleMove(rel, toRel, set, get);
   },
 
-  stage: (paths) =>
-    runGit(set, get, (root) => api.gitStage(root, paths)),
-  unstage: (paths) =>
-    runGit(set, get, (root) => api.gitUnstage(root, paths)),
+  stage: (paths, all = false) =>
+    runGit(set, get, (root) => api.gitStage(root, paths, all)),
+  unstage: (paths, all = false) =>
+    runGit(set, get, (root) => api.gitUnstage(root, paths, all)),
   discard: (paths) =>
     runGit(set, get, (root) => api.gitDiscard(root, paths)),
 
@@ -1843,7 +1844,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     try {
       // Amending with nothing staged rewords the last commit, so leave it be.
       if (nothingStaged && sweep.length > 0 && !options.amend) {
-        await api.gitStage(root, sweep.map((file) => file.path));
+        // A cut-short list can't name every file, so sweep the whole tree.
+        // Conflicts block the commit button, so there are none to sweep in.
+        if (git && changesTruncated(git)) await api.gitStage(root, [], true);
+        else await api.gitStage(root, sweep.map((file) => file.path));
       }
       const hash = await api.gitCommit(root, message, options);
       // Clear it in whichever project made the commit, even if you left it meanwhile.

@@ -68,6 +68,8 @@ import {
 import {
   aheadBehind,
   buildChangeTree,
+  changeCount,
+  changesTruncated,
   fileName,
   groupGitFiles,
   parentRel,
@@ -226,8 +228,9 @@ export function ChangesView({ git, busy }: { git: GitStatus; busy: boolean }) {
     [byGroup, trees],
   );
 
-  const total =
-    all.conflict.length + all.staged.length + all.unstaged.length + all.untracked.length;
+  // Past a few thousand changes the list is cut short, and only counted.
+  const truncated = changesTruncated(git);
+  const total = changeCount(git);
 
   // A row that left its group drops out of the selection with it.
   useEffect(() => {
@@ -289,11 +292,13 @@ export function ChangesView({ git, busy }: { git: GitStatus; busy: boolean }) {
       anchor.current = key;
       setSelection(new Set([key]));
       workspace().setSelected(file.path);
-      void workspace().openDiff(file.path, group === "staged");
+      if (!file.folder) void workspace().openDiff(file.path, group === "staged");
     },
   };
 
   const groupActions = (id: GroupId): ReactNode => {
+    // "All" would mean only the rows that made the cut.
+    if (truncated) return null;
     const files = byGroup[id];
     switch (id) {
       case "conflict":
@@ -381,16 +386,26 @@ export function ChangesView({ git, busy }: { git: GitStatus; busy: boolean }) {
                       kind: "item",
                       label: "Stage everything",
                       icon: Plus,
-                      disabled: busy || all.unstaged.length + all.untracked.length === 0,
+                      // Staging the whole tree would mark conflicts resolved too.
+                      disabled:
+                        busy ||
+                        (truncated
+                          ? all.conflict.length > 0
+                          : all.unstaged.length + all.untracked.length === 0),
                       onSelect: () =>
-                        void workspace().stage(pathsOf([...all.unstaged, ...all.untracked])),
+                        void (truncated
+                          ? workspace().stage([], true)
+                          : workspace().stage(pathsOf([...all.unstaged, ...all.untracked]))),
                     },
                     {
                       kind: "item",
                       label: "Unstage everything",
                       icon: Minus,
-                      disabled: busy || all.staged.length === 0,
-                      onSelect: () => void workspace().unstage(pathsOf(all.staged)),
+                      disabled: busy || (!truncated && all.staged.length === 0),
+                      onSelect: () =>
+                        void (truncated
+                          ? workspace().unstage([], true)
+                          : workspace().unstage(pathsOf(all.staged))),
                     },
                     {
                       kind: "item",
@@ -432,7 +447,8 @@ export function ChangesView({ git, busy }: { git: GitStatus; busy: boolean }) {
                       label: "Discard everything",
                       icon: Undo2,
                       destructive: true,
-                      disabled: busy,
+                      // Too destructive to run on a list that isn't all there.
+                      disabled: busy || truncated,
                       confirm: "Discard every change? This can't be undone",
                       onSelect: () =>
                         void workspace().discard(
@@ -444,6 +460,8 @@ export function ChangesView({ git, busy }: { git: GitStatus; busy: boolean }) {
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
+
+          {truncated ? <TruncatedNotice shown={git.files.length} total={total} /> : null}
 
           <div
             className="min-h-0 flex-1 overflow-y-auto pb-3 [mask-image:linear-gradient(to_bottom,transparent,black_8px)]"
@@ -484,6 +502,15 @@ export function ChangesView({ git, busy }: { git: GitStatus; busy: boolean }) {
         </>
       )}
     </Panel.Provider>
+  );
+}
+
+function TruncatedNotice({ shown, total }: { shown: number; total: number }) {
+  return (
+    <p className="mx-[var(--keel-inset)] mb-1.5 shrink-0 rounded-[var(--keel-r-control)] bg-veil px-3 py-2 text-small text-faint">
+      Showing {shown.toLocaleString()} of {total.toLocaleString()} changes. Build output or
+      dependencies may be missing from .gitignore.
+    </p>
   );
 }
 
@@ -969,7 +996,7 @@ function FileActions({ group, files }: { group: GroupId; files: GitFile[] }) {
   const label = (verb: string) => (one ? verb : `${verb} folder`);
   return (
     <>
-      {one && one.status !== "deleted" ? (
+      {one && one.status !== "deleted" && !one.folder ? (
         <RowIcon label="Open file" onClick={() => void workspace().openFile(one.path)}>
           <FileText className="size-3" />
         </RowIcon>
@@ -1015,6 +1042,7 @@ function ChangeRow({
   const name = fileName(file.path);
   const parent = parentRel(file.path);
   const deleted = file.status === "deleted";
+  const folder = file.folder === true;
   const key = keyOf(group, file.path);
   const picked = panel?.selection.has(key) ?? false;
   const many = (panel?.selection.size ?? 0) > 1;
@@ -1028,7 +1056,13 @@ function ChangeRow({
         <div
           role="button"
           tabIndex={0}
-          title={file.origPath ? `${file.origPath} → ${file.path}` : file.path}
+          title={
+            file.origPath
+              ? `${file.origPath} → ${file.path}`
+              : folder
+                ? `${file.path}/ — a new folder, every file in it untracked`
+                : file.path
+          }
           aria-pressed={picked}
           data-selected={picked}
           data-motion={arrived ? "enter" : undefined}
@@ -1058,18 +1092,24 @@ function ChangeRow({
             if (!isControl(event.target)) panel?.onRowClick(group, file, event);
           }}
           onDoubleClick={(event) => {
-            if (!isControl(event.target) && !deleted) void workspace().openFile(file.path);
+            if (isControl(event.target) || deleted) return;
+            if (folder) workspace().revealInTree(file.path);
+            else void workspace().openFile(file.path);
           }}
           onKeyDown={(event) => {
             if (event.target !== event.currentTarget) return;
             if (event.key === "Enter" || event.key === " ") {
               event.preventDefault();
               workspace().setSelected(file.path);
-              void workspace().openDiff(file.path, group === "staged");
+              if (!folder) void workspace().openDiff(file.path, group === "staged");
             }
           }}
         >
-          <FileIcon name={name} />
+          {folder ? (
+            <FolderClosed aria-hidden className="size-3.5 shrink-0 text-faint" />
+          ) : (
+            <FileIcon name={name} />
+          )}
           <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
             <span
               className={cn(
@@ -1078,7 +1118,7 @@ function ChangeRow({
                 deleted && "line-through decoration-foreground/25",
               )}
             >
-              {name}
+              {folder ? `${name}/` : name}
             </span>
             {showFolder && parent ? (
               <span className="min-w-0 truncate text-small text-faint">{parent}</span>
@@ -1108,10 +1148,19 @@ function ChangeRow({
   );
 }
 
-function ignoreEntries(path: string): MenuEntry[] {
+function ignoreEntries(path: string, isFolder: boolean): MenuEntry[] {
   const name = fileName(path);
   const dot = name.lastIndexOf(".");
   const folder = parentRel(path);
+  if (isFolder) {
+    return [
+      { kind: "item", label: `${path}/`, onSelect: () => void workspace().ignore(`/${path}/`) },
+      // node_modules, dist, target: usually wanted gone wherever they turn up.
+      ...(folder
+        ? [{ kind: "item" as const, label: `Every ${name}/ folder`, onSelect: () => void workspace().ignore(`${name}/`) }]
+        : [{ kind: "item" as const, label: `${name}/ in any folder`, onSelect: () => void workspace().ignore(`${name}/`) }]),
+    ];
+  }
   return [
     { kind: "item", label: path, onSelect: () => void workspace().ignore(`/${path}`) },
     ...(dot > 0
@@ -1126,22 +1175,24 @@ function ignoreEntries(path: string): MenuEntry[] {
 function fileMenu(group: GroupId, file: GitFile): MenuEntry[] {
   const state = workspace();
   const staged = group === "staged";
-  const entries: MenuEntry[] = [
-    {
-      kind: "item",
-      label: "Open changes",
-      icon: FileDiff,
-      onSelect: () => void state.openDiff(file.path, staged),
-    },
-    {
-      kind: "item",
-      label: "Open file",
-      icon: FileText,
-      disabled: file.status === "deleted",
-      onSelect: () => void state.openFile(file.path),
-    },
-    { kind: "separator" },
-  ];
+  const entries: MenuEntry[] = file.folder
+    ? []
+    : [
+        {
+          kind: "item",
+          label: "Open changes",
+          icon: FileDiff,
+          onSelect: () => void state.openDiff(file.path, staged),
+        },
+        {
+          kind: "item",
+          label: "Open file",
+          icon: FileText,
+          disabled: file.status === "deleted",
+          onSelect: () => void state.openFile(file.path),
+        },
+        { kind: "separator" },
+      ];
   if (file.conflict) {
     entries.push(
       { kind: "item", label: "Take ours", onSelect: () => void state.resolve([file.path], "ours") },
@@ -1156,7 +1207,7 @@ function fileMenu(group: GroupId, file: GitFile): MenuEntry[] {
   if (!file.conflict) {
     entries.push({
       kind: "item",
-      label: "Stash this file",
+      label: file.folder ? "Stash this folder" : "Stash this file",
       icon: Archive,
       onSelect: () =>
         void state.stashPush({
@@ -1167,7 +1218,7 @@ function fileMenu(group: GroupId, file: GitFile): MenuEntry[] {
     });
   }
   if (file.untracked) {
-    entries.push({ kind: "sub", label: "Add to .gitignore", icon: EyeOff, entries: ignoreEntries(file.path) });
+    entries.push({ kind: "sub", label: "Add to .gitignore", icon: EyeOff, entries: ignoreEntries(file.path, file.folder === true) });
   }
   entries.push(
     { kind: "separator" },

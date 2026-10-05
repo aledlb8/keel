@@ -25,6 +25,7 @@ import {
 import { DockNotice } from "@/components/Dock";
 import { LoadingRows } from "@/components/inspector/LoadingRows";
 import { Button } from "@/components/ui/button";
+import { changeCount } from "@/lib/git";
 import type { GitStatus } from "@/lib/workspace";
 import { useWorkspace, type GitView } from "@/state/workspace";
 
@@ -124,7 +125,7 @@ export function GitPanel() {
 
 function GitNav({ git, view }: { git: GitStatus; view: GitView }) {
   const prs = useWorkspace((state) => state.prs);
-  const changes = git.files.length;
+  const changes = changeCount(git);
   const stashes = git.stashes ?? 0;
   const openPrs = prs?.available ? prs.items.length : 0;
   const setView = useWorkspace((state) => state.setGitView);

@@ -36,7 +36,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
-import { relativeTime, remoteWebUrl } from "@/lib/git";
+import { changeCount, relativeTime, remoteWebUrl } from "@/lib/git";
 import { cn } from "@/lib/utils";
 import { ask } from "@/lib/ask";
 import type { GitBranch as Branch, GitStatus } from "@/lib/workspace";
@@ -452,7 +452,7 @@ function SyncButton({
 function RepoMenu({ git, busy }: { git: GitStatus; busy: boolean }) {
   const remotes = useWorkspace((state) => state.remotes);
   const prompt = usePrompt();
-  const changes = git.files.length;
+  const changes = changeCount(git);
   // Undoing a commit is only safe while nobody else can have it.
   const undoable = Boolean(git.head) && !git.detached && (!git.upstream || git.ahead > 0);
 

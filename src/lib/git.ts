@@ -1,6 +1,6 @@
 /** Pure helpers over git status: grouping, labels, path joins. */
 
-import type { GitDiff, GitFile, GitFileStatus } from "./workspace";
+import type { GitDiff, GitFile, GitFileStatus, GitStatus } from "./workspace";
 
 export interface GitGroups {
   conflict: GitFile[];
@@ -28,6 +28,16 @@ export function groupGitFiles(files: GitFile[]): GitGroups {
     if (file.unstaged) unstaged.push(file);
   }
   return { conflict, staged, unstaged, untracked };
+}
+
+/** How many changes there are, counting any the status list left out. */
+export function changeCount(git: GitStatus): number {
+  return git.fileCount ?? git.files.length;
+}
+
+/** The status list was cut short; actions on "everything" must not use it. */
+export function changesTruncated(git: GitStatus): boolean {
+  return changeCount(git) > git.files.length;
 }
 
 export function gitLetter(status: GitFileStatus): string {

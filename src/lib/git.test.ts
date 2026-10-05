@@ -4,6 +4,8 @@ import { describe, it } from "node:test";
 import {
   aheadBehind,
   buildChangeTree,
+  changeCount,
+  changesTruncated,
   conventionalType,
   diffStats,
   fileName,
@@ -20,7 +22,7 @@ import {
   splitHunkHeader,
   subjectLength,
 } from "./git.ts";
-import type { GitFile } from "./workspace.ts";
+import type { GitFile, GitStatus } from "./workspace.ts";
 
 function file(over: Partial<GitFile> & { path: string }): GitFile {
   return {
@@ -33,6 +35,32 @@ function file(over: Partial<GitFile> & { path: string }): GitFile {
     ...over,
   };
 }
+
+describe("changeCount", () => {
+  const status = (files: GitFile[], fileCount?: number): GitStatus => ({
+    git: true,
+    repo: true,
+    branch: "main",
+    detached: false,
+    upstream: null,
+    ahead: 0,
+    behind: 0,
+    files,
+    fileCount,
+  });
+
+  it("counts the changes left out of a cut-short list", () => {
+    const shown = [file({ path: "a.ts" }), file({ path: "b.ts" })];
+    assert.equal(changeCount(status(shown, 5)), 5);
+    assert.equal(changesTruncated(status(shown, 5)), true);
+    assert.equal(changesTruncated(status(shown, 2)), false);
+  });
+
+  it("falls back to the list when git gave no count", () => {
+    assert.equal(changeCount(status([file({ path: "a.ts" })])), 1);
+    assert.equal(changesTruncated(status([file({ path: "a.ts" })])), false);
+  });
+});
 
 describe("groupGitFiles", () => {
   it("splits staged, unstaged, untracked and conflict", () => {

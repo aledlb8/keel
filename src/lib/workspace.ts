@@ -181,6 +181,8 @@ export interface GitFile {
   unstaged: boolean;
   untracked: boolean;
   conflict: boolean;
+  /** A whole untracked folder, listed once instead of file by file. */
+  folder?: boolean | undefined;
   /** The working tree against the index, or the whole file when untracked. */
   stat?: LineStat | null | undefined;
   /** The index against HEAD. */
@@ -199,6 +201,8 @@ export interface GitStatus {
   ahead: number;
   behind: number;
   files: GitFile[];
+  /** Every change git reported; more than `files` when the list was cut short. */
+  fileCount?: number | undefined;
   /** HEAD's short hash; null before the first commit. */
   head?: string | null | undefined;
   operation?: GitOperation | null | undefined;
@@ -361,12 +365,13 @@ export function gitBase(root: string, path: string): Promise<string | null> {
   return invoke("git_base", { root, path });
 }
 
-export function gitStage(root: string, paths: string[]): Promise<void> {
-  return invoke("git_stage", { root, paths });
+/** `all` takes in every change, including those the status list left out. */
+export function gitStage(root: string, paths: string[], all = false): Promise<void> {
+  return invoke("git_stage", { root, paths, all });
 }
 
-export function gitUnstage(root: string, paths: string[]): Promise<void> {
-  return invoke("git_unstage", { root, paths });
+export function gitUnstage(root: string, paths: string[], all = false): Promise<void> {
+  return invoke("git_unstage", { root, paths, all });
 }
 
 export function gitDiscard(root: string, paths: string[]): Promise<void> {

@@ -20,6 +20,7 @@ import {
 import { FileTree } from "@/components/inspector/FileTree";
 import { GitPanel } from "@/components/inspector/GitPanel";
 import { SearchPanel } from "@/components/inspector/SearchPanel";
+import { changeCount as countChanges } from "@/lib/git";
 import { useWorkspace, type InspectorTab } from "@/state/workspace";
 
 export interface InspectorProps {
@@ -61,7 +62,7 @@ export function Inspector({
     return () => window.clearInterval(timer);
   }, [projectPath, fsWatch]);
 
-  const changeCount = git?.repo ? git.files.length : 0;
+  const changeCount = git?.repo ? countChanges(git) : 0;
 
   /** From the rail: pick the tab, and unfold to show it. */
   const openTab = (next: InspectorTab) => {
