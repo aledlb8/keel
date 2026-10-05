@@ -111,6 +111,23 @@ impl Media {
 
 /// Bots may download files up to this size.
 pub const DOWNLOAD_LIMIT: u64 = 20 * 1024 * 1024;
+/// And send them up to this one.
+const UPLOAD_LIMIT: u64 = 50 * 1024 * 1024;
+/// Over this, a picture has to go as a document.
+const PHOTO_LIMIT: u64 = 10 * 1024 * 1024;
+const CAPTION_LIMIT: usize = 1024;
+
+/// A picture Telegram can show as a photo.
+fn is_photo(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            matches!(
+                ext.to_ascii_lowercase().as_str(),
+                "jpg" | "jpeg" | "png" | "webp"
+            )
+        })
+}
 
 /// Digits, a colon, then the secret. Anything else could escape the URL path.
 pub fn valid_token(token: &str) -> bool {
@@ -166,6 +183,10 @@ impl Bot {
             .json(&body)
             .send()
             .map_err(|err| ApiError::local(describe_transport(err)))?;
+        Self::result(response)
+    }
+
+    fn result(response: reqwest::blocking::Response) -> Result<Value, ApiError> {
         let status = response.status().as_u16();
         let value: Value = response
             .json()
@@ -253,6 +274,61 @@ impl Bot {
             }
         }
         Ok(())
+    }
+
+    /// Upload a file from this PC. Pictures go as photos, shown inline, unless
+    /// they are over Telegram's photo limit or Telegram turns them down as
+    /// one (odd dimensions); then, like everything else, as a document.
+    pub fn send_file(
+        &self,
+        chat_id: i64,
+        path: &std::path::Path,
+        caption: Option<&str>,
+    ) -> Result<(), ApiError> {
+        let size = std::fs::metadata(path)
+            .map_err(|err| ApiError::local(err.to_string()))?
+            .len();
+        if size > UPLOAD_LIMIT {
+            return Err(ApiError::local(
+                "The file is over Telegram's 50 MB limit for bots.",
+            ));
+        }
+        if is_photo(path) && size <= PHOTO_LIMIT {
+            match self.upload(chat_id, "sendPhoto", "photo", path, caption) {
+                Err(err) if err.code == Some(400) => {}
+                other => return other,
+            }
+        }
+        self.upload(chat_id, "sendDocument", "document", path, caption)
+    }
+
+    fn upload(
+        &self,
+        chat_id: i64,
+        method: &str,
+        field: &str,
+        path: &std::path::Path,
+        caption: Option<&str>,
+    ) -> Result<(), ApiError> {
+        let part = reqwest::blocking::multipart::Part::file(path)
+            .map_err(|err| ApiError::local(err.to_string()))?;
+        let mut form = reqwest::blocking::multipart::Form::new()
+            .text("chat_id", chat_id.to_string())
+            .part(field.to_string(), part);
+        if let Some(caption) = caption.map(str::trim).filter(|text| !text.is_empty()) {
+            form = form.text(
+                "caption",
+                caption.chars().take(CAPTION_LIMIT).collect::<String>(),
+            );
+        }
+        let response = self
+            .client
+            .post(format!("{}/{method}", self.base))
+            .multipart(form)
+            .timeout(Duration::from_secs(300))
+            .send()
+            .map_err(|err| ApiError::local(describe_transport(err)))?;
+        Self::result(response).map(|_| ())
     }
 
     /// "typing…" under the bot's name, for about five seconds.
@@ -824,5 +900,68 @@ mod tests {
         assert!(!media.is_image() && !media.is_audio());
 
         assert!(parse_message(9, &with(json!({ "sticker": { "file_id": "s" } }))).is_none());
+    }
+
+    /// A stand-in Bot API that answers one request and hands back what it got.
+    fn stand_in(reply: &'static str) -> (Bot, std::thread::JoinHandle<String>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_millis(500)))
+                .unwrap();
+            let mut got = Vec::new();
+            let mut buffer = [0u8; 8192];
+            while let Ok(read) = stream.read(&mut buffer) {
+                if read == 0 {
+                    break;
+                }
+                got.extend_from_slice(&buffer[..read]);
+            }
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                reply.len()
+            );
+            String::from_utf8_lossy(&got).into_owned()
+        });
+        let bot = Bot {
+            client: Client::new(),
+            base: format!("http://127.0.0.1:{port}/botTEST"),
+            files: String::new(),
+        };
+        (bot, server)
+    }
+
+    #[test]
+    fn pictures_upload_as_photos_and_the_rest_as_documents() {
+        let dir = std::env::temp_dir().join(format!("keel-tg-upload-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let shot = dir.join("shot.png");
+        std::fs::write(&shot, b"not really a png").unwrap();
+
+        let (bot, server) = stand_in(r#"{"ok":true,"result":{"message_id":5}}"#);
+        bot.send_file(42, &shot, Some("the bug")).unwrap();
+        let request = server.join().unwrap();
+        assert!(request.starts_with("POST /botTEST/sendPhoto "), "{request}");
+        assert!(request.contains("name=\"chat_id\"\r\n\r\n42"));
+        assert!(request.contains("name=\"caption\"\r\n\r\nthe bug"));
+        assert!(request.contains("name=\"photo\"; filename=\"shot.png\""));
+        assert!(request.contains("not really a png"));
+
+        let log = dir.join("build.log");
+        std::fs::write(&log, b"ok").unwrap();
+        let (bot, server) = stand_in(r#"{"ok":true,"result":{"message_id":6}}"#);
+        bot.send_file(42, &log, None).unwrap();
+        let request = server.join().unwrap();
+        assert!(
+            request.starts_with("POST /botTEST/sendDocument "),
+            "{request}"
+        );
+        assert!(request.contains("name=\"document\"; filename=\"build.log\""));
+        assert!(!request.contains("name=\"caption\""));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
