@@ -152,8 +152,20 @@ fn workspace_list_blocking(
     let reader = fs::read_dir(&dir).map_err(|err| err.to_string())?;
     for entry in reader.filter_map(Result::ok) {
         let name = entry.file_name().to_string_lossy().into_owned();
-        let path = entry.path();
-        let is_dir = path.is_dir();
+        // The listing already carries each entry's type and size (on Windows,
+        // for free). Only a link has to be followed to see what it points at.
+        let Ok(mut meta) = entry.metadata() else {
+            continue;
+        };
+        let mut dangling = false;
+        if meta.file_type().is_symlink() {
+            // A dangling link still shows, as a file of unknown size.
+            match fs::metadata(entry.path()) {
+                Ok(target) => meta = target,
+                Err(_) => dangling = true,
+            }
+        }
+        let is_dir = meta.is_dir();
         if is_dir && is_skipped_dir(&name, show_hidden) {
             continue;
         }
@@ -165,10 +177,10 @@ fn workspace_list_blocking(
         } else {
             rel_base.join(&name)
         };
-        let size = if is_dir {
+        let size = if is_dir || dangling {
             None
         } else {
-            fs::metadata(&path).ok().map(|meta| meta.len())
+            Some(meta.len())
         };
         entries.push(WorkspaceEntry {
             name,
