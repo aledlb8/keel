@@ -227,6 +227,9 @@ pub(crate) fn wait_output_timeout(
     });
 
     let deadline = Instant::now() + timeout;
+    // Most git calls finish in a few milliseconds; a fixed 50 ms nap added
+    // ~25 ms to each one, and a status refresh makes several. Start short.
+    let mut nap = Duration::from_millis(1);
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -236,7 +239,8 @@ pub(crate) fn wait_output_timeout(
                     let _ = child.wait();
                     return Err(format!("{program} timed out"));
                 }
-                thread::sleep(Duration::from_millis(50));
+                thread::sleep(nap);
+                nap = (nap * 2).min(Duration::from_millis(50));
             }
             Err(err) => return Err(format!("Could not run {program}: {err}")),
         }
@@ -343,7 +347,21 @@ fn output_ok(output: Output, args: &[&str]) -> Result<String, String> {
     }
 }
 
+/// Checked on every status refresh, so a yes is remembered. A no is asked
+/// again, in case git is installed while Keel is open.
 fn git_installed() -> bool {
+    static FOUND: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if FOUND.load(std::sync::atomic::Ordering::Relaxed) {
+        return true;
+    }
+    let found = probe_git();
+    if found {
+        FOUND.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    found
+}
+
+fn probe_git() -> bool {
     let mut cmd = Command::new("git");
     cmd.arg("--version")
         .stdin(Stdio::null())
@@ -812,19 +830,49 @@ const MAX_COUNTED_FILES: usize = 300;
 /// The extras around a status: HEAD, an operation in progress, stashes, the
 /// last fetch, and how many lines each change touches.
 fn enrich_status(root: &Path, status: &mut GitStatus) {
-    status.head = git_ok(root, &["rev-parse", "--verify", "-q", "--short", "HEAD"])
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-    status.has_remote = git_ok(root, &["remote"])
-        .map(|out| !out.trim().is_empty())
-        .unwrap_or(false);
-    if let Some((git_dir, common_dir)) = git_dirs(root) {
+    let tracked = status.files.iter().filter(|file| !file.untracked).count();
+    let diff = tracked <= MAX_NUMSTAT_FILES;
+    // Independent git calls, so they run side by side: a refresh waits for
+    // the slowest one instead of all of them in turn.
+    let (head, has_remote, dirs, unstaged, staged) = thread::scope(|scope| {
+        let head = scope.spawn(|| {
+            git_ok(root, &["rev-parse", "--verify", "-q", "--short", "HEAD"])
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        });
+        let remote = scope.spawn(|| {
+            git_ok(root, &["remote"])
+                .map(|out| !out.trim().is_empty())
+                .unwrap_or(false)
+        });
+        let dirs = scope.spawn(|| git_dirs(root));
+        let unstaged = scope.spawn(|| numstat_map_if(diff, root, false));
+        let staged = numstat_map_if(diff, root, true);
+        (
+            head.join().unwrap_or_default(),
+            remote.join().unwrap_or_default(),
+            dirs.join().unwrap_or_default(),
+            unstaged.join().unwrap_or_default(),
+            staged,
+        )
+    });
+    status.head = head;
+    status.has_remote = has_remote;
+    if let Some((git_dir, common_dir)) = dirs {
         status.operation = repo_operation(&git_dir);
         status.stashes = count_stashes(&common_dir);
         status.last_fetch = modified_secs(&common_dir.join("FETCH_HEAD"));
     }
-    apply_numstat(root, status);
+    apply_numstat(root, status, &unstaged, &staged);
+}
+
+fn numstat_map_if(diff: bool, root: &Path, cached: bool) -> HashMap<String, LineStat> {
+    if diff {
+        numstat_map(root, cached)
+    } else {
+        HashMap::new()
+    }
 }
 
 /// This worktree's git folder and the one its worktrees share.
@@ -948,13 +996,12 @@ fn count_lines(path: &Path) -> Option<LineStat> {
     })
 }
 
-fn apply_numstat(root: &Path, status: &mut GitStatus) {
-    let tracked = status.files.iter().filter(|file| !file.untracked).count();
-    let (unstaged, staged) = if tracked <= MAX_NUMSTAT_FILES {
-        (numstat_map(root, false), numstat_map(root, true))
-    } else {
-        Default::default()
-    };
+fn apply_numstat(
+    root: &Path,
+    status: &mut GitStatus,
+    unstaged: &HashMap<String, LineStat>,
+    staged: &HashMap<String, LineStat>,
+) {
     let mut counted = 0;
     for file in &mut status.files {
         if file.untracked {
