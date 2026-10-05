@@ -2,7 +2,7 @@
 //!
 //! Subcommands are fixed. The frontend never sends a freeform git string.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
@@ -42,6 +42,8 @@ pub struct GitFile {
     pub unstaged: bool,
     pub untracked: bool,
     pub conflict: bool,
+    /// A whole untracked folder, listed once instead of file by file.
+    pub folder: bool,
     /// The working tree against the index (or the whole file, when untracked).
     pub stat: Option<LineStat>,
     /// The index against HEAD.
@@ -59,6 +61,8 @@ pub struct GitStatus {
     pub ahead: u32,
     pub behind: u32,
     pub files: Vec<GitFile>,
+    /// Every change git reported. More than `files` when the list was cut short.
+    pub file_count: u32,
     /// Short name of HEAD's commit; `None` before the first commit.
     pub head: Option<String>,
     /// A merge, rebase, cherry-pick or revert waiting to be finished.
@@ -251,17 +255,38 @@ fn run_in_timeout(
     args: &[&str],
     timeout: Duration,
 ) -> Result<Output, String> {
+    run_with_input(root, program, args, None, timeout)
+}
+
+fn run_with_input(
+    root: &Path,
+    program: &str,
+    args: &[&str],
+    input: Option<Vec<u8>>,
+    timeout: Duration,
+) -> Result<Output, String> {
     let mut cmd = Command::new(program);
     cmd.args(args)
         .current_dir(root)
-        .stdin(Stdio::null())
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     apply_git_env(&mut cmd);
     hide_window(&mut cmd);
-    let child = cmd
+    let mut child = cmd
         .spawn()
         .map_err(|err| format!("Could not run {program}: {err}"))?;
+    if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
+        // Written on its own thread so a full pipe can't stall the wait below.
+        thread::spawn(move || {
+            use std::io::Write;
+            let _ = stdin.write_all(&input);
+        });
+    }
     wait_output_timeout(child, timeout, program)
 }
 
@@ -286,7 +311,24 @@ pub(crate) fn git_ok_timeout(
     args: &[&str],
     timeout: Duration,
 ) -> Result<String, String> {
-    let output = git_timeout(root, args, timeout)?;
+    output_ok(git_timeout(root, args, timeout)?, args)
+}
+
+/// Runs `git <args> --pathspec-from-file=- --pathspec-file-nul`, feeding the
+/// paths on stdin. Thousands of paths overflow Windows' 32K command line.
+pub(crate) fn git_ok_paths(root: &Path, args: &[&str], paths: &[String]) -> Result<String, String> {
+    let mut full = args.to_vec();
+    full.extend(["--pathspec-from-file=-", "--pathspec-file-nul"]);
+    let mut input = Vec::new();
+    for path in paths {
+        input.extend_from_slice(path.as_bytes());
+        input.push(0);
+    }
+    let output = run_with_input(root, "git", &full, Some(input), GIT_TIMEOUT)?;
+    output_ok(output, args)
+}
+
+fn output_ok(output: Output, args: &[&str]) -> Result<String, String> {
     if output.status.success() {
         return Ok(redact_git_output(&String::from_utf8_lossy(&output.stdout)));
     }
@@ -331,6 +373,7 @@ fn empty_status(git: bool, repo: bool) -> GitStatus {
         ahead: 0,
         behind: 0,
         files: Vec::new(),
+        file_count: 0,
         head: None,
         operation: None,
         stashes: 0,
@@ -453,14 +496,18 @@ pub fn parse_status(raw: &[u8]) -> GitStatus {
             continue;
         }
         if let Some(path) = line.strip_prefix("? ") {
+            let path = path.replace('\\', "/");
+            // `--untracked-files=normal` names a wholly untracked folder `dir/`.
+            let folder = path.ends_with('/');
             status.files.push(GitFile {
-                path: path.replace('\\', "/"),
+                path: path.trim_end_matches('/').to_string(),
                 orig_path: None,
                 status: "untracked".into(),
                 staged: false,
                 unstaged: true,
                 untracked: true,
                 conflict: false,
+                folder,
                 stat: None,
                 staged_stat: None,
             });
@@ -478,6 +525,7 @@ pub fn parse_status(raw: &[u8]) -> GitStatus {
                 unstaged: true,
                 untracked: false,
                 conflict: true,
+                folder: false,
                 stat: None,
                 staged_stat: None,
             });
@@ -514,11 +562,13 @@ pub fn parse_status(raw: &[u8]) -> GitStatus {
                 unstaged,
                 untracked: false,
                 conflict: x == 'U' || y == 'U',
+                folder: false,
                 stat: None,
                 staged_stat: None,
             });
         }
     }
+    status.file_count = u32::try_from(status.files.len()).unwrap_or(u32::MAX);
     status
 }
 
@@ -665,7 +715,11 @@ pub(crate) fn parse_diff(raw: &str, path: &str) -> GitDiff {
 }
 
 pub(crate) fn rel_arg(root: &Path, rel: &str) -> Result<String, String> {
-    let _root = canonicalize_dir(root)?;
+    canonicalize_dir(root)?;
+    rel_path(rel)
+}
+
+fn rel_path(rel: &str) -> Result<String, String> {
     let path = normalize_rel(rel)?;
     if path.as_os_str().is_empty() {
         return Err("Pick a file inside the project.".into());
@@ -674,7 +728,8 @@ pub(crate) fn rel_arg(root: &Path, rel: &str) -> Result<String, String> {
 }
 
 pub(crate) fn rels(root: &Path, paths: &[String]) -> Result<Vec<String>, String> {
-    paths.iter().map(|p| rel_arg(root, p)).collect()
+    canonicalize_dir(root)?;
+    paths.iter().map(|p| rel_path(p)).collect()
 }
 
 pub fn ls_files(root: &Path) -> Result<Vec<String>, String> {
@@ -699,21 +754,43 @@ fn git_status_blocking(root: String) -> Result<GitStatus, String> {
     let mut status = git_status_core(&root)?;
     if status.repo {
         enrich_status(&root, &mut status);
+        cap_files(&mut status);
     }
     Ok(status)
 }
 
-/// Branch and files only — what a discard needs, without the extras.
+/// Past this many untracked files — a `node_modules` nobody ignored — each
+/// wholly untracked folder is listed once instead of file by file.
+const MAX_UNTRACKED_FILES: usize = 1000;
+/// The most changes sent to the panel; the rest are only counted.
+const MAX_STATUS_FILES: usize = 5000;
+/// Line counts diff every tracked change, so past this many they are skipped.
+const MAX_NUMSTAT_FILES: usize = 2000;
+
+/// Branch and files only, without the extras.
 fn git_status_core(root: &Path) -> Result<GitStatus, String> {
+    let status = run_status(root, "all")?;
+    let untracked = status.files.iter().filter(|file| file.untracked).count();
+    if untracked <= MAX_UNTRACKED_FILES {
+        return Ok(status);
+    }
+    run_status(root, "normal")
+}
+
+fn cap_files(status: &mut GitStatus) {
+    if status.files.len() <= MAX_STATUS_FILES {
+        return;
+    }
+    // Conflicts block a commit, so they are never the ones left out.
+    status.files.sort_by_key(|file| !file.conflict);
+    status.files.truncate(MAX_STATUS_FILES);
+}
+
+fn run_status(root: &Path, untracked: &str) -> Result<GitStatus, String> {
+    let untracked = format!("--untracked-files={untracked}");
     let output = git(
         root,
-        &[
-            "status",
-            "--porcelain=v2",
-            "-z",
-            "--branch",
-            "--untracked-files=all",
-        ],
+        &["status", "--porcelain=v2", "-z", "--branch", &untracked],
     )?;
     if !output.status.success() {
         if not_a_git_repository(&output) {
@@ -872,8 +949,12 @@ fn count_lines(path: &Path) -> Option<LineStat> {
 }
 
 fn apply_numstat(root: &Path, status: &mut GitStatus) {
-    let unstaged = numstat_map(root, false);
-    let staged = numstat_map(root, true);
+    let tracked = status.files.iter().filter(|file| !file.untracked).count();
+    let (unstaged, staged) = if tracked <= MAX_NUMSTAT_FILES {
+        (numstat_map(root, false), numstat_map(root, true))
+    } else {
+        Default::default()
+    };
     let mut counted = 0;
     for file in &mut status.files {
         if file.untracked {
@@ -1039,38 +1120,45 @@ fn untracked_file_diff(rel: String, path: &Path) -> GitDiff {
     }
 }
 
+/// `all` stages every change in the work tree, listed or not — the panel only
+/// sees the first [`MAX_STATUS_FILES`].
 #[tauri::command]
-pub async fn git_stage(root: String, paths: Vec<String>) -> Result<(), String> {
-    crate::blocking::run(move || git_stage_blocking(root, paths)).await
+pub async fn git_stage(root: String, paths: Vec<String>, all: Option<bool>) -> Result<(), String> {
+    crate::blocking::run(move || git_stage_blocking(root, paths, all.unwrap_or(false))).await
 }
 
-fn git_stage_blocking(root: String, paths: Vec<String>) -> Result<(), String> {
+fn git_stage_blocking(root: String, paths: Vec<String>, all: bool) -> Result<(), String> {
     let root = crate::roots::require(&root)?;
+    if all {
+        return git_ok(&root, &["add", "--all"]).map(|_| ());
+    }
     let rels = rels(&root, &paths)?;
     if rels.is_empty() {
         return Ok(());
     }
-    let mut args = vec!["add", "--"];
-    let owned: Vec<&str> = rels.iter().map(String::as_str).collect();
-    args.extend(owned);
-    git_ok(&root, &args).map(|_| ())
+    git_ok_paths(&root, &["add"], &rels).map(|_| ())
 }
 
 #[tauri::command]
-pub async fn git_unstage(root: String, paths: Vec<String>) -> Result<(), String> {
-    crate::blocking::run(move || git_unstage_blocking(root, paths)).await
+pub async fn git_unstage(
+    root: String,
+    paths: Vec<String>,
+    all: Option<bool>,
+) -> Result<(), String> {
+    crate::blocking::run(move || git_unstage_blocking(root, paths, all.unwrap_or(false))).await
 }
 
-fn git_unstage_blocking(root: String, paths: Vec<String>) -> Result<(), String> {
+fn git_unstage_blocking(root: String, paths: Vec<String>, all: bool) -> Result<(), String> {
     let root = crate::roots::require(&root)?;
+    if all {
+        // Unlike `restore --staged`, this also works before the first commit.
+        return git_ok(&root, &["reset", "-q"]).map(|_| ());
+    }
     let rels = rels(&root, &paths)?;
     if rels.is_empty() {
         return Ok(());
     }
-    let mut args = vec!["restore", "--staged", "--"];
-    let owned: Vec<&str> = rels.iter().map(String::as_str).collect();
-    args.extend(owned);
-    git_ok(&root, &args).map(|_| ())
+    git_ok_paths(&root, &["restore", "--staged"], &rels).map(|_| ())
 }
 
 #[tauri::command]
@@ -1078,25 +1166,42 @@ pub async fn git_discard(root: String, paths: Vec<String>) -> Result<(), String>
     crate::blocking::run(move || git_discard_blocking(root, paths)).await
 }
 
+/// Untracked paths as `--untracked-files=normal` lists them: files, and
+/// folders (with a trailing `/`) that hold nothing tracked.
+fn untracked_entries(root: &Path) -> Result<(HashSet<String>, Vec<String>), String> {
+    let status = run_status(root, "normal")?;
+    let mut files = HashSet::new();
+    let mut folders = Vec::new();
+    for file in status.files.into_iter().filter(|file| file.untracked) {
+        if file.folder {
+            folders.push(format!("{}/", file.path));
+        }
+        files.insert(file.path);
+    }
+    Ok((files, folders))
+}
+
 fn git_discard_blocking(root: String, paths: Vec<String>) -> Result<(), String> {
     let root = crate::roots::require(&root)?;
-    let status = git_status_core(&root)?;
+    let (untracked_files, untracked_folders) = untracked_entries(&root)?;
     let mut tracked = Vec::new();
     let mut untracked = Vec::new();
-    for path in paths {
-        let rel = rel_arg(&root, &path)?;
-        let file = status.files.iter().find(|f| f.path == rel);
-        if file.map(|f| f.untracked).unwrap_or(false) {
+    for rel in rels(&root, &paths)? {
+        let inside_untracked = untracked_folders
+            .iter()
+            .any(|folder| rel.starts_with(folder.as_str()));
+        if untracked_files.contains(&rel) || inside_untracked {
             untracked.push(rel);
         } else {
             tracked.push(rel);
         }
     }
     if !tracked.is_empty() {
-        let mut args = vec!["restore", "--source=HEAD", "--staged", "--worktree", "--"];
-        let owned: Vec<&str> = tracked.iter().map(String::as_str).collect();
-        args.extend(owned);
-        git_ok(&root, &args)?;
+        git_ok_paths(
+            &root,
+            &["restore", "--source=HEAD", "--staged", "--worktree"],
+            &tracked,
+        )?;
     }
     for rel in untracked {
         delete_untracked(&root, &rel)?;
@@ -2171,5 +2276,129 @@ mod tests {
             lines.iter().filter(|line| line.kind == "add").count(),
             MAX_DIFF_LINES
         );
+    }
+
+    #[test]
+    fn parses_an_untracked_folder() {
+        let status = parse_status(b"? node_modules/\0? notes.md\0");
+        assert_eq!(status.file_count, 2);
+        assert_eq!(status.files[0].path, "node_modules");
+        assert!(status.files[0].folder);
+        assert!(status.files[0].untracked);
+        assert_eq!(status.files[1].path, "notes.md");
+        assert!(!status.files[1].folder);
+    }
+
+    #[test]
+    fn a_long_list_is_cut_short_but_keeps_its_conflicts() {
+        let oid = "e08dc408d526231a88734b3b57ee5d017db882b3";
+        let mut raw = Vec::new();
+        for i in 0..MAX_STATUS_FILES + 10 {
+            raw.extend_from_slice(format!("? file{i}.txt\0").as_bytes());
+        }
+        raw.extend_from_slice(
+            format!("u UU N... 100644 100644 100644 100644 {oid} {oid} {oid} zz.txt\0").as_bytes(),
+        );
+        let mut status = parse_status(&raw);
+        cap_files(&mut status);
+        assert_eq!(status.files.len(), MAX_STATUS_FILES);
+        assert_eq!(status.file_count as usize, MAX_STATUS_FILES + 11);
+        assert!(status.files[0].conflict);
+    }
+
+    fn commit_all(root: &Path) {
+        git(root, &["add", "."]).expect("git add");
+        let out = git(
+            root,
+            &[
+                "-c",
+                "user.name=Keel",
+                "-c",
+                "user.email=keel@example.com",
+                "commit",
+                "--quiet",
+                "-m",
+                "init",
+            ],
+        )
+        .expect("git commit");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    #[test]
+    fn a_flood_of_untracked_files_folds_into_folders() {
+        let scratch = Scratch::new("flood");
+        crate::roots::register(&scratch.0).expect("register");
+        git(&scratch.0, &["init", "--quiet"]).expect("git init");
+        std::fs::create_dir_all(scratch.0.join("src")).unwrap();
+        std::fs::write(scratch.0.join("src/kept.txt"), "kept\n").unwrap();
+        commit_all(&scratch.0);
+
+        std::fs::write(scratch.0.join("src/new.txt"), "new\n").unwrap();
+        let deps = scratch.0.join("node_modules/pkg");
+        std::fs::create_dir_all(&deps).unwrap();
+        for i in 0..=MAX_UNTRACKED_FILES {
+            std::fs::write(deps.join(format!("{i}.js")), "x\n").unwrap();
+        }
+
+        let status = git_status_blocking(scratch.0.to_string_lossy().into_owned()).unwrap();
+        let paths: Vec<_> = status
+            .files
+            .iter()
+            .map(|file| (file.path.as_str(), file.folder))
+            .collect();
+        assert_eq!(paths, vec![("node_modules", true), ("src/new.txt", false)]);
+        assert_eq!(status.file_count, 2);
+    }
+
+    #[test]
+    fn bulk_actions_take_more_paths_than_a_command_line_holds() {
+        let scratch = Scratch::new("bulk");
+        crate::roots::register(&scratch.0).expect("register");
+        let root = scratch.0.to_string_lossy().into_owned();
+        git(&scratch.0, &["init", "--quiet"]).expect("git init");
+        let dir = scratch
+            .0
+            .join("a-rather-long-folder-name-to-fill-the-command-line");
+        std::fs::create_dir_all(&dir).unwrap();
+        // ~1,500 paths of ~80 characters: well past Windows' 32K limit.
+        let paths: Vec<String> = (0..1500)
+            .map(|i| {
+                format!("a-rather-long-folder-name-to-fill-the-command-line/file-number-{i:05}.txt")
+            })
+            .collect();
+        for path in &paths {
+            std::fs::write(scratch.0.join(path), "one\n").unwrap();
+        }
+        commit_all(&scratch.0);
+        for path in &paths {
+            std::fs::write(scratch.0.join(path), "two\n").unwrap();
+        }
+        let staged = |root: &str| {
+            git_status_blocking(root.to_string())
+                .unwrap()
+                .files
+                .iter()
+                .filter(|file| file.staged)
+                .count()
+        };
+
+        git_stage_blocking(root.clone(), paths.clone(), false).expect("stage");
+        assert_eq!(staged(&root), paths.len());
+        git_unstage_blocking(root.clone(), paths.clone(), false).expect("unstage");
+        assert_eq!(staged(&root), 0);
+        git_stage_blocking(root.clone(), Vec::new(), true).expect("stage all");
+        assert_eq!(staged(&root), paths.len());
+        git_unstage_blocking(root.clone(), Vec::new(), true).expect("unstage all");
+        assert_eq!(staged(&root), 0);
+
+        git_discard_blocking(root.clone(), paths.clone()).expect("discard");
+        assert!(git_status_blocking(root).unwrap().files.is_empty());
+        let restored = std::fs::read_to_string(scratch.0.join(&paths[0])).unwrap();
+        assert_eq!(restored.trim_end(), "one");
     }
 }
