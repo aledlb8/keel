@@ -87,15 +87,31 @@ not the ones in `~/.claude.json`: it connects them all before the turn starts,
 and one that was slow to fail held every message for about 20 seconds.
 
 Keel's tools reach the agent as an MCP server on `127.0.0.1` with a per-launch
-bearer token. Calls are answered by the window, which owns the workspace:
+bearer token. Most calls are answered by the window, which owns the workspace:
 
-- `tell_user` — message the phone mid-turn. Answered in Rust, not by the
-  window.
 - `list_projects`, `read_pane` — see projects, panes, agent status, screens.
 - `start_agent` — open a pane in a project, wait for the agent to settle, type
   the first prompt.
 - `send_to_pane`, `focus_pane`, `open_project`, `close_pane` (only panes the
   agent started).
+- `press_key` — Esc, Ctrl+C, arrows, Enter, Tab, Shift+Tab or Backspace in a
+  pane, up to ten times: interrupt an agent, or pick from a menu.
+- `check_usage` — plan limits per signed-in login, the same reading as the
+  status bar's usage gauges.
+
+The ones that touch the phone or need no window are answered in Rust
+(`LOCAL_TOOLS` in `assistant_mcp.rs`):
+
+- `tell_user` — message the phone mid-turn.
+- `send_file` — upload a file from this PC, up to 50 MB. png, jpg and webp
+  under 10 MB go as photos; the rest, or a picture Telegram refuses as a
+  photo, as documents.
+- `remind_me`, `list_reminders`, `cancel_reminder` — wake the agent after 1 to
+  1,440 minutes, once or up to 48 times. When one fires, the agent gets a
+  `[Keel]` message with its note; a check-in with nothing to say answers
+  `NO_REPLY`, and Keel sends nothing. At most 20 at once, kept in memory only,
+  so they are gone when Keel closes. A PC that slept through several fires gets
+  one.
 
 When a pane the agent started finishes, waits for input or exits, Keel sends
 the agent a `[Keel]` message with the end of its screen, so it can report back
