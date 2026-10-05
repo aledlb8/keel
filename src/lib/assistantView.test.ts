@@ -1,8 +1,16 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { describeWorkspace, findProject, paneChanges, type WorkspaceView } from "./assistantView.ts";
+import {
+  PANE_KEYS,
+  describeUsage,
+  describeWorkspace,
+  findProject,
+  paneChanges,
+  type WorkspaceView,
+} from "./assistantView.ts";
 import type { Agent, Pane, Project } from "./types.ts";
+import type { AgentUsage } from "./usage.ts";
 
 function agent(id: string, name: string, installed = true): Agent {
   return {
@@ -135,5 +143,55 @@ describe("paneChanges", () => {
     const before = { status: { a: "working" as const, b: "working" as const }, exited: {} };
     const after = { status: { a: "idle" as const, b: "idle" as const }, exited: {} };
     assert.deepEqual(paneChanges(before, after, new Set(["a"])), [{ paneId: "a", kind: "done" }]);
+  });
+});
+
+describe("describeUsage", () => {
+  const now = Date.UTC(2026, 9, 5, 12);
+  const usage = (extra: Partial<AgentUsage>): AgentUsage => ({
+    agentId: "claude",
+    accountId: null,
+    short: "CL",
+    name: "Claude Code",
+    accent: "",
+    plan: "Max",
+    windows: [],
+    status: "ok",
+    error: null,
+    updatedAt: now,
+    ...extra,
+  });
+
+  it("gives each login its windows, use and reset", () => {
+    const text = describeUsage(
+      [
+        usage({
+          windows: [
+            { label: "5h", usedPercent: 41.6, windowMinutes: 300, resetsAt: now + 95 * 60_000 },
+            { label: "wk", usedPercent: 12, windowMinutes: 10080, resetsAt: null },
+          ],
+        }),
+        usage({ agentId: "codex", name: "Codex", plan: null, accountId: "work", status: "error", error: "login expired" }),
+      ],
+      [{ id: "work", agentId: "codex", name: "Work" }],
+      now,
+    );
+    assert.equal(
+      text,
+      "Claude Code, Max: 5-hour 42% used, resets in 1h 35m; Weekly 12% used.\n" +
+        "Codex (Work): couldn't read it (login expired).",
+    );
+  });
+
+  it("says so when nothing could be read", () => {
+    assert.equal(describeUsage([], [], now), "Keel couldn't read usage for any signed-in agent.");
+  });
+});
+
+describe("PANE_KEYS", () => {
+  it("sends the bytes a terminal would", () => {
+    assert.equal(PANE_KEYS.escape, "\x1b");
+    assert.equal(PANE_KEYS.ctrl_c, "\x03");
+    assert.equal(PANE_KEYS.up, "\x1b[A");
   });
 });

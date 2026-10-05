@@ -16,6 +16,7 @@
 import { create } from "zustand";
 
 import {
+  terminalPress,
   terminalSettled,
   terminalText,
   terminalType,
@@ -30,7 +31,15 @@ import {
   type AssistantSnapshot,
   type AssistantToolCall,
 } from "@/lib/assistant";
-import { describeWorkspace, findProject, paneChanges } from "@/lib/assistantView";
+import {
+  PANE_KEYS,
+  describeUsage,
+  describeWorkspace,
+  findProject,
+  paneChanges,
+} from "@/lib/assistantView";
+import { invoke } from "@/lib/invoke";
+import { buildUsageQueries, type UsageSnapshot } from "@/lib/usage";
 import { listPanes } from "@/lib/tree";
 import type { Pane, Project } from "@/lib/types";
 import { useKeel } from "@/state/store";
@@ -180,6 +189,24 @@ async function runTool(call: AssistantToolCall): Promise<string> {
       const typed = await terminalType(paneId, text(args, "text"), submit);
       if (!typed) throw new Error(`${paneId} has no terminal yet.`);
       return submit ? `Typed into ${paneId} and pressed Enter.` : `Typed into ${paneId}.`;
+    }
+
+    case "press_key": {
+      const paneId = text(args, "pane_id");
+      terminalPane(paneId);
+      const key = text(args, "key");
+      const bytes = PANE_KEYS[key];
+      if (!bytes) throw new Error(`Unknown key "${key}". Keys: ${Object.keys(PANE_KEYS).join(", ")}.`);
+      const times = Math.min(10, Math.max(1, Number(args.times) || 1));
+      if (!terminalPress(paneId, bytes.repeat(times))) throw new Error(`${paneId} has no terminal yet.`);
+      return `Pressed ${key}${times > 1 ? ` ${times} times` : ""} in ${paneId}. Check the result with read_pane.`;
+    }
+
+    case "check_usage": {
+      const queries = buildUsageQueries(keel.agents, keel.accounts);
+      if (queries.length === 0) return "No signed-in agent Keel can read limits for.";
+      const snapshot = await invoke<UsageSnapshot | null>("usage_fetch", { agents: queries });
+      return describeUsage(snapshot?.agents ?? [], keel.accounts);
     }
 
     case "open_project": {

@@ -7,8 +7,8 @@
 //!
 //! The tools describe and change the workspace, and the workspace is owned by
 //! the webview's store. So a call is handed to the window as an event, and the
-//! HTTP request waits for the window's answer. `tell_user` is the exception:
-//! it goes straight to the phone through the notifier the assistant sets.
+//! HTTP request waits for the window's answer. The exceptions are the tools in
+//! `LOCAL_TOOLS` (the phone, reminders), which the assistant answers in Rust.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -29,9 +29,18 @@ const MAX_CONNECTIONS: usize = 16;
 const CALL_TIMEOUT: Duration = Duration::from_secs(90);
 
 type Pending = Arc<Mutex<HashMap<String, Sender<Result<String, String>>>>>;
-/// Sends the user a message on the phone, for `tell_user`.
-pub type Notifier = Box<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
-type Notify = Arc<OnceLock<Notifier>>;
+/// Answers the tools in `LOCAL_TOOLS`.
+pub type Local = Box<dyn Fn(&ToolCall) -> Result<String, String> + Send + Sync>;
+type LocalSlot = Arc<OnceLock<Local>>;
+
+/// Tools the assistant answers itself instead of the window.
+pub const LOCAL_TOOLS: &[&str] = &[
+    "tell_user",
+    "send_file",
+    "remind_me",
+    "list_reminders",
+    "cancel_reminder",
+];
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -48,7 +57,7 @@ pub struct McpServer {
     /// How many times an agent has asked for the tools, so a turn that never
     /// did can be told apart from one that had them.
     listed: Arc<AtomicUsize>,
-    notify: Notify,
+    local: LocalSlot,
 }
 
 impl McpServer {
@@ -59,12 +68,12 @@ impl McpServer {
         let pending: Pending = Arc::default();
         let open = Arc::new(AtomicUsize::new(0));
         let listed = Arc::new(AtomicUsize::new(0));
-        let notify: Notify = Arc::default();
+        let local: LocalSlot = Arc::default();
 
         let worker_token = token.clone();
         let worker_pending = pending.clone();
         let worker_listed = listed.clone();
-        let worker_notify = notify.clone();
+        let worker_local = local.clone();
         std::thread::Builder::new()
             .name("keel-assistant-mcp".into())
             .spawn(move || {
@@ -80,11 +89,11 @@ impl McpServer {
                     let token = worker_token.clone();
                     let pending = worker_pending.clone();
                     let listed = worker_listed.clone();
-                    let notify = worker_notify.clone();
+                    let local = worker_local.clone();
                     let _ = std::thread::Builder::new()
                         .name("keel-assistant-mcp-call".into())
                         .spawn(move || {
-                            serve(stream, &app, &token, &pending, &listed, &notify);
+                            serve(stream, &app, &token, &pending, &listed, &local);
                             open.fetch_sub(1, Ordering::SeqCst);
                         });
                 }
@@ -96,13 +105,13 @@ impl McpServer {
             token,
             pending,
             listed,
-            notify,
+            local,
         })
     }
 
-    /// Where `tell_user` messages go. Set once.
-    pub fn set_notifier(&self, notifier: Notifier) {
-        let _ = self.notify.set(notifier);
+    /// Who answers `LOCAL_TOOLS`. Set once.
+    pub fn set_local(&self, local: Local) {
+        let _ = self.local.set(local);
     }
 
     pub fn url(&self) -> String {
@@ -116,7 +125,7 @@ impl McpServer {
 
     /// Run a tool for Keel itself, not for the agent.
     pub fn ask(&self, app: &AppHandle, call: ToolCall) -> Result<String, String> {
-        forward(app, &self.pending, &self.notify, call)
+        forward(app, &self.pending, &self.local, call)
     }
 
     /// The window's answer to a call it was handed.
@@ -218,7 +227,7 @@ fn serve(
     token: &str,
     pending: &Pending,
     listed: &AtomicUsize,
-    notify: &Notify,
+    local: &LocalSlot,
 ) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
@@ -257,7 +266,7 @@ fn serve(
     if message.get("method").and_then(Value::as_str) == Some("tools/list") {
         listed.fetch_add(1, Ordering::SeqCst);
     }
-    match handle(message, |call| forward(app, pending, notify, call)) {
+    match handle(message, |call| forward(app, pending, local, call)) {
         Some(reply) => respond(&mut stream, "200 OK", Some(&reply)),
         None => respond(&mut stream, "202 Accepted", None),
     }
@@ -266,20 +275,12 @@ fn serve(
 fn forward(
     app: &AppHandle,
     pending: &Pending,
-    notify: &Notify,
+    local: &LocalSlot,
     call: ToolCall,
 ) -> Result<String, String> {
-    if call.name == "tell_user" {
-        let text = call
-            .arguments
-            .get("text")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|text| !text.is_empty())
-            .ok_or("Give the message as `text`.")?;
-        let notifier = notify.get().ok_or("Telegram isn't connected.")?;
-        notifier(text)?;
-        return Ok("Sent. Carry on; your final reply still goes to the user.".into());
+    if LOCAL_TOOLS.contains(&call.name.as_str()) {
+        let local = local.get().ok_or("Telegram isn't connected.")?;
+        return local(&call);
     }
     if call.name == "open_project" {
         // The folder allowlist is Rust's: register it here, then let the
@@ -390,6 +391,43 @@ fn tools() -> Vec<Value> {
             &["text"],
         ),
         tool(
+            "send_file",
+            "Send the user a file from this computer on Telegram: a screenshot, a log, a build, anything up to 50 MB. Pictures (png, jpg, webp) show as photos; everything else arrives as a file.",
+            json!({
+                "path": { "type": "string", "description": "Absolute path, or relative to your folder." },
+                "caption": { "type": "string", "description": "Optional short line shown under it." },
+            }),
+            &["path"],
+        ),
+        tool(
+            "remind_me",
+            "Wake yourself up later: after `minutes`, you get a [Keel] message with the note, and can do what it says. With `times` above 1 it repeats every `minutes`, for check-ins like 'look at the Codex pane every 10 minutes'. Reminders are lost if Keel closes.",
+            json!({
+                "minutes": { "type": "integer", "minimum": 1, "maximum": 1440 },
+                "note": { "type": "string", "description": "What to do or tell the user when it fires, in enough detail to act on cold." },
+                "times": { "type": "integer", "minimum": 1, "maximum": 48, "description": "How many times it fires. Default 1." },
+            }),
+            &["minutes", "note"],
+        ),
+        tool(
+            "list_reminders",
+            "Reminders and check-ins still waiting to fire, with their ids.",
+            json!({}),
+            &[],
+        ),
+        tool(
+            "cancel_reminder",
+            "Cancel a reminder by id, or all of them with \"all\".",
+            json!({ "id": { "type": "string", "description": "Id from list_reminders, or \"all\"." } }),
+            &["id"],
+        ),
+        tool(
+            "check_usage",
+            "How much of each signed-in agent's plan limits is used (5-hour, weekly…) and when each resets.",
+            json!({}),
+            &[],
+        ),
+        tool(
             "list_projects",
             "Everything open in Keel: workspaces, projects (name, folder), and every terminal pane in them with its agent, status (working, waiting for input, done, idle) and folder. Call this first to find project and pane ids.",
             json!({}),
@@ -424,6 +462,16 @@ fn tools() -> Vec<Value> {
                 "submit": { "type": "boolean", "description": "Press Enter after the text. Default true." },
             }),
             &["pane_id", "text"],
+        ),
+        tool(
+            "press_key",
+            "Press a key in a terminal pane: escape or ctrl_c to interrupt an agent or a command, arrows and enter to pick from a menu, tab, shift_tab, backspace.",
+            json!({
+                "pane_id": pane,
+                "key": { "type": "string", "enum": ["escape", "ctrl_c", "enter", "tab", "shift_tab", "up", "down", "left", "right", "backspace"] },
+                "times": { "type": "integer", "minimum": 1, "maximum": 10, "description": "Press it this many times. Default 1." },
+            }),
+            &["pane_id", "key"],
         ),
         tool(
             "open_project",
@@ -476,7 +524,12 @@ mod tests {
             .collect();
         assert!(names.contains(&"list_projects"));
         assert!(names.contains(&"start_agent"));
-        assert!(names.contains(&"tell_user"));
+        for name in LOCAL_TOOLS
+            .iter()
+            .chain(&["press_key", "check_usage", "send_to_pane"])
+        {
+            assert!(names.contains(name), "{name} isn't listed");
+        }
     }
 
     #[test]

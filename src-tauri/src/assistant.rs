@@ -95,10 +95,14 @@ Call tell_user once per message, never for quick answers, and never for \"[Keel]
 
 Keel's tools (the `keel` MCP server) let you see and drive the app:
 - tell_user: send the user a message right away, without ending your turn.
+- send_file: send the user a file or picture from this computer (a screenshot, a log, an output).
 - list_projects: projects, their folders, and every terminal pane with its agent and status. Start here.
 - read_pane: the end of a terminal's screen.
 - start_agent: open a pane in a project with a coding agent and a first prompt. The user can watch it in Keel.
 - send_to_pane: type into a pane, e.g. answer an agent that is waiting or give it a follow-up.
+- press_key: press escape, ctrl_c, arrows, enter or tab in a pane.
+- remind_me, list_reminders, cancel_reminder: wake yourself up later, once or on repeat.
+- check_usage: how much of each agent's plan limits is used, and when they reset.
 - focus_pane, open_project, close_pane.
 
 How to work:
@@ -111,6 +115,13 @@ such as the project or something they decided earlier in this chat. Don't expand
 requirements or polish, or turn it into a long spec. A one-line request stays one line. \
 Rewrite or elaborate only when the user asks you to.
 - Don't read the code yourself before handing it off; that agent will.
+- To stop an agent in a pane, press_key escape (ctrl_c for a plain command), then read_pane to check it stopped. \
+Don't interrupt panes the user started unless they ask.
+- When they want to see something that isn't short text (a screenshot, a log file, an image), send it with send_file \
+instead of pasting it.
+- \"Remind me in an hour\" or \"keep an eye on Codex\" means remind_me, with a note that says exactly what to do when it fires. \
+When a [Keel] reminder fires, do what its note says. If it's a check-in and nothing is worth telling them, \
+reply with exactly NO_REPLY and nothing is sent. Cancel a check-in once its job is done.
 - Don't push, deploy, publish, or delete things the task didn't call for unless the user asked.
 - After changing something, say what changed in a sentence; the details only if asked.
 
@@ -339,6 +350,22 @@ struct Inner {
     whisper: Mutex<Option<Whisper>>,
     /// The phone has been told the agent ran without Keel's tools.
     warned_tools: AtomicBool,
+    /// Set by the agent with `remind_me`; kept in memory only.
+    reminders: Mutex<Vec<Reminder>>,
+    /// Woken when one is added or cancelled, so the next due time is re-read.
+    reminders_changed: Condvar,
+    reminder_id: AtomicU64,
+}
+
+struct Reminder {
+    id: u64,
+    note: String,
+    every: Duration,
+    due: Instant,
+    set: Instant,
+    /// Times it still fires, this one included.
+    left: u32,
+    times: u32,
 }
 
 pub struct AssistantManager {
@@ -399,19 +426,22 @@ impl AssistantManager {
             delegated: Mutex::new(Vec::new()),
             whisper: Mutex::new(media::find()),
             warned_tools: AtomicBool::new(false),
+            reminders: Mutex::new(Vec::new()),
+            reminders_changed: Condvar::new(),
+            reminder_id: AtomicU64::new(0),
         });
         if let Ok(mcp) = &inner.mcp {
             // Weak: the server lives inside `inner`.
             let weak = Arc::downgrade(&inner);
-            mcp.set_notifier(Box::new(move |text| {
+            mcp.set_local(Box::new(move |call| {
                 let inner = weak.upgrade().ok_or("Keel is closing.")?;
-                let (bot, chat) = inner.bot().ok_or("Telegram isn't connected.")?;
-                bot.send_markdown(chat, text)
-                    .map_err(|err| format!("Couldn't send it: {err}"))?;
-                inner.log("out", text);
-                Ok(())
+                local_tool(&inner, call)
             }));
         }
+        let reminders = inner.clone();
+        let _ = std::thread::Builder::new()
+            .name("keel-assistant-reminders".into())
+            .spawn(move || remind_forever(&reminders));
         let poller = inner.clone();
         let _ = std::thread::Builder::new()
             .name("keel-assistant-poll".into())
@@ -539,6 +569,14 @@ impl Inner {
         if let Ok(_guard) = self.settings.lock() {
             self.settings_changed.notify_all();
         }
+    }
+
+    /// Paired, with a token, and switched on.
+    fn ready(&self) -> bool {
+        self.settings
+            .lock()
+            .map(|s| s.owner.is_some() && s.token.is_some() && s.enabled)
+            .unwrap_or(false)
     }
 
     fn bot(&self) -> Option<(Bot, i64)> {
@@ -1225,6 +1263,10 @@ fn run_turn(inner: &Arc<Inner>, prompt: &str, images: &[PathBuf], retry_fresh: b
 }
 
 fn deliver(inner: &Arc<Inner>, bot: &Bot, chat: i64, reply: String) {
+    if reply.trim() == QUIET_REPLY {
+        inner.log("event", "Nothing to report");
+        return;
+    }
     let reply = if reply.is_empty() {
         "Done.".to_string()
     } else {
@@ -1584,6 +1626,227 @@ fn strip_ansi(text: &str) -> String {
     out
 }
 
+// ---------------------------------------------------------------- local tools
+
+/// A check-in with nothing new answers with this, and the phone hears nothing.
+const QUIET_REPLY: &str = "NO_REPLY";
+const REMINDER_LIMIT: usize = 20;
+
+/// The tools Keel answers itself: the phone, and reminders.
+fn local_tool(inner: &Arc<Inner>, call: &ToolCall) -> Result<String, String> {
+    let arg = |key: &str| {
+        call.arguments
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .unwrap_or("")
+    };
+    let number = |key: &str| call.arguments.get(key).and_then(serde_json::Value::as_u64);
+    match call.name.as_str() {
+        "tell_user" => {
+            let text = arg("text");
+            if text.is_empty() {
+                return Err("Give the message as `text`.".into());
+            }
+            let (bot, chat) = inner.bot().ok_or("Telegram isn't connected.")?;
+            bot.send_markdown(chat, text)
+                .map_err(|err| format!("Couldn't send it: {err}"))?;
+            inner.log("out", text);
+            Ok("Sent. Carry on; your final reply still goes to the user.".into())
+        }
+        "send_file" => {
+            let raw = arg("path");
+            if raw.is_empty() {
+                return Err("Give the file as `path`.".into());
+            }
+            // An absolute path replaces the folder it is joined to.
+            let path = home_dir(&inner.app)?.join(raw);
+            if !path.is_file() {
+                return Err(format!("There's no file at {}.", path.display()));
+            }
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let (bot, chat) = inner.bot().ok_or("Telegram isn't connected.")?;
+            let caption = Some(arg("caption")).filter(|caption| !caption.is_empty());
+            bot.send_file(chat, &path, caption)
+                .map_err(|err| format!("Couldn't send it: {err}"))?;
+            inner.log("out", format!("File: {name}"));
+            Ok(format!("Sent {name}."))
+        }
+        "remind_me" => {
+            let minutes = number("minutes")
+                .filter(|minutes| (1..=1440).contains(minutes))
+                .ok_or("`minutes` has to be 1 to 1440.")?;
+            let note = arg("note");
+            if note.is_empty() {
+                return Err("Say what the reminder is for in `note`.".into());
+            }
+            let times = number("times").unwrap_or(1).clamp(1, 48) as u32;
+            let every = Duration::from_secs(minutes * 60);
+            let id = {
+                let mut reminders = inner.reminders.lock().map_err(|err| err.to_string())?;
+                if reminders.len() >= REMINDER_LIMIT {
+                    return Err(format!(
+                        "There are already {REMINDER_LIMIT} reminders. Cancel some first."
+                    ));
+                }
+                let id = inner.reminder_id.fetch_add(1, Ordering::SeqCst) + 1;
+                let now = Instant::now();
+                reminders.push(Reminder {
+                    id,
+                    note: note.to_string(),
+                    every,
+                    due: now + every,
+                    set: now,
+                    left: times,
+                    times,
+                });
+                id
+            };
+            inner.reminders_changed.notify_all();
+            inner.log(
+                "event",
+                format!("Reminder #{id}: {}, {note}", schedule(minutes, times)),
+            );
+            Ok(format!(
+                "Reminder #{id} set: {}. It doesn't survive Keel closing.",
+                schedule(minutes, times)
+            ))
+        }
+        "list_reminders" => {
+            let reminders = inner.reminders.lock().map_err(|err| err.to_string())?;
+            if reminders.is_empty() {
+                return Ok("No reminders.".into());
+            }
+            let now = Instant::now();
+            Ok(reminders
+                .iter()
+                .map(|reminder| {
+                    format!(
+                        "#{}: next in {}, {} more time{} after that, every {}. {}",
+                        reminder.id,
+                        span(reminder.due.saturating_duration_since(now)),
+                        reminder.left - 1,
+                        if reminder.left == 2 { "" } else { "s" },
+                        span(reminder.every),
+                        reminder.note
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n"))
+        }
+        "cancel_reminder" => {
+            let id = arg("id").trim_start_matches('#');
+            let mut reminders = inner.reminders.lock().map_err(|err| err.to_string())?;
+            let before = reminders.len();
+            if id.eq_ignore_ascii_case("all") {
+                reminders.clear();
+            } else {
+                let id: u64 = id.parse().map_err(|_| "Give an id from list_reminders.")?;
+                reminders.retain(|reminder| reminder.id != id);
+            }
+            let cancelled = before - reminders.len();
+            drop(reminders);
+            inner.reminders_changed.notify_all();
+            if cancelled == 0 {
+                return Err("No reminder has that id.".into());
+            }
+            inner.log("event", format!("Cancelled {cancelled} reminder(s)"));
+            Ok(format!(
+                "Cancelled {cancelled} reminder{}.",
+                if cancelled == 1 { "" } else { "s" }
+            ))
+        }
+        other => Err(format!("Keel doesn't know the tool {other}.")),
+    }
+}
+
+/// "in 30 minutes", or "every 10 minutes, 6 times".
+fn schedule(minutes: u64, times: u32) -> String {
+    let every = span(Duration::from_secs(minutes * 60));
+    if times == 1 {
+        format!("in {every}")
+    } else {
+        format!("every {every}, {times} times")
+    }
+}
+
+fn span(duration: Duration) -> String {
+    let minutes = duration.as_secs().div_ceil(60);
+    match (minutes / 60, minutes % 60) {
+        (0, minutes) => format!("{minutes} min"),
+        (hours, 0) => format!("{hours} h"),
+        (hours, minutes) => format!("{hours} h {minutes} min"),
+    }
+}
+
+/// What the agent is woken with when a reminder fires.
+fn reminder_report(reminder: &Reminder, now: Instant) -> String {
+    let round = reminder.times - reminder.left + 1;
+    let which = if reminder.times > 1 {
+        format!(" (check {round} of {})", reminder.times)
+    } else {
+        String::new()
+    };
+    format!(
+        "[Keel] Reminder #{} you set {} ago{which}: {}\n\n\
+Do what it says. If it's a check-in and there's nothing worth telling the user, \
+reply with exactly {QUIET_REPLY} and nothing is sent.",
+        reminder.id,
+        span(now.saturating_duration_since(reminder.set)),
+        reminder.note
+    )
+}
+
+/// Wait for the next reminder, hand it to the worker, repeat.
+fn remind_forever(inner: &Arc<Inner>) {
+    let Ok(mut reminders) = inner.reminders.lock() else {
+        return;
+    };
+    loop {
+        let now = Instant::now();
+        let mut fired = Vec::new();
+        for reminder in reminders.iter_mut().filter(|reminder| reminder.due <= now) {
+            fired.push(reminder_report(reminder, now));
+            reminder.left -= 1;
+            // From now, not from when it was due: a PC that slept through
+            // several fires gets one, not a burst.
+            reminder.due = now + reminder.every;
+        }
+        reminders.retain(|reminder| reminder.left > 0);
+        if !fired.is_empty() {
+            drop(reminders);
+            if inner.ready() {
+                for report in fired {
+                    inner.log("event", "Reminder fired");
+                    inner.enqueue(Job::text(report));
+                }
+            }
+            reminders = match inner.reminders.lock() {
+                Ok(guard) => guard,
+                Err(_) => return,
+            };
+            continue;
+        }
+        let next = reminders.iter().map(|reminder| reminder.due).min();
+        reminders = match next {
+            Some(due) => match inner
+                .reminders_changed
+                .wait_timeout(reminders, due.saturating_duration_since(now))
+            {
+                Ok((guard, _)) => guard,
+                Err(_) => return,
+            },
+            None => match inner.reminders_changed.wait(reminders) {
+                Ok(guard) => guard,
+                Err(_) => return,
+            },
+        };
+    }
+}
+
 // ---------------------------------------------------------------- panes
 
 #[derive(Debug, Deserialize)]
@@ -1867,12 +2130,7 @@ pub fn assistant_delegated(manager: Assistant<'_>, pane_id: String, delegated: b
 #[tauri::command]
 pub fn assistant_pane_event(manager: Assistant<'_>, event: PaneEvent) {
     let inner = &manager.inner;
-    let ready = inner
-        .settings
-        .lock()
-        .map(|s| s.owner.is_some() && s.token.is_some() && s.enabled)
-        .unwrap_or(false);
-    if !ready {
+    if !inner.ready() {
         return;
     }
     let delegated = inner
@@ -1952,6 +2210,30 @@ mod tests {
         let text = serde_json::to_string(&fresh).unwrap();
         let back: Settings = serde_json::from_str(&text).unwrap();
         assert_eq!(back.agent_id.as_deref(), Some("claude"));
+    }
+
+    #[test]
+    fn reminders_read_naturally() {
+        assert_eq!(schedule(30, 1), "in 30 min");
+        assert_eq!(schedule(90, 4), "every 1 h 30 min, 4 times");
+        assert_eq!(span(Duration::from_secs(120 * 60)), "2 h");
+        assert_eq!(span(Duration::from_secs(61)), "2 min");
+
+        let now = Instant::now();
+        let check = Reminder {
+            id: 3,
+            note: "look at the Codex pane".into(),
+            every: Duration::from_secs(600),
+            due: now,
+            set: now - Duration::from_secs(1200),
+            left: 2,
+            times: 6,
+        };
+        let report = reminder_report(&check, now);
+        assert!(report.starts_with(
+            "[Keel] Reminder #3 you set 20 min ago (check 5 of 6): look at the Codex pane"
+        ));
+        assert!(report.contains(QUIET_REPLY));
     }
 
     #[test]

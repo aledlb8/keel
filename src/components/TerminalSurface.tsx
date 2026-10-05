@@ -197,6 +197,17 @@ export async function terminalType(
 }
 
 /**
+ * Send raw key bytes to a pane, as if pressed: Esc, Ctrl+C, arrows. They go
+ * through `input`, not `paste`, so a TUI sees keys rather than text.
+ */
+export function terminalPress(paneId: string, data: string): boolean {
+  const term = terminals.get(paneId)?.term;
+  if (!term) return false;
+  term.input(data);
+  return true;
+}
+
+/**
  * Resolve once a pane has a terminal and its output has gone quiet: a freshly
  * started agent has drawn its prompt and is waiting. False if it never did.
  */

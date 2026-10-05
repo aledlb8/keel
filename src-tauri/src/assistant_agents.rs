@@ -499,6 +499,12 @@ fn tool_label(name: &str, input: Option<&Value>) -> String {
         "open_project" => Some("opening a project"),
         "focus_pane" => Some("showing a pane"),
         "close_pane" => Some("closing a pane"),
+        "send_file" => Some("sending you a file"),
+        "press_key" => Some("pressing a key in a pane"),
+        "remind_me" => Some("setting a reminder"),
+        "list_reminders" => Some("looking at reminders"),
+        "cancel_reminder" => Some("cancelling a reminder"),
+        "check_usage" => Some("checking usage"),
         _ => None,
     };
     if let Some(label) = keel {

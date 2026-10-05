@@ -8,7 +8,8 @@
  */
 
 import { listPanes } from "./tree.ts";
-import type { Agent, PaneStatus, Project, Workspace } from "./types.ts";
+import type { Agent, AgentAccount, PaneStatus, Project, Workspace } from "./types.ts";
+import { formatPercent, formatReset, profileLabel, windowName, type AgentUsage } from "./usage.ts";
 
 export interface WorkspaceView {
   agents: Agent[];
@@ -148,4 +149,46 @@ export function paneChanges(
     if (!(paneId in before.exited)) changes.push({ paneId, kind: "exited" });
   }
   return changes;
+}
+
+/** The keys the agent may press in a pane, as the bytes a terminal sends. */
+export const PANE_KEYS: Record<string, string> = {
+  escape: "\x1b",
+  ctrl_c: "\x03",
+  enter: "\r",
+  tab: "\t",
+  shift_tab: "\x1b[Z",
+  up: "\x1b[A",
+  down: "\x1b[B",
+  right: "\x1b[C",
+  left: "\x1b[D",
+  backspace: "\x7f",
+};
+
+/**
+ * Plan limits as the agent reads them: one line per login, each window with
+ * how much is used and when it resets.
+ */
+export function describeUsage(
+  usage: AgentUsage[],
+  accounts: AgentAccount[],
+  now = Date.now(),
+): string {
+  if (usage.length === 0) return "Keel couldn't read usage for any signed-in agent.";
+  return usage
+    .map((item) => {
+      const profile = item.accountId ? ` (${profileLabel(item.accountId, accounts)})` : "";
+      const plan = item.plan ? `, ${item.plan}` : "";
+      const head = `${item.name}${profile}${plan}`;
+      if (item.status !== "ok") return `${head}: couldn't read it (${item.error ?? "unknown error"}).`;
+      if (item.windows.length === 0) return `${head}: no limits reported.`;
+      const windows = item.windows.map((window) => {
+        const reset = formatReset(window.resetsAt, now);
+        return `${windowName(window.label)} ${formatPercent(window.usedPercent)} used${
+          reset ? `, resets in ${reset}` : ""
+        }`;
+      });
+      return `${head}: ${windows.join("; ")}.`;
+    })
+    .join("\n");
 }
