@@ -595,3 +595,45 @@ it("invalidates a pending search immediately when the query or regex mode change
     assert.equal(state().grepLoading, false);
   }
 });
+
+it("reloads only the folders a file change landed in", async () => {
+  const listed: string[] = [];
+  ipc({
+    workspace_list: (args) => {
+      const rel = String(args.rel);
+      listed.push(rel);
+      if (rel === "") return [dir("src"), dir("docs")];
+      return [file(`${rel}/a.ts`)];
+    },
+  });
+  await Promise.all(["", "src", "docs"].map((rel) => state().loadDir(rel)));
+  listed.length = 0;
+
+  state().applyFsChange("project-a", ["src/a.ts"], false);
+  await tick();
+  await tick();
+  assert.deepEqual(listed, ["src"]);
+
+  listed.length = 0;
+  state().applyFsChange("project-a", [""], false);
+  await tick();
+  await tick();
+  assert.deepEqual([...listed].sort(), ["", "docs", "src"]);
+});
+
+it("keeps an unchanged listing and status, so nothing redraws", async () => {
+  ipc({ workspace_list: () => [file("a.ts")] });
+  await state().loadDir("");
+  const tree = state().tree;
+  await state().loadDir("");
+  assert.equal(state().tree, tree);
+
+  const git = state().git;
+  await state().refreshGit();
+  assert.equal(state().git, git);
+
+  ipc({ git_status: () => ({ ...status, ahead: 1 }) });
+  await state().refreshGit();
+  assert.notEqual(state().git, git);
+  assert.equal(state().git?.ahead, 1);
+});

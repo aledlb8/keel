@@ -278,7 +278,8 @@ interface WorkspaceState {
   toggleExpanded: (rel: string) => void;
   collapseAll: () => void;
   loadDir:(rel: string) => Promise<void>;
-  refreshTree: () => Promise<void>;
+  /** Reloads the listings `rels` touched (each one, and the folder it sits in), or every open folder. */
+  refreshTree: (rels?: string[]) => Promise<void>;
   refreshGit: (afterPending?: boolean) => Promise<void>;
   refreshMeta: () => Promise<void>;
   refreshBranches: (afterPending?: boolean) => Promise<void>;
@@ -721,6 +722,20 @@ function treeRels(tree: Record<string, WorkspaceEntry[]>): Set<string> {
  * listing and fold below it. Without this the tree kept a dead key, so each
  * watcher event (or poll) asked for the missing path again and toasted again.
  */
+function sameEntries(a: WorkspaceEntry[] | undefined, b: WorkspaceEntry[]): boolean {
+  if (!a || a.length !== b.length) return false;
+  return a.every((entry, index) => {
+    const other = b[index]!;
+    return entry.rel === other.rel && entry.name === other.name &&
+      entry.kind === other.kind && entry.size === other.size;
+  });
+}
+
+/** Deep equality for plain data from Rust, whose field order is fixed. */
+function sameJson(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 function pruneDir(state: WorkspaceState, rel: string): Partial<WorkspaceState> {
   const prefix = `${rel}/`;
   const gone = (path: string) =>
@@ -1054,7 +1069,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       return;
     }
     const full = rels.some((rel) => rel === "");
-    if (full || rels.length > 0) void get().refreshTree();
+    // Only the folders a change landed in. Reloading every open folder on each
+    // write kept the tree busy the whole time an agent was editing.
+    if (full) void get().refreshTree();
+    else if (rels.length > 0) void get().refreshTree(rels);
     if (git || full) void get().refreshGit(true);
     const open = get();
     for (const tab of open.editors) {
@@ -1294,18 +1312,23 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         const entries = await api.workspaceList(root, rel, showHidden);
         if (!isCurrent() || version !== projectVersion || showHidden !== get().showHidden) return;
         if (entries === null) set(pruneDir(get(), rel));
-        else set({ tree: { ...get().tree, [rel]: entries } });
+        // An unchanged listing keeps its identity, so the tree doesn't redraw.
+        else if (!sameEntries(get().tree[rel], entries)) set({ tree: { ...get().tree, [rel]: entries } });
       } catch (error) {
         if (isCurrent()) toast.error(error instanceof Error ? error.message : String(error));
       }
     }, true);
   },
 
-  refreshTree: async () => {
+  refreshTree: async (rels) => {
     const { root, tree } = get();
     if (!root) return;
-    const dirs = Object.keys(tree);
+    let dirs = Object.keys(tree);
     if (dirs.length === 0) dirs.push("");
+    else if (rels) {
+      const touched = new Set(rels.flatMap((rel) => [rel, parentRel(rel)]));
+      dirs = dirs.filter((dir) => touched.has(dir));
+    }
     await Promise.all(dirs.map((rel) => get().loadDir(rel)));
   },
 
@@ -1315,8 +1338,14 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     return reads.run("status", async (isCurrent) => {
       set({ gitLoading: true });
       try {
-        const git = await api.gitStatus(root);
-        if (isCurrent()) set({ git, gitError: null, gitLoading: false });
+        const fresh = await api.gitStatus(root);
+        if (!isCurrent()) return;
+        // Every file write asks for a status. When nothing changed, keep the old
+        // object: the tree, the Changes panel and each open editor's gutter all
+        // redo their work (the gutter re-reads git) when it changes identity.
+        const previous = get().git;
+        const git = previous && sameJson(previous, fresh) ? previous : fresh;
+        set({ git, gitError: null, gitLoading: false });
       } catch (error) {
         if (isCurrent()) set({ gitError: errorMessage(error), gitLoading: false });
       }

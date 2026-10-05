@@ -585,9 +585,15 @@ function TreeRow({
   context: TreeContext;
   leaving: boolean;
 }) {
-  const root = useWorkspace((state) => state.root);
-  const recentTick = useWorkspace((state) => state.recentEpoch);
-  void recentTick;
+  // This row's own stamp and age, so a change elsewhere (which bumps the
+  // epoch) doesn't redraw every row in the tree. Re-read on each epoch.
+  const recent = useWorkspace((state) => {
+    void state.recentEpoch;
+    if (!state.root || !isRecent(state.root, entry.rel)) return "";
+    const at = recentAt(state.root, entry.rel);
+    return `${at}:${Math.floor((Date.now() - at) / 60_000)}`;
+  });
+  const recentStamp = recent ? Number(recent.split(":")[0]) : 0;
   const folder = entry.kind === "dir";
   const open = Boolean(context.expanded[entry.rel]);
   const selected = context.selectedRel === entry.rel;
@@ -692,9 +698,7 @@ function TreeRow({
                   {entry.name}
                 </span>
                 <span className="flex shrink-0 items-center gap-1 group-hover/entry:hidden group-focus-visible/entry:hidden">
-                  {root && isRecent(root, entry.rel) ? (
-                    <RecentDot at={recentAt(root, entry.rel)} />
-                  ) : null}
+                  {recentStamp ? <RecentDot at={recentStamp} /> : null}
                   {/* The folder's hue says enough; only files carry a letter. */}
                   {!folder && status ? <GitLetter status={status} /> : null}
                 </span>
