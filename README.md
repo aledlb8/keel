@@ -29,6 +29,7 @@ Built with Tauri 2, React 19, TypeScript, Rust, Vite, CodeMirror, and xterm.js.
 - Configure agent commands, profiles, colors, and discovery paths from the app.
 - On Windows, optionally route Keel traffic through an isolated OpenVPN tunnel without replacing the machine's preferred default route.
 - Talk to a main agent from Telegram. Pick Claude Code, Codex, opencode, Pi or Grok Build; it sees what is open in Keel, works in your projects, starts other agents in panes, and reports back when they finish. Send it screenshots, or voice notes that Whisper transcribes on your PC. See [docs/telegram.md](docs/telegram.md).
+- Hand a conversation from one agent to another. From a Claude Code, Codex, Grok Build or opencode pane, pick any installed agent: it opens beside the first with every message, the reasoning that was saved, each tool call and its result, and the memory and instruction files, and carries on. It can ask the first agent for notes before it hands over. See [docs/handoff.md](docs/handoff.md).
 
 ## Requirements
 
