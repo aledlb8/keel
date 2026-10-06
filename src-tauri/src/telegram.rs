@@ -117,16 +117,16 @@ const UPLOAD_LIMIT: u64 = 50 * 1024 * 1024;
 const PHOTO_LIMIT: u64 = 10 * 1024 * 1024;
 const CAPTION_LIMIT: usize = 1024;
 
-/// A picture Telegram can show as a photo.
-fn is_photo(path: &std::path::Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| {
-            matches!(
-                ext.to_ascii_lowercase().as_str(),
-                "jpg" | "jpeg" | "png" | "webp"
-            )
-        })
+/// How Telegram can show a file in the chat, if it can: the method and its
+/// file field. Pictures as photos; mp4, the one format Telegram documents for
+/// videos, as a video that plays in place instead of a file to download.
+fn shown_inline(path: &std::path::Path, size: u64) -> Option<(&'static str, &'static str)> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    match ext.as_str() {
+        "jpg" | "jpeg" | "png" | "webp" if size <= PHOTO_LIMIT => Some(("sendPhoto", "photo")),
+        "mp4" => Some(("sendVideo", "video")),
+        _ => None,
+    }
 }
 
 /// Digits, a colon, then the secret. Anything else could escape the URL path.
@@ -276,9 +276,10 @@ impl Bot {
         Ok(())
     }
 
-    /// Upload a file from this PC. Pictures go as photos, shown inline, unless
-    /// they are over Telegram's photo limit or Telegram turns them down as
-    /// one (odd dimensions); then, like everything else, as a document.
+    /// Upload a file from this PC. Pictures go as photos and mp4s as videos,
+    /// shown in the chat, unless a picture is over Telegram's photo limit or
+    /// Telegram turns the file down as one (odd dimensions, a codec it can't
+    /// play); then, like everything else, as a document.
     pub fn send_file(
         &self,
         chat_id: i64,
@@ -293,8 +294,8 @@ impl Bot {
                 "The file is over Telegram's 50 MB limit for bots.",
             ));
         }
-        if is_photo(path) && size <= PHOTO_LIMIT {
-            match self.upload(chat_id, "sendPhoto", "photo", path, caption) {
+        if let Some((method, field)) = shown_inline(path, size) {
+            match self.upload(chat_id, method, field, path, caption) {
                 Err(err) if err.code == Some(400) => {}
                 other => return other,
             }
@@ -320,6 +321,10 @@ impl Bot {
                 "caption",
                 caption.chars().take(CAPTION_LIMIT).collect::<String>(),
             );
+        }
+        if field == "video" {
+            // Plays while it downloads, instead of after.
+            form = form.text("supports_streaming", "true");
         }
         let response = self
             .client
@@ -936,7 +941,7 @@ mod tests {
     }
 
     #[test]
-    fn pictures_upload_as_photos_and_the_rest_as_documents() {
+    fn pictures_and_videos_show_in_the_chat_and_the_rest_go_as_documents() {
         let dir = std::env::temp_dir().join(format!("keel-tg-upload-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let shot = dir.join("shot.png");
@@ -962,6 +967,16 @@ mod tests {
         );
         assert!(request.contains("name=\"document\"; filename=\"build.log\""));
         assert!(!request.contains("name=\"caption\""));
+
+        // A recording plays in the chat rather than arriving as a download.
+        let clip = dir.join("chaff-preview.mp4");
+        std::fs::write(&clip, b"not really a video").unwrap();
+        let (bot, server) = stand_in(r#"{"ok":true,"result":{"message_id":7}}"#);
+        bot.send_file(42, &clip, Some("the chaff")).unwrap();
+        let request = server.join().unwrap();
+        assert!(request.starts_with("POST /botTEST/sendVideo "), "{request}");
+        assert!(request.contains("name=\"video\"; filename=\"chaff-preview.mp4\""));
+        assert!(request.contains("name=\"supports_streaming\"\r\n\r\ntrue"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

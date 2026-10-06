@@ -392,10 +392,10 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "send_file",
-            "Send the user a file from this computer on Telegram: a screenshot, a log, a build, anything up to 50 MB. Pictures (png, jpg, webp) show as photos; everything else arrives as a file.",
+            "Send the user a file from this computer on Telegram: a screenshot, a recording, a log, a build, anything up to 50 MB. Pictures (png, jpg, webp) show as photos and mp4 videos play in the chat; everything else arrives as a file. Only send what the user asked for.",
             json!({
                 "path": { "type": "string", "description": "Absolute path, or relative to your folder." },
-                "caption": { "type": "string", "description": "Optional short line shown under it." },
+                "caption": { "type": "string", "description": "Optional short line saying what it is. Your reply still follows, so don't repeat it there." },
             }),
             &["path"],
         ),
