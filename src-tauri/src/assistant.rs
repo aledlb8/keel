@@ -1187,17 +1187,21 @@ fn whisper(inner: &Arc<Inner>) -> Option<Whisper> {
     found
 }
 
-/// Names Whisper would otherwise hear as ordinary words: the app, the agents,
-/// and every project folder.
+/// Words Whisper would otherwise mishear: the app, Bob, the agents, the git
+/// words the user dictates, and every project folder.
 fn vocabulary(inner: &Arc<Inner>) -> String {
     let mut words: Vec<String> = [
         "Keel",
+        "Bob",
         "Claude Code",
         "Codex",
         "opencode",
         "Grok",
         "Pi",
         "Telegram",
+        // Said in nearly every "commit it" note, and heard as "crowdfans".
+        "commit",
+        "co-authors",
     ]
     .iter()
     .map(|word| (*word).to_string())
