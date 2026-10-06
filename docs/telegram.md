@@ -51,8 +51,9 @@ unchanged) stay in `RULES` in `assistant.rs`, ahead of both files.
   two-second "sí, dale" it guesses French. Pick the languages you speak in the
   dialog: Keel then chooses among those, and for short or uncertain clips
   transcribes in each and keeps the most confident result
-  (`src-tauri/src/whisper_transcribe.py`). Project folder names and agent names
-  are passed as vocabulary, so "Keel" is not heard as "kill".
+  (`src-tauri/src/whisper_transcribe.py`). Project folder names, agent names,
+  Bob, and the git words dictated most ("commit", "co-authors") are passed as
+  vocabulary, so "Keel" is not heard as "kill" nor "co-authors" as "crowdfans".
 - **Videos and other files** are declined with a short reply; a caption still
   goes through.
 
@@ -75,8 +76,11 @@ Every message is one headless turn of the chosen CLI in
 `exec resume`, `--session`, `--session-id`). A task gets two messages: a
 one-line "got it, doing X" the agent sends with `tell_user` once it is sure
 what was meant (or a short question when it isn't), and the outcome. Quick
-answers are just the answer. In between the phone only shows "typing"; the
-tools it uses go to the activity log in Keel. The agent is told to answer in
+answers are just the answer, and a `[Keel]` report is answered with the reply
+alone: Keel turns down a second `tell_user` in a turn, and any on a turn Keel
+started, so the phone never hears the same news twice. In between the phone
+only shows "typing"; the tools it uses go to the activity log in Keel, by what
+they do ("typing into a pane"), Grok's `use_tool` calls included. The agent is told to answer in
 a sentence or two unless asked for detail, such as console output. The reply
 goes out as soon as the CLI reports the turn finished (Claude, Codex, Grok) or
 closes its output (opencode, Pi), without waiting for the process to exit. A conversation the CLI no longer has is
@@ -84,7 +88,12 @@ replaced once, automatically.
 
 Claude runs with `--strict-mcp-config`, so it loads only Keel's MCP server and
 not the ones in `~/.claude.json`: it connects them all before the turn starts,
-and one that was slow to fail held every message for about 20 seconds.
+and one that was slow to fail held every message for about 20 seconds. Grok
+gets the same through its environment (`GROK_CLAUDE_MCPS_ENABLED=false` and
+the Cursor and hooks equivalents): Grok's own config still applies, but not the
+Claude and Cursor servers and hooks it would import. Those included Keel's own
+Claude hooks, which launched Keel.exe before and after every tool call for
+events nothing listened to, 3 to 4 seconds a message.
 
 Keel's tools reach the agent as an MCP server on `127.0.0.1` with a per-launch
 bearer token. Most calls are answered by the window, which owns the workspace:
@@ -93,9 +102,13 @@ bearer token. Most calls are answered by the window, which owns the workspace:
 - `start_agent` — open a pane in a project, wait for the agent to settle, type
   the first prompt.
 - `send_to_pane`, `focus_pane`, `open_project`, `close_pane` (only panes the
-  agent started).
-- `press_key` — Esc, Ctrl+C, arrows, Enter, Tab, Shift+Tab or Backspace in a
-  pane, up to ten times: interrupt an agent, or pick from a menu.
+  agent started). `send_to_pane` pastes, which agents' menus ignore.
+- `press_key` — Esc, Ctrl+C, arrows, Enter, Tab, Shift+Tab, Backspace or 1 to
+  9 in a pane, up to ten times: interrupt an agent, or pick from a menu (a
+  number picks that option).
+- `read_pane` and the screens in `[Keel]` reports are read once the pane's
+  output pauses, so they never catch a repaint halfway or the spinner of the
+  hook that reported the finish.
 - `check_usage` — plan limits per signed-in login, the same reading as the
   status bar's usage gauges.
 
@@ -104,8 +117,8 @@ The ones that touch the phone or need no window are answered in Rust
 
 - `tell_user` — message the phone mid-turn.
 - `send_file` — upload a file from this PC, up to 50 MB. png, jpg and webp
-  under 10 MB go as photos; the rest, or a picture Telegram refuses as a
-  photo, as documents.
+  under 10 MB go as photos and mp4 as videos that play in the chat; the rest,
+  or a file Telegram refuses as either, as documents.
 - `remind_me`, `list_reminders`, `cancel_reminder` — wake the agent after 1 to
   1,440 minutes, once or up to 48 times. When one fires, the agent gets a
   `[Keel]` message with its note; a check-in with nothing to say answers
@@ -116,8 +129,13 @@ The ones that touch the phone or need no window are answered in Rust
 When a pane the agent started finishes, waits for input or exits, Keel sends
 the agent a `[Keel]` message with the end of its screen, so it can report back
 or carry on (at most eight times before you speak again; after that, a plain
-one-line notice). Other agents can be forwarded to the phone never, while Keel
-is in the background, or always. A forwarded one also goes to the agent with
+one-line notice). So does a pane you opened once the agent has passed it your
+request (`send_to_pane`, or a menu choice with `press_key`), until it finishes:
+"record a video and send it to me" gets the video whatever the forwarding
+setting. Files and recordings go out only when you asked for them; when one
+would help, the agent asks you first instead of adding it to the request.
+Other agents can be forwarded to the phone never, while Keel is in
+the background, or always. A forwarded one also goes to the agent with
 its screen, to sum up in a sentence without acting on it, so the phone says
 what the agent did rather than only that it finished. Nothing Keel sends
 itself uses emojis.
@@ -152,6 +170,9 @@ the stand-in.
 Grok Build ran live turns with 1.0.46. Grok loads a folder's MCP config only
 once the folder is trusted, so Keel launches it with `--trust`, which records
 the main agent's folder in Grok's `trusted_folders.toml`. Without it Grok had
-no Keel tools and spent minutes per message looking for another way. Every
+no Keel tools and spent minutes per message looking for another way. With the
+Claude and Cursor switches off, `grok inspect` lists the `~/.claude.json`
+servers as disabled, and a live turn ran none of the imported Keel.exe hooks
+(a Telegram session's log had them at 23 turns and 62 tool calls). Every
 supported CLI lists Keel's tools as it starts, so when a turn ends without that,
 Keel logs it and warns on the phone once per run. Gemini CLI is not supported.
