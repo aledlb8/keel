@@ -67,10 +67,14 @@ export function AgentMark({
     >
       {logo ? (
         <svg
-          width={glyph}
-          height={glyph}
           viewBox={logo.viewBox}
-          style={logo.ink === "accent" ? undefined : { color: "var(--foreground)" }}
+          // Sized inline: menus size every bare svg in an item with a class,
+          // which would win over width and height attributes.
+          style={{
+            width: glyph,
+            height: glyph,
+            ...(logo.ink === "accent" ? null : { color: "var(--foreground)" }),
+          }}
         >
           {logo.draw(uid)}
         </svg>

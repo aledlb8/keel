@@ -62,6 +62,8 @@ export interface MenuItemEntry {
   kind: "item";
   label: string;
   icon?: LucideIcon | undefined;
+  /** Drawn in place of `icon`, for marks that aren't icons (an agent's logo). */
+  leading?: ReactNode | undefined;
   shortcut?: string | undefined;
   disabled?: boolean | undefined;
   destructive?: boolean | undefined;
@@ -89,6 +91,7 @@ export type MenuEntry =
       kind: "sub";
       label: string;
       icon?: LucideIcon | undefined;
+      leading?: ReactNode | undefined;
       disabled?: boolean | undefined;
       entries: MenuEntry[];
     }
@@ -261,7 +264,7 @@ function Entry({ entry }: { entry: MenuEntry }) {
       return (
         <kit.Sub>
           <kit.SubTrigger disabled={entry.disabled === true}>
-            {Icon ? <Icon /> : null}
+            {entry.leading ?? (Icon ? <Icon /> : null)}
             {entry.label}
           </kit.SubTrigger>
           <kit.SubContent>
@@ -288,7 +291,7 @@ function PlainItem({ entry }: { entry: MenuItemEntry }) {
       variant={entry.destructive ? "destructive" : "default"}
       onSelect={entry.onSelect}
     >
-      {Icon ? <Icon /> : null}
+      {entry.leading ?? (Icon ? <Icon /> : null)}
       <span className="truncate">{entry.label}</span>
       {entry.shortcut ? <kit.Shortcut>{entry.shortcut}</kit.Shortcut> : null}
     </kit.Item>
@@ -315,7 +318,7 @@ function ConfirmItem({ entry }: { entry: MenuItemEntry }) {
         entry.onSelect();
       }}
     >
-      {Icon ? <Icon /> : null}
+      {entry.leading ?? (Icon ? <Icon /> : null)}
       <span className="truncate">{armed ? entry.confirm : entry.label}</span>
     </kit.Item>
   );

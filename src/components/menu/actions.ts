@@ -7,6 +7,7 @@
  */
 
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { createElement } from "react";
 import {
   ArrowDown,
   ArrowLeft,
@@ -50,12 +51,15 @@ import {
   X,
 } from "lucide-react";
 
+import { AgentMark } from "@/components/AgentMark";
 import type { MenuEntry } from "@/components/menu/MenuEntries";
 import { terminalCommands } from "@/components/TerminalSurface";
 import type { TitlebarActions } from "@/components/Titlebar";
 import { WorkspaceGlyph } from "@/components/WorkspaceMark";
 import { pickProjectFolder as pickRegisteredFolder } from "@/lib/backend";
 import { canHandOff, handoffTargets, targetLabel } from "@/lib/handoff";
+import { agentAccent } from "@/lib/tokens";
+import type { Agent } from "@/lib/types";
 import { lookingAt, waitingPanes } from "@/lib/island";
 import { deckShortcutKeys, shortcutKeys } from "@/lib/keymap";
 import { listPanes } from "@/lib/tree";
@@ -710,6 +714,16 @@ export function deckMenu(projectId: string, deckId: string): MenuEntry[] {
   ];
 }
 
+/** An agent's logo on its colour, sized to sit in a menu row like an icon. */
+function markOf(agent: Agent) {
+  return createElement(AgentMark, {
+    agentId: agent.id,
+    name: agent.name,
+    accent: agentAccent(agent.accent),
+    size: 16,
+  });
+}
+
 /**
  * Every agent a pane's conversation can be handed to, then whether to ask
  * the pane's agent for notes first. Empty when the pane has no conversation
@@ -727,10 +741,12 @@ export function handoffEntries(projectId: string, paneId: string): MenuEntry[] {
   const targets = handoffTargets(state.agents, state.accounts).map(
     ({ agent, profiles }): MenuEntry => {
       const label = targetLabel(agent, pane.agentId);
+      const leading = markOf(agent);
       if (profiles.length === 0) {
         return {
           kind: "item",
           label,
+          leading,
           disabled: busy,
           onSelect: () => void handOff(projectId, paneId, agent.id),
         };
@@ -738,6 +754,7 @@ export function handoffEntries(projectId: string, paneId: string): MenuEntry[] {
       return {
         kind: "sub",
         label,
+        leading,
         disabled: busy,
         entries: profiles.map(
           (profile): MenuEntry => ({
