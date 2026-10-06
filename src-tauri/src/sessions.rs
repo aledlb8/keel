@@ -95,7 +95,7 @@ pub(crate) fn grok_session_exists(
     root.is_some_and(|root| root.join("sessions").join(encoded).join(id).is_dir())
 }
 
-fn percent_encode(input: &str) -> String {
+pub(crate) fn percent_encode(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for byte in input.bytes() {
         match byte {

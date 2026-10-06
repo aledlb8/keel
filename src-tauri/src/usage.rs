@@ -244,7 +244,11 @@ fn default_home(agent_id: &str) -> Option<PathBuf> {
     }
 }
 
-fn config_home(app: &AppHandle, agent_id: &str, account_id: Option<&str>) -> Option<PathBuf> {
+pub(crate) fn config_home(
+    app: &AppHandle,
+    agent_id: &str,
+    account_id: Option<&str>,
+) -> Option<PathBuf> {
     if let Some(account_id) = account_id.filter(|id| !id.is_empty()) {
         let dir = account_dir(app, account_id)?;
         if agent_id == "opencode" {

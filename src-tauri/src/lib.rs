@@ -8,6 +8,9 @@ mod blocking;
 mod git;
 mod git_ops;
 mod grep;
+mod handoff;
+mod handoff_read;
+mod handoff_write;
 mod hook_config;
 mod paths;
 mod preview;
@@ -142,6 +145,9 @@ pub fn run() {
             assistant::assistant_send,
             assistant::assistant_tool_result,
             assistant::assistant_pane_event,
+            handoff::handoff_begin,
+            handoff::handoff_notes_ready,
+            handoff::handoff_write,
         ])
         .on_window_event(|window, event| {
             // CloseRequested is a *request*. Killing PTYs here would destroy
