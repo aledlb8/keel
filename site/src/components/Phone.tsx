@@ -106,7 +106,7 @@ function PhoneChat({ step }: { step: number }) {
             )}
             {step >= 2 && (
               <Bubble key="heard" from="bot">
-                <span className="text-dim">🎤 </span>
+                <span className="text-dim">Heard: </span>
                 <span className="italic">“In keel, have Codex fix the flaky login test.”</span>
               </Bubble>
             )}
@@ -129,8 +129,7 @@ function PhoneChat({ step }: { step: number }) {
             )}
             {step >= FINAL && (
               <Bubble key="done" from="bot">
-                <span className="text-done">✓ </span>
-                <b className="font-semibold text-ink">Codex finished.</b> Fixed a race in{" "}
+                <b className="font-semibold text-ink">Codex finished:</b> it fixed a race in{" "}
                 <code className="font-mono text-[12px] text-ink">login.spec.ts</code>; all 48 tests pass.
               </Bubble>
             )}
