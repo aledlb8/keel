@@ -110,9 +110,9 @@ export function Hero() {
           >
             Keel is a native desktop workspace for the coding agents already on
             your machine. Claude Code, Codex, Gemini CLI, opencode and the rest
-            each get a pane, every pane stays in view, and Keel tells you the
-            moment one of them needs you, even when you're away and only have
-            your phone.
+            each get a pane, every pane stays in view, any of them can hand its
+            conversation to another, and Keel tells you the moment one of them
+            needs you, even when you're away and only have your phone.
           </p>
           <div
             className="rise flex flex-wrap items-center gap-3 md:col-span-5 md:justify-end"
