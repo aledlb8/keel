@@ -306,16 +306,58 @@ struct Job {
     /// Photos sent as an album share this and become one job.
     group: Option<String>,
     received: Instant,
+    /// Keel's own report (a pane, a reminder), not something the user said.
+    from_keel: bool,
 }
 
 impl Job {
-    fn text(text: String) -> Self {
+    /// Typed in Keel's window, as if sent from the phone.
+    fn typed(text: String) -> Self {
         Self {
             text,
             media: Vec::new(),
             group: None,
             received: Instant::now(),
+            from_keel: false,
         }
+    }
+
+    /// A `[Keel]` message: a pane to report on, or a reminder firing.
+    fn report(text: String) -> Self {
+        Self {
+            from_keel: true,
+            ..Self::typed(text)
+        }
+    }
+}
+
+/// The turn the worker is running, as `tell_user` needs to know it.
+#[derive(Default)]
+struct TurnState {
+    /// Started by Keel, so there is nothing to acknowledge.
+    from_keel: bool,
+    /// The user has already had this turn's one acknowledgement.
+    told: bool,
+}
+
+impl TurnState {
+    /// Claim the turn's one `tell_user`: a message from the user gets one
+    /// acknowledgement and then the reply, and Keel's own reports get only
+    /// the reply. Checked and claimed under one lock, so two calls made at
+    /// once can't both go out.
+    fn acknowledge(&mut self) -> Result<(), String> {
+        if self.from_keel {
+            return Err("Not sent: this turn is a [Keel] report, not a message from the user, \
+                        so there is nothing to acknowledge. Put what they need to know in your reply."
+                .into());
+        }
+        if self.told {
+            return Err("Not sent: the user already heard from you this turn. \
+                        Your reply is the next thing they see."
+                .into());
+        }
+        self.told = true;
+        Ok(())
     }
 }
 
@@ -343,6 +385,8 @@ struct Inner {
     /// Bumped whenever the poller must reconnect with new settings.
     generation: AtomicU64,
     running: Mutex<Option<Running>>,
+    /// Who the running turn answers, for `tell_user`.
+    turn: Mutex<TurnState>,
     auto_turns: Mutex<u32>,
     /// Panes the agent started, which report back when they finish.
     delegated: Mutex<Vec<String>>,
@@ -422,6 +466,7 @@ impl AssistantManager {
             log_id: AtomicU64::new(0),
             generation: AtomicU64::new(0),
             running: Mutex::new(None),
+            turn: Mutex::new(TurnState::default()),
             auto_turns: Mutex::new(0),
             delegated: Mutex::new(Vec::new()),
             whisper: Mutex::new(media::find()),
@@ -924,6 +969,7 @@ fn receive(inner: &Arc<Inner>, bot: &Bot, message: telegram::Message) {
         media: attached,
         group: message.media_group,
         received: Instant::now(),
+        from_keel: false,
     });
 }
 
@@ -1021,6 +1067,12 @@ fn work_forever(inner: &Arc<Inner>) {
                 }
             }
             inner.publish();
+        }
+        if let Ok(mut turn) = inner.turn.lock() {
+            *turn = TurnState {
+                from_keel: job.from_keel,
+                told: false,
+            };
         }
         handle_job(inner, job);
     }
@@ -1648,9 +1700,25 @@ fn local_tool(inner: &Arc<Inner>, call: &ToolCall) -> Result<String, String> {
             if text.is_empty() {
                 return Err("Give the message as `text`.".into());
             }
-            let (bot, chat) = inner.bot().ok_or("Telegram isn't connected.")?;
-            bot.send_markdown(chat, text)
-                .map_err(|err| format!("Couldn't send it: {err}"))?;
+            inner
+                .turn
+                .lock()
+                .map_err(|err| err.to_string())?
+                .acknowledge()?;
+            let sent = inner
+                .bot()
+                .ok_or_else(|| "Telegram isn't connected.".to_string())
+                .and_then(|(bot, chat)| {
+                    bot.send_markdown(chat, text)
+                        .map_err(|err| format!("Couldn't send it: {err}"))
+                });
+            if let Err(err) = sent {
+                // Nothing reached the phone, so the next try may still go.
+                if let Ok(mut turn) = inner.turn.lock() {
+                    turn.told = false;
+                }
+                return Err(err);
+            }
             inner.log("out", text);
             Ok("Sent. Carry on; your final reply still goes to the user.".into())
         }
@@ -1821,7 +1889,7 @@ fn remind_forever(inner: &Arc<Inner>) {
             if inner.ready() {
                 for report in fired {
                     inner.log("event", "Reminder fired");
-                    inner.enqueue(Job::text(report));
+                    inner.enqueue(Job::report(report));
                 }
             }
             reminders = match inner.reminders.lock() {
@@ -2104,7 +2172,7 @@ pub fn assistant_send(manager: Assistant<'_>, text: String) -> Result<(), String
         return Err("Pair your Telegram account first; replies go there.".into());
     }
     manager.inner.log("in", text.clone());
-    manager.inner.enqueue(Job::text(text));
+    manager.inner.enqueue(Job::typed(text));
     Ok(())
 }
 
@@ -2154,7 +2222,7 @@ pub fn assistant_pane_event(manager: Assistant<'_>, event: PaneEvent) {
             .unwrap_or(false);
         if allowed {
             inner.log("event", pane_notice(&event));
-            inner.enqueue(Job::text(pane_report(&event, true)));
+            inner.enqueue(Job::report(pane_report(&event, true)));
             return;
         }
     }
@@ -2168,7 +2236,7 @@ pub fn assistant_pane_event(manager: Assistant<'_>, event: PaneEvent) {
         // The agent reads the screen and sums it up, so the phone gets what
         // happened, not just that something did.
         inner.log("event", pane_notice(&event));
-        inner.enqueue(Job::text(pane_report(&event, false)));
+        inner.enqueue(Job::report(pane_report(&event, false)));
     } else if delegated {
         // Past the limit on turns Keel starts by itself.
         let inner = inner.clone();
@@ -2281,6 +2349,28 @@ mod tests {
         assert!(report.contains("pane id p1"));
         assert!(report.contains("```\nAll tests passed\n```"));
         assert_eq!(pane_notice(&event), "Codex finished in keel (Fix login).");
+    }
+
+    #[test]
+    fn tell_user_is_one_acknowledgement_and_never_for_keel() {
+        assert!(Job::report("[Keel] Reminder #1".into()).from_keel);
+        assert!(!Job::typed("hi".into()).from_keel);
+
+        let mut asked = TurnState::default();
+        assert!(asked.acknowledge().is_ok());
+        assert!(asked
+            .acknowledge()
+            .unwrap_err()
+            .contains("already heard from you"));
+
+        // A finished pane's summary is the reply alone, not "Claude finished"
+        // twice on the phone.
+        let mut report = TurnState {
+            from_keel: true,
+            told: false,
+        };
+        assert!(report.acknowledge().unwrap_err().contains("[Keel] report"));
+        assert!(!report.told);
     }
 
     #[test]
