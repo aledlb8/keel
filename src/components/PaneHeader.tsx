@@ -130,7 +130,9 @@ function HandoffButton({
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="end"
-        className="min-w-52"
+        // As wide as its longest row, not the button: "Ask Claude Code for
+        // notes first" must fit.
+        className="w-max min-w-56 max-w-[22rem]"
         onCloseAutoFocus={(event) => event.preventDefault()}
       >
         <DropdownMenuLabel>Hand off to</DropdownMenuLabel>
