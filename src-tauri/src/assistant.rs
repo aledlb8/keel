@@ -388,8 +388,6 @@ struct Inner {
     /// Who the running turn answers, for `tell_user`.
     turn: Mutex<TurnState>,
     auto_turns: Mutex<u32>,
-    /// Panes the agent started, which report back when they finish.
-    delegated: Mutex<Vec<String>>,
     /// Looked for at launch, and again when a voice message needs it.
     whisper: Mutex<Option<Whisper>>,
     /// The phone has been told the agent ran without Keel's tools.
@@ -468,7 +466,6 @@ impl AssistantManager {
             running: Mutex::new(None),
             turn: Mutex::new(TurnState::default()),
             auto_turns: Mutex::new(0),
-            delegated: Mutex::new(Vec::new()),
             whisper: Mutex::new(media::find()),
             warned_tools: AtomicBool::new(false),
             reminders: Mutex::new(Vec::new()),
@@ -1917,6 +1914,20 @@ fn remind_forever(inner: &Arc<Inner>) {
 
 // ---------------------------------------------------------------- panes
 
+/// Whose work a pane is doing, as the window tracks it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Whose {
+    /// The agent opened it with `start_agent`.
+    Started,
+    /// The user opened it, and the agent then passed it the user's request
+    /// (`send_to_pane`, or a menu choice), so the agent owes them the outcome.
+    Handed,
+    /// The user's own, and nothing the agent is waiting on.
+    #[default]
+    User,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PaneEvent {
@@ -1927,14 +1938,16 @@ pub struct PaneEvent {
     agent: String,
     project: String,
     #[serde(default)]
+    whose: Whose,
+    #[serde(default)]
     tail: String,
     #[serde(default)]
     window_focused: bool,
 }
 
-/// What the agent is told about a pane: one it started, to check and report
-/// on, or one the user opened, only to sum up for the phone.
-fn pane_report(event: &PaneEvent, delegated: bool) -> String {
+/// What the agent is told about a pane: one doing work it handed out, to
+/// check and report on, or one the user runs, only to sum up for the phone.
+fn pane_report(event: &PaneEvent) -> String {
     let what = match event.kind.as_str() {
         "waiting" => "is waiting for input (a question or a permission)",
         "exited" => "has exited",
@@ -1945,20 +1958,24 @@ fn pane_report(event: &PaneEvent, delegated: bool) -> String {
     } else {
         format!("\nEnd of its screen:\n```\n{}\n```", event.tail.trim_end())
     };
-    let (whose, next) = match (delegated, event.kind.as_str()) {
-        (true, "waiting") => (
-            "The agent you started",
-            "If what the user asked for answers it, answer with send_to_pane. Otherwise ask the user.",
-        ),
-        (true, _) => (
-            "The agent you started",
-            "Tell the user how it went in a sentence or two. If their request still needs more steps, carry on.",
-        ),
-        (false, _) => (
-            "An agent the user started themselves",
+    let whose = match event.whose {
+        Whose::Started => "The agent you started",
+        Whose::Handed => "The agent you passed the user's request to",
+        Whose::User => "An agent the user started themselves",
+    };
+    let next = match (event.whose, event.kind.as_str()) {
+        (Whose::User, _) => {
             "Tell the user in one short sentence what it did or said, going by its screen, and if it's asking something, what. \
-Name the agent and project. Don't act on it or touch the pane unless they ask.",
-        ),
+Name the agent and project. Don't act on it or touch the pane unless they ask."
+        }
+        (_, "waiting") => {
+            "If what the user asked for answers it, answer it: press_key for a menu, send_to_pane for text. \
+Otherwise ask the user."
+        }
+        _ => {
+            "Tell the user how it went in a sentence or two. If their request still needs a step from you, \
+such as sending a file they asked for, do it."
+        }
     };
     format!(
         "[Keel] {whose} {what}.\nPane \"{}\" ({}) in project {}, pane id {}.{screen}\n\n{next}",
@@ -2183,17 +2200,6 @@ pub fn assistant_tool_result(manager: Assistant<'_>, call_id: String, ok: bool, 
     }
 }
 
-/// The window marks a pane as started by the main agent.
-#[tauri::command]
-pub fn assistant_delegated(manager: Assistant<'_>, pane_id: String, delegated: bool) {
-    if let Ok(mut panes) = manager.inner.delegated.lock() {
-        panes.retain(|id| id != &pane_id);
-        if delegated {
-            panes.push(pane_id);
-        }
-    }
-}
-
 /// An agent pane finished, stopped to ask something, or exited.
 #[tauri::command]
 pub fn assistant_pane_event(manager: Assistant<'_>, event: PaneEvent) {
@@ -2201,17 +2207,9 @@ pub fn assistant_pane_event(manager: Assistant<'_>, event: PaneEvent) {
     if !inner.ready() {
         return;
     }
-    let delegated = inner
-        .delegated
-        .lock()
-        .map(|panes| panes.contains(&event.pane_id))
-        .unwrap_or(false);
-    if delegated {
-        if event.kind == "exited" {
-            if let Ok(mut panes) = inner.delegated.lock() {
-                panes.retain(|id| id != &event.pane_id);
-            }
-        }
+    if event.whose != Whose::User {
+        // Work the agent handed out comes back to it whatever the forwarding
+        // setting, or "I'll send you the video when it's done" could not be kept.
         let allowed = inner
             .auto_turns
             .lock()
@@ -2222,9 +2220,14 @@ pub fn assistant_pane_event(manager: Assistant<'_>, event: PaneEvent) {
             .unwrap_or(false);
         if allowed {
             inner.log("event", pane_notice(&event));
-            inner.enqueue(Job::report(pane_report(&event, true)));
-            return;
+            inner.enqueue(Job::report(pane_report(&event)));
+        } else {
+            // Past the limit on turns Keel starts by itself.
+            let inner = inner.clone();
+            let notice = pane_notice(&event);
+            std::thread::spawn(move || inner.tell(&notice));
         }
+        return;
     }
     let forward = inner.settings.lock().map(|s| s.forward).unwrap_or_default();
     let send = match forward {
@@ -2232,16 +2235,11 @@ pub fn assistant_pane_event(manager: Assistant<'_>, event: PaneEvent) {
         Forward::Background => !event.window_focused,
         Forward::Always => true,
     };
-    if send && !delegated {
+    if send {
         // The agent reads the screen and sums it up, so the phone gets what
         // happened, not just that something did.
         inner.log("event", pane_notice(&event));
-        inner.enqueue(Job::report(pane_report(&event, false)));
-    } else if delegated {
-        // Past the limit on turns Keel starts by itself.
-        let inner = inner.clone();
-        let notice = pane_notice(&event);
-        std::thread::spawn(move || inner.tell(&notice));
+        inner.enqueue(Job::report(pane_report(&event)));
     }
 }
 
@@ -2333,22 +2331,44 @@ mod tests {
 
     #[test]
     fn pane_reports_carry_the_screen_for_the_agent() {
-        let event = PaneEvent {
-            kind: "done".into(),
+        let event = |whose, kind: &str| PaneEvent {
+            kind: kind.into(),
             pane_id: "p1".into(),
             title: "Fix login".into(),
             agent: "Codex".into(),
             project: "keel".into(),
+            whose,
             tail: "All tests passed\n".into(),
             window_focused: false,
         };
-        let report = pane_report(&event, true);
+        let report = pane_report(&event(Whose::Started, "done"));
         assert!(report.starts_with("[Keel] The agent you started has finished."));
-        assert!(pane_report(&event, false)
-            .starts_with("[Keel] An agent the user started themselves has finished."));
         assert!(report.contains("pane id p1"));
         assert!(report.contains("```\nAll tests passed\n```"));
-        assert_eq!(pane_notice(&event), "Codex finished in keel (Fix login).");
+        assert!(report.contains("sending a file they asked for"));
+
+        // Work passed to a pane the user opened is followed up like the agent's own.
+        let handed = pane_report(&event(Whose::Handed, "done"));
+        assert!(
+            handed.starts_with("[Keel] The agent you passed the user's request to has finished.")
+        );
+        assert!(!handed.contains("Don't act on it"));
+        assert!(pane_report(&event(Whose::Handed, "waiting")).contains("press_key for a menu"));
+
+        let theirs = pane_report(&event(Whose::User, "done"));
+        assert!(theirs.starts_with("[Keel] An agent the user started themselves has finished."));
+        assert!(theirs.contains("Don't act on it"));
+        assert_eq!(
+            pane_notice(&event(Whose::User, "done")),
+            "Codex finished in keel (Fix login)."
+        );
+
+        // A window that doesn't say counts the pane as the user's.
+        let bare: PaneEvent = serde_json::from_str(
+            r#"{"kind":"done","paneId":"p1","title":"t","agent":"Codex","project":"keel"}"#,
+        )
+        .unwrap();
+        assert_eq!(bare.whose, Whose::User);
     }
 
     #[test]

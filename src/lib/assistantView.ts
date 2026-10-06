@@ -20,6 +20,8 @@ export interface WorkspaceView {
   exited: Record<string, true>;
   /** Panes the main agent started. */
   delegated: ReadonlySet<string>;
+  /** Panes the user opened that the main agent passed a request to. */
+  handed: ReadonlySet<string>;
 }
 
 const STATUS_WORDS: Record<PaneStatus, string> = {
@@ -88,7 +90,11 @@ export function describeWorkspace(view: WorkspaceView): string {
           pane.agentId !== null && pane.resumeAgent ? agentName(view.agents, pane.agentId) : "shell";
         const extras = [
           pane.cwd && pane.cwd !== project.path ? `in ${pane.cwd}` : null,
-          view.delegated.has(id) ? "started by you" : null,
+          view.delegated.has(id)
+            ? "started by you"
+            : view.handed.has(id)
+              ? "you passed it a request"
+              : null,
         ].filter(Boolean);
         lines.push(
           `${indent}- ${id}: ${running}, ${state}, "${pane.title}"${extras.length ? ` (${extras.join(", ")})` : ""}`,
@@ -127,13 +133,14 @@ export interface PaneChange {
 
 /**
  * Edges worth telling the main agent or the phone about, between two readings
- * of pane status. A pane the agent started also counts as finished when it
- * stops working while you watch it — the tracker never calls that `done`.
+ * of pane status. A pane the agent is waiting on (one it started, or passed a
+ * request to) also counts as finished when it stops working while you watch
+ * it — the tracker never calls that `done`.
  */
 export function paneChanges(
   before: { status: Record<string, PaneStatus>; exited: Record<string, true> },
   after: { status: Record<string, PaneStatus>; exited: Record<string, true> },
-  delegated: ReadonlySet<string>,
+  followed: ReadonlySet<string>,
 ): PaneChange[] {
   const changes: PaneChange[] = [];
   for (const [paneId, current] of Object.entries(after.status)) {
@@ -141,7 +148,7 @@ export function paneChanges(
     if (previous === current) continue;
     if (current === "done") changes.push({ paneId, kind: "done" });
     else if (current === "waiting") changes.push({ paneId, kind: "waiting" });
-    else if (current === "idle" && previous === "working" && delegated.has(paneId)) {
+    else if (current === "idle" && previous === "working" && followed.has(paneId)) {
       changes.push({ paneId, kind: "done" });
     }
   }
@@ -151,7 +158,13 @@ export function paneChanges(
   return changes;
 }
 
-/** The keys the agent may press in a pane, as the bytes a terminal sends. */
+const DIGITS = Array.from({ length: 9 }, (_, index) => `${index + 1}`);
+
+/**
+ * The keys the agent may press in a pane, as the bytes a terminal sends.
+ * Digits are keys, not text: agents' menus pick an option on its number, but
+ * ignore the same digit pasted by `send_to_pane`.
+ */
 export const PANE_KEYS: Record<string, string> = {
   escape: "\x1b",
   ctrl_c: "\x03",
@@ -163,7 +176,14 @@ export const PANE_KEYS: Record<string, string> = {
   right: "\x1b[C",
   left: "\x1b[D",
   backspace: "\x7f",
+  ...Object.fromEntries(DIGITS.map((digit) => [digit, digit])),
 };
+
+/** Keys that give a pane the user's choice, so its outcome is owed to them. */
+export const ANSWER_KEYS: ReadonlySet<string> = new Set(["enter", ...DIGITS]);
+
+/** Keys that stop what a pane was doing, so nothing is owed any more. */
+export const INTERRUPT_KEYS: ReadonlySet<string> = new Set(["escape", "ctrl_c"]);
 
 /**
  * Plan limits as the agent reads them: one line per login, each window with

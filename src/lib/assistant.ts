@@ -60,12 +60,19 @@ export interface AssistantConfigure {
   languages?: string[];
 }
 
+/**
+ * Whose work a pane is doing: the main agent's (`started`), the user's with a
+ * request the main agent passed on (`handed`), or only the user's.
+ */
+export type AssistantPaneWhose = "started" | "handed" | "user";
+
 export interface AssistantPaneEvent {
   kind: "done" | "waiting" | "exited";
   paneId: string;
   title: string;
   agent: string;
   project: string;
+  whose: AssistantPaneWhose;
   tail: string;
   windowFocused: boolean;
 }
@@ -87,8 +94,6 @@ export const assistantIpc = {
   send: (text: string) => invoke<void>("assistant_send", { text }),
   toolResult: (callId: string, ok: boolean, text: string) =>
     invoke<void>("assistant_tool_result", { callId, ok, text }),
-  delegated: (paneId: string, delegated: boolean) =>
-    invoke<void>("assistant_delegated", { paneId, delegated }),
   paneEvent: (event: AssistantPaneEvent) => invoke<void>("assistant_pane_event", { event }),
 };
 

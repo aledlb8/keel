@@ -9,14 +9,16 @@
  *    a tool call arrives as an event and is answered with `assistant_tool_result`.
  *  - **Report on panes.** An agent finishing, stopping to ask something, or
  *    exiting is noticed by the attention tracker here, and passed on with the
- *    end of its screen. Rust decides whether that wakes the main agent (a pane
- *    it started), goes to the phone as a notice, or goes nowhere.
+ *    end of its screen and whose work it is. Rust decides whether that wakes
+ *    the main agent (a pane it started, or passed the user's request to), goes
+ *    to the phone as a summary, or goes nowhere.
  */
 
 import { create } from "zustand";
 
 import {
   terminalPress,
+  terminalQuiet,
   terminalSettled,
   terminalText,
   terminalType,
@@ -28,10 +30,13 @@ import {
   onAssistantTool,
   type AssistantConfigure,
   type AssistantLogEntry,
+  type AssistantPaneWhose,
   type AssistantSnapshot,
   type AssistantToolCall,
 } from "@/lib/assistant";
 import {
+  ANSWER_KEYS,
+  INTERRUPT_KEYS,
   PANE_KEYS,
   describeUsage,
   describeWorkspace,
@@ -46,6 +51,13 @@ import { useKeel } from "@/state/store";
 
 const LOG_LIMIT = 300;
 const TAIL_LINES = 40;
+/**
+ * How still a screen must be before a report reads it: long enough for the
+ * hook that announced the edge to finish and the agent to draw its last frame.
+ */
+const REPORT_SETTLE = { quietMs: 800, maxMs: 6000 };
+/** For read_pane, a gap between two repaints is enough. */
+const READ_SETTLE = { quietMs: 80, maxMs: 800 };
 
 interface AssistantState {
   snapshot: AssistantSnapshot | null;
@@ -53,6 +65,11 @@ interface AssistantState {
   dialogOpen: boolean;
   /** Panes the main agent started this session. */
   delegated: Set<string>;
+  /**
+   * Panes the user opened that the main agent passed a request to, and owes
+   * the outcome of. Cleared when the pane finishes, exits or is interrupted.
+   */
+  handed: Set<string>;
   openDialog: () => void;
   closeDialog: () => void;
   setToken: (token: string) => Promise<void>;
@@ -72,6 +89,7 @@ export const useAssistant = create<AssistantState>((set) => {
     log: [],
     dialogOpen: false,
     delegated: new Set(),
+    handed: new Set(),
     openDialog: () => set({ dialogOpen: true }),
     closeDialog: () => set({ dialogOpen: false }),
     setToken: async (token) => apply(await assistantIpc.setToken(token)),
@@ -109,14 +127,25 @@ function terminalPane(paneId: string): { project: Project; pane: Pane } {
   return found;
 }
 
-function markDelegated(paneId: string, delegated: boolean) {
+function mark(list: "delegated" | "handed", paneId: string, on: boolean) {
   useAssistant.setState((state) => {
-    const next = new Set(state.delegated);
-    if (delegated) next.add(paneId);
+    if (state[list].has(paneId) === on) return state;
+    const next = new Set(state[list]);
+    if (on) next.add(paneId);
     else next.delete(paneId);
-    return { delegated: next };
+    return list === "delegated" ? { delegated: next } : { handed: next };
   });
-  void assistantIpc.delegated(paneId, delegated).catch(() => {});
+}
+
+/** The agent passed a pane the user's request: it now owes them the outcome. */
+function markHanded(paneId: string) {
+  if (!useAssistant.getState().delegated.has(paneId)) mark("handed", paneId, true);
+}
+
+function whoseIs(paneId: string): AssistantPaneWhose {
+  const { delegated, handed } = useAssistant.getState();
+  if (delegated.has(paneId)) return "started";
+  return handed.has(paneId) ? "handed" : "user";
 }
 
 async function runTool(call: AssistantToolCall): Promise<string> {
@@ -132,12 +161,14 @@ async function runTool(call: AssistantToolCall): Promise<string> {
         status: keel.status,
         exited: keel.exited,
         delegated: useAssistant.getState().delegated,
+        handed: useAssistant.getState().handed,
       });
 
     case "read_pane": {
       const paneId = text(args, "pane_id");
       terminalPane(paneId);
       const lines = Math.min(400, Math.max(5, Number(args.lines) || 60));
+      await terminalQuiet(paneId, READ_SETTLE);
       const screen = terminalText(paneId, lines);
       if (screen === null) throw new Error(`${paneId} has no terminal yet.`);
       return screen.trim() ? screen : "(the screen is empty)";
@@ -169,7 +200,7 @@ async function runTool(call: AssistantToolCall): Promise<string> {
         ...(title ? { title: title.slice(0, 60) } : {}),
       });
       if (!paneId) throw new Error(`Couldn't open a pane in ${project.name}.`);
-      markDelegated(paneId, true);
+      mark("delegated", paneId, true);
       const name = agent?.name ?? "a shell";
       const prompt = text(args, "prompt");
       if (!prompt.trim()) {
@@ -188,7 +219,9 @@ async function runTool(call: AssistantToolCall): Promise<string> {
       const submit = args.submit !== false;
       const typed = await terminalType(paneId, text(args, "text"), submit);
       if (!typed) throw new Error(`${paneId} has no terminal yet.`);
-      return submit ? `Typed into ${paneId} and pressed Enter.` : `Typed into ${paneId}.`;
+      if (!submit) return `Typed into ${paneId}.`;
+      markHanded(paneId);
+      return `Typed into ${paneId} and pressed Enter. You'll get a [Keel] message when it finishes.`;
     }
 
     case "press_key": {
@@ -199,6 +232,8 @@ async function runTool(call: AssistantToolCall): Promise<string> {
       if (!bytes) throw new Error(`Unknown key "${key}". Keys: ${Object.keys(PANE_KEYS).join(", ")}.`);
       const times = Math.min(10, Math.max(1, Number(args.times) || 1));
       if (!terminalPress(paneId, bytes.repeat(times))) throw new Error(`${paneId} has no terminal yet.`);
+      if (ANSWER_KEYS.has(key)) markHanded(paneId);
+      else if (INTERRUPT_KEYS.has(key)) mark("handed", paneId, false);
       return `Pressed ${key}${times > 1 ? ` ${times} times` : ""} in ${paneId}. Check the result with read_pane.`;
     }
 
@@ -230,7 +265,7 @@ async function runTool(call: AssistantToolCall): Promise<string> {
         throw new Error("Only panes you started can be closed. Ask the user to close this one.");
       }
       keel.dismissPane(found.project.id, paneId);
-      markDelegated(paneId, false);
+      mark("delegated", paneId, false);
       return `Closed ${paneId}.`;
     }
 
@@ -248,29 +283,47 @@ async function answer(call: AssistantToolCall) {
   }
 }
 
+const reports = new Map<string, Promise<void>>();
+
+/** Send one pane's reports in order, however long each waits for its screen. */
+function inOrder(paneId: string, task: () => Promise<void>) {
+  const run = (reports.get(paneId) ?? Promise.resolve()).then(task).catch(() => {});
+  reports.set(paneId, run);
+  void run.then(() => {
+    if (reports.get(paneId) === run) reports.delete(paneId);
+  });
+}
+
 /** Pass pane edges to Rust. Restores replay old screens, so they are skipped. */
 function watchPanes(): () => void {
   return useKeel.subscribe((state, previous) => {
     if (state.status === previous.status && state.exited === previous.exited) return;
     if (state.restoreStatus === "restoring" || !useAssistant.getState().snapshot?.owner) return;
-    const delegated = useAssistant.getState().delegated;
-    for (const change of paneChanges(previous, state, delegated)) {
+    const { delegated, handed } = useAssistant.getState();
+    for (const change of paneChanges(previous, state, new Set([...delegated, ...handed]))) {
       const found = locate(change.paneId);
       if (!found || found.pane.editor || found.pane.agentId === null) continue;
       if (change.kind !== "exited" && !found.pane.resumeAgent) continue;
-      const agent =
-        state.agents.find((item) => item.id === found.pane.agentId)?.name ?? found.pane.agentId;
-      void assistantIpc
-        .paneEvent({
-          kind: change.kind,
-          paneId: change.paneId,
-          title: found.pane.title,
-          agent,
-          project: found.project.name,
+      const whose = whoseIs(change.paneId);
+      // A handed pane owes one outcome. A question on the way isn't it.
+      if (whose === "handed" && change.kind !== "waiting") mark("handed", change.paneId, false);
+      const event = {
+        kind: change.kind,
+        paneId: change.paneId,
+        title: found.pane.title,
+        agent:
+          state.agents.find((item) => item.id === found.pane.agentId)?.name ?? found.pane.agentId,
+        project: found.project.name,
+        whose,
+        windowFocused: typeof document !== "undefined" && document.hasFocus(),
+      };
+      inOrder(change.paneId, async () => {
+        await terminalQuiet(change.paneId, REPORT_SETTLE);
+        await assistantIpc.paneEvent({
+          ...event,
           tail: terminalText(change.paneId, TAIL_LINES) ?? "",
-          windowFocused: typeof document !== "undefined" && document.hasFocus(),
-        })
-        .catch(() => {});
+        });
+      });
     }
   });
 }

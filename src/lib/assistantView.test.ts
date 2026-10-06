@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  ANSWER_KEYS,
+  INTERRUPT_KEYS,
   PANE_KEYS,
   describeUsage,
   describeWorkspace,
@@ -86,6 +88,7 @@ function view(overrides: Partial<WorkspaceView> = {}): WorkspaceView {
     status: { a: "working", c: "waiting" },
     exited: {},
     delegated: new Set(["a"]),
+    handed: new Set(),
     ...overrides,
   };
 }
@@ -108,6 +111,11 @@ describe("describeWorkspace", () => {
 
   it("marks exited panes", () => {
     assert.match(describeWorkspace(view({ exited: { a: true } })), /- a: Codex, exited/);
+  });
+
+  it("marks a pane of the user's that the agent passed a request to", () => {
+    const text = describeWorkspace(view({ handed: new Set(["c"]) }));
+    assert.match(text, /- c: Claude Code, waiting for input, "Docs" \(in C:\\code\\keel\\docs, you passed it a request\)/);
   });
 });
 
@@ -139,7 +147,7 @@ describe("paneChanges", () => {
     ]);
   });
 
-  it("counts working to idle as finished only for panes the agent started", () => {
+  it("counts working to idle as finished only for panes the agent is waiting on", () => {
     const before = { status: { a: "working" as const, b: "working" as const }, exited: {} };
     const after = { status: { a: "idle" as const, b: "idle" as const }, exited: {} };
     assert.deepEqual(paneChanges(before, after, new Set(["a"])), [{ paneId: "a", kind: "done" }]);
@@ -193,5 +201,20 @@ describe("PANE_KEYS", () => {
     assert.equal(PANE_KEYS.escape, "\x1b");
     assert.equal(PANE_KEYS.ctrl_c, "\x03");
     assert.equal(PANE_KEYS.up, "\x1b[A");
+  });
+
+  it("presses numbers as keys, so a menu takes them as a choice", () => {
+    assert.equal(PANE_KEYS["1"], "1");
+    assert.equal(PANE_KEYS["9"], "9");
+    assert.equal(PANE_KEYS["0"], undefined);
+  });
+
+  it("tells answering keys from interrupting ones", () => {
+    for (const key of ["enter", "1", "4"]) assert.ok(ANSWER_KEYS.has(key), key);
+    for (const key of ["escape", "ctrl_c"]) assert.ok(INTERRUPT_KEYS.has(key), key);
+    for (const key of ["up", "down", "tab"]) {
+      assert.ok(!ANSWER_KEYS.has(key) && !INTERRUPT_KEYS.has(key), key);
+    }
+    for (const key of [...ANSWER_KEYS, ...INTERRUPT_KEYS]) assert.ok(key in PANE_KEYS, key);
   });
 });

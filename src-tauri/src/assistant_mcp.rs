@@ -455,7 +455,7 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "send_to_pane",
-            "Type text into a terminal pane, as if the user typed it, and press Enter unless submit is false. Use it to answer an agent that is waiting, or give it a follow-up instruction.",
+            "Type text into a terminal pane, as if the user pasted it, and press Enter unless submit is false. Use it to give an agent a follow-up about its own work, or a typed answer it is waiting for. A menu doesn't take pasted text as a choice: pick options with press_key.",
             json!({
                 "pane_id": pane,
                 "text": { "type": "string", "description": "When passing on something the user said, keep their wording." },
@@ -465,10 +465,10 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "press_key",
-            "Press a key in a terminal pane: escape or ctrl_c to interrupt an agent or a command, arrows and enter to pick from a menu, tab, shift_tab, backspace.",
+            "Press a key in a terminal pane: escape or ctrl_c to interrupt an agent or a command; a number to pick that option in an agent's menu, or arrows then enter; tab, shift_tab, backspace. Check the result with read_pane.",
             json!({
                 "pane_id": pane,
-                "key": { "type": "string", "enum": ["escape", "ctrl_c", "enter", "tab", "shift_tab", "up", "down", "left", "right", "backspace"] },
+                "key": { "type": "string", "enum": ["escape", "ctrl_c", "enter", "tab", "shift_tab", "up", "down", "left", "right", "backspace", "1", "2", "3", "4", "5", "6", "7", "8", "9"] },
                 "times": { "type": "integer", "minimum": 1, "maximum": 10, "description": "Press it this many times. Default 1." },
             }),
             &["pane_id", "key"],

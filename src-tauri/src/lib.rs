@@ -141,7 +141,6 @@ pub fn run() {
             assistant::assistant_stop,
             assistant::assistant_send,
             assistant::assistant_tool_result,
-            assistant::assistant_delegated,
             assistant::assistant_pane_event,
         ])
         .on_window_event(|window, event| {

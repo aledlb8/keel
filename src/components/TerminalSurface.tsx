@@ -241,6 +241,36 @@ export async function terminalSettled(
   }
 }
 
+/**
+ * Resolve once a pane's output has paused for `quietMs`, or after `maxMs`
+ * whatever it is doing. Agents repaint by rewriting only the cells that
+ * changed, so a screen read mid-repaint mixes two frames (letters of the new
+ * one over the old: "errlr" for "error"), and one read the instant a turn
+ * ends still shows the spinner of the hook that reported it. Read after the
+ * pause instead.
+ */
+export async function terminalQuiet(
+  paneId: string,
+  { quietMs, maxMs }: { quietMs: number; maxMs: number },
+): Promise<void> {
+  const term = terminals.get(paneId)?.term;
+  if (!term) return;
+  const started = Date.now();
+  let last = started;
+  const watch = term.onWriteParsed(() => {
+    last = Date.now();
+  });
+  try {
+    for (;;) {
+      const now = Date.now();
+      if (now - last >= quietMs || now - started >= maxMs || !terminals.has(paneId)) return;
+      await new Promise((resolve) => setTimeout(resolve, Math.min(50, quietMs)));
+    }
+  } finally {
+    watch.dispose();
+  }
+}
+
 /** Clipboard, buffer and scrollback-find commands for one pane's terminal. */
 export function terminalCommands(paneId: string) {
   const slot = () => terminals.get(paneId);
