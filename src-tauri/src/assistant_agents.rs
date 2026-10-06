@@ -477,12 +477,21 @@ pub fn read_line(agent_id: &str, line: &str, reading: &mut Reading) -> Option<St
             }
             "tool_call" => {
                 reading.tool();
-                Some(tool_label(
-                    str_at(&event, "/toolName")
-                        .or_else(|| str_at(&event, "/title"))
-                        .unwrap_or("tool"),
-                    event.get("rawInput"),
-                ))
+                let name = str_at(&event, "/toolName")
+                    .or_else(|| str_at(&event, "/title"))
+                    .unwrap_or("tool");
+                match name {
+                    // Grok looks MCP tools up before calling them, like
+                    // Claude's ToolSearch: nothing the log needs to show.
+                    "search_tool" => None,
+                    // Every MCP call goes through use_tool; the label is the
+                    // tool it calls, so Keel's read "typing into a pane".
+                    "use_tool" => Some(tool_label(
+                        str_at(&event, "/rawInput/tool_name").unwrap_or("an MCP tool"),
+                        event.pointer("/rawInput/tool_input"),
+                    )),
+                    _ => Some(tool_label(name, event.get("rawInput"))),
+                }
             }
             "end" => {
                 reading.session = str_at(&event, "/sessionId").map(str::to_owned);
@@ -677,6 +686,9 @@ mod tests {
             &[
                 r#"{"type":"text","data":"Let me look"}"#,
                 r#"{"type":"tool_call","toolCallId":"call_1","title":"Read","toolName":"read_file","rawInput":{"path":"a"}}"#,
+                r#"{"type":"tool_call","toolCallId":"call_2","title":"search_tool","toolName":"search_tool","rawInput":{"query":"keel send_to_pane","limit":2}}"#,
+                r#"{"type":"tool_call","toolCallId":"call_3","title":"use_tool","toolName":"use_tool","rawInput":{"tool_name":"keel__send_to_pane","tool_input":{"pane_id":"p1","text":"4"}}}"#,
+                r#"{"type":"tool_call","toolCallId":"call_4","title":"run_terminal_command","toolName":"run_terminal_command","rawInput":{"command":"git status"}}"#,
                 r#"{"type":"text","data":"Here's "}"#,
                 r#"{"type":"text","data":"a summary"}"#,
                 r#"{"type":"end","stopReason":"end_turn","sessionId":"abc123"}"#,
@@ -684,7 +696,7 @@ mod tests {
         );
         assert_eq!(reading.session.as_deref(), Some("abc123"));
         assert_eq!(reading.reply(), "Here's a summary");
-        assert_eq!(labels, ["read_file"]);
+        assert_eq!(labels, ["read_file", "typing into a pane", "$ git status"]);
         assert!(reading.done);
 
         let (failed, _) = read(
