@@ -372,9 +372,10 @@
     }
 
     /*
-     * In the background, the window's contents fade so the desktop shows
-     * through — the window is transparent, and this one opacity is what lets
-     * it. The attribute is written by `lib/windowFocus.ts`.
+     * Once the window has been in the background a while, its contents fade
+     * so the desktop shows through — the window is transparent, and this one
+     * opacity is what lets it. The attribute is written by
+     * `lib/windowFocus.ts`, which also owns the delay.
      */
     html[data-window-inactive] body {
         opacity: var(--keel-idle-opacity);
