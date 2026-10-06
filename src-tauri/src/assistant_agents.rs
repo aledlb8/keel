@@ -231,11 +231,28 @@ pub fn prepare(agent_id: &str, turn: &Turn) -> Result<Launch, String> {
                     launch.session = Some(id);
                 }
             }
+            launch.env.extend(
+                GROK_FOREIGN_CONFIG
+                    .iter()
+                    .map(|key| ((*key).to_string(), "false".to_string())),
+            );
         }
         other => return Err(format!("{other} can't be the main agent yet.")),
     }
     Ok(launch)
 }
+
+/// Grok also loads Claude's and Cursor's MCP servers and hooks. The main agent
+/// gets Grok's own config and Keel's server, as Claude gets only Keel's
+/// (`--strict-mcp-config`): each of those servers was connected on every
+/// message, and Keel's own Claude hooks launched Keel.exe around every tool
+/// call (about 0.3 s each, 3–4 s a message) for events nothing listens to.
+const GROK_FOREIGN_CONFIG: &[&str] = &[
+    "GROK_CLAUDE_MCPS_ENABLED",
+    "GROK_CLAUDE_HOOKS_ENABLED",
+    "GROK_CURSOR_MCPS_ENABLED",
+    "GROK_CURSOR_HOOKS_ENABLED",
+];
 
 fn toml_string(value: &str) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "\"\"".into())
@@ -756,6 +773,14 @@ mod tests {
 
         let grok = prepare("grok", &turn(None)).unwrap();
         assert!(grok.args.contains(&"--trust".to_string()));
+        for key in GROK_FOREIGN_CONFIG {
+            assert!(
+                grok.env
+                    .iter()
+                    .any(|(name, value)| name == key && value == "false"),
+                "{key} isn't switched off"
+            );
+        }
         assert!(home.join(".grok").join("config.toml").is_file());
 
         assert!(prepare("aider", &turn(None)).is_err());
