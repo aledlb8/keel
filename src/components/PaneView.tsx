@@ -19,7 +19,7 @@ import { memo, useLayoutEffect, useRef } from "react";
 
 import { EditorBody, EditorHeader } from "@/components/editor/EditorPane";
 import { ContextMenuEntries } from "@/components/menu/MenuEntries";
-import { paneMenu, terminalMenu } from "@/components/menu/actions";
+import { handoffEntries, paneMenu, terminalMenu } from "@/components/menu/actions";
 import { PaneHeader } from "@/components/PaneHeader";
 import { TerminalSurface } from "@/components/TerminalSurface";
 import {
@@ -27,11 +27,13 @@ import {
   ContextMenuContent,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { canHandOff } from "@/lib/handoff";
 import { applySession } from "@/lib/launch";
 import type { TitleSource } from "@/lib/paneTitle";
 import { agentAccent } from "@/lib/tokens";
 import type { Agent, AgentAccount, Pane, PaneActivity } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { useHandoff } from "@/state/handoff";
 import { useKeel } from "@/state/store";
 
 export interface PaneViewProps {
@@ -148,6 +150,16 @@ export const PaneView = memo(function PaneView({
       state.renaming.id === pane.id,
   );
   const closing = useKeel((state) => pane.id in state.closing);
+  const status = useKeel((state) => state.status[pane.id]);
+  const handoffPhase = useHandoff((state) => state.running[pane.id] ?? null);
+  const handsOff = canHandOff(pane);
+  // An agent back at its prompt is ready to hand off: unseen if it finished
+  // behind your back, or the one you're working in.
+  const finished =
+    handsOff &&
+    !exited &&
+    pane.resumeAgent &&
+    (status === "done" || (focused && (status ?? "idle") === "idle"));
   /** An editor pane: files instead of a process, in the same window. */
   const isEditor = pane.editor !== undefined;
 
@@ -265,6 +277,9 @@ export const PaneView = memo(function PaneView({
               onStopRename={() => useKeel.getState().stopRename()}
               onDragStart={(event) => onDragStart(pane.id, event)}
               onMute={(muted) => useKeel.getState().setPaneMuted(pane.id, muted)}
+              handoff={handsOff ? () => handoffEntries(projectId, pane.id) : null}
+              handoffPhase={handoffPhase}
+              finished={finished}
             />
           )}
 

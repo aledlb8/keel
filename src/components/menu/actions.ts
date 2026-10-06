@@ -26,6 +26,7 @@ import {
   Folders,
   FolderOutput,
   FileSearch,
+  Forward,
   Keyboard,
   Layers,
   LayoutGrid,
@@ -54,6 +55,7 @@ import { terminalCommands } from "@/components/TerminalSurface";
 import type { TitlebarActions } from "@/components/Titlebar";
 import { WorkspaceGlyph } from "@/components/WorkspaceMark";
 import { pickProjectFolder as pickRegisteredFolder } from "@/lib/backend";
+import { canHandOff, handoffTargets, targetLabel } from "@/lib/handoff";
 import { lookingAt, waitingPanes } from "@/lib/island";
 import { deckShortcutKeys, shortcutKeys } from "@/lib/keymap";
 import { listPanes } from "@/lib/tree";
@@ -64,6 +66,7 @@ import {
   useKeel,
   type RenameTarget,
 } from "@/state/store";
+import { handOff, useHandoff } from "@/state/handoff";
 import { useWorkspace } from "@/state/workspace";
 
 const DEFAULT_PROFILE = "__default__";
@@ -707,6 +710,57 @@ export function deckMenu(projectId: string, deckId: string): MenuEntry[] {
   ];
 }
 
+/**
+ * Every agent a pane's conversation can be handed to, then whether to ask
+ * the pane's agent for notes first. Empty when the pane has no conversation
+ * Keel can read.
+ */
+export function handoffEntries(projectId: string, paneId: string): MenuEntry[] {
+  const state = useKeel.getState();
+  const project = state.projects.find((item) => item.id === projectId);
+  const pane = project ? deckOfPane(project, paneId)?.panes[paneId] : undefined;
+  if (!pane || !canHandOff(pane)) return [];
+  const source = state.agents.find((item) => item.id === pane.agentId);
+  const handoff = useHandoff.getState();
+  const busy = paneId in handoff.running;
+
+  const targets = handoffTargets(state.agents, state.accounts).map(
+    ({ agent, profiles }): MenuEntry => {
+      const label = targetLabel(agent, pane.agentId);
+      if (profiles.length === 0) {
+        return {
+          kind: "item",
+          label,
+          disabled: busy,
+          onSelect: () => void handOff(projectId, paneId, agent.id),
+        };
+      }
+      return {
+        kind: "sub",
+        label,
+        disabled: busy,
+        entries: profiles.map(
+          (profile): MenuEntry => ({
+            kind: "item",
+            label: profile.label,
+            onSelect: () => void handOff(projectId, paneId, agent.id, profile.accountId),
+          }),
+        ),
+      };
+    },
+  );
+  return [
+    ...targets,
+    { kind: "separator" },
+    {
+      kind: "check",
+      label: `Ask ${source?.name ?? "the agent"} for notes first`,
+      checked: handoff.askNotes,
+      onChange: (checked) => handoff.setAskNotes(checked),
+    },
+  ];
+}
+
 export function paneMenu(
   projectId: string,
   paneId: string,
@@ -726,6 +780,7 @@ export function paneMenu(
   const profiles = agent?.accountEnv
     ? state.accounts.filter((account) => account.agentId === agent.id)
     : null;
+  const handoff = handoffEntries(projectId, paneId);
 
   return [
     {
@@ -781,6 +836,9 @@ export function paneMenu(
         },
       ],
     },
+    ...(handoff.length > 0
+      ? [{ kind: "sub", label: "Hand off to", icon: Forward, entries: handoff } satisfies MenuEntry]
+      : []),
     { kind: "separator" },
     ...(profiles && agent && !isEditor
       ? [

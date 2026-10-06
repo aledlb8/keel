@@ -706,6 +706,26 @@
     }
 
     /*
+     * Hand off, in a pane's header. An icon while the agent works; once it
+     * has finished, it says its name in the finished colour, at the moment
+     * you'd reach for it.
+     */
+    .k-handoff[data-ready="true"] {
+        grid-auto-flow: column;
+        gap: 4px;
+        padding-inline: 6px;
+        font-size: var(--keel-type-small);
+        background: color-mix(in srgb, var(--keel-done) 14%, transparent);
+        color: color-mix(in srgb, var(--keel-done) 70%, var(--keel-text));
+    }
+
+    .k-handoff[data-ready="true"]:hover,
+    .k-handoff[data-state="open"] {
+        background: color-mix(in srgb, var(--keel-done) 24%, transparent);
+        color: var(--keel-text);
+    }
+
+    /*
      * Docks — the two sidebars.
      *
      * They float exactly the way a pane does: inset half a gutter from

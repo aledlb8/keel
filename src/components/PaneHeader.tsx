@@ -1,6 +1,7 @@
 /**
- * The strip along the top of a pane: which agent, which profile, and the four
- * things you can do to it.
+ * The strip along the top of a pane: which agent, which profile, and what you
+ * can do to it — split, fullscreen, close, and hand its conversation to
+ * another agent.
  *
  * This used to be a chip floating over the terminal on hover, and it could not
  * be made reliable. It shared a stacking context with xterm's own positioned
@@ -22,7 +23,9 @@ import {
   BellOff,
   ChevronDown,
   CircleAlert,
+  Forward,
   History,
+  LoaderCircle,
   Maximize2,
   Minimize2,
   Plus,
@@ -37,6 +40,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
@@ -44,6 +48,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { AgentMark } from "@/components/AgentMark";
 import { InlineRename } from "@/components/InlineRename";
+import { DropdownMenuEntries, type MenuEntry } from "@/components/menu/MenuEntries";
 import { withShortcut } from "@/lib/keymap";
 import { hasAgentHooks } from "@/lib/agentEvents";
 import { cn } from "@/lib/utils";
@@ -82,6 +87,57 @@ export interface PaneHeaderProps {
   onDragStart: (event: React.PointerEvent<HTMLDivElement>) => void;
   /** Unmute from the header indicator. Muting itself is a menu action. */
   onMute: (muted: boolean) => void;
+  /**
+   * Who this pane's conversation can be handed to, built when the menu
+   * opens. `null` when it has no conversation Keel can read.
+   */
+  handoff: (() => MenuEntry[]) | null;
+  /** What a handoff from this pane is doing right now, if one is running. */
+  handoffPhase: string | null;
+  /** The agent has just finished: the moment a handoff is most likely wanted. */
+  finished: boolean;
+}
+
+/** Hand the conversation to another agent: an icon, or a named chip once done. */
+function HandoffButton({
+  entries,
+  phase,
+  ready,
+}: {
+  entries: () => MenuEntry[];
+  phase: string | null;
+  ready: boolean;
+}) {
+  const label = phase ? `Handing off: ${phase.toLowerCase()}…` : "Hand off to another agent";
+  return (
+    <DropdownMenu modal={false}>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          title={label}
+          aria-label={label}
+          aria-busy={phase ? true : undefined}
+          data-ready={ready && !phase ? "true" : undefined}
+          className={cn("k-icon-btn k-handoff h-6", ready && !phase ? "" : "w-6")}
+        >
+          {phase ? (
+            <LoaderCircle className="size-3.5 animate-spin" />
+          ) : (
+            <Forward className="size-3.5" />
+          )}
+          {ready && !phase ? <span>Hand off</span> : null}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        className="min-w-52"
+        onCloseAutoFocus={(event) => event.preventDefault()}
+      >
+        <DropdownMenuLabel>Hand off to</DropdownMenuLabel>
+        <DropdownMenuEntries entries={entries} />
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 }
 
 function HeaderButton({
@@ -132,6 +188,9 @@ export function PaneHeader({
   onStopRename,
   onDragStart,
   onMute,
+  handoff,
+  handoffPhase,
+  finished,
 }: PaneHeaderProps) {
   const agentAccounts = agent
     ? accounts.filter((account) => account.agentId === agent.id)
@@ -285,11 +344,17 @@ export function PaneHeader({
       <div
         className={cn(
           "flex shrink-0 items-center gap-px transition-opacity duration-100",
-          // Quieter on panes you are not using. Purely visual: the buttons take
-          // clicks at every opacity.
-          focused ? "opacity-100" : "opacity-60 group-hover/pane:opacity-100",
+          // Quieter on panes you are not using, unless there's a finished
+          // agent to hand off or a handoff under way. Purely visual: the
+          // buttons take clicks at every opacity.
+          focused || finished || handoffPhase
+            ? "opacity-100"
+            : "opacity-60 group-hover/pane:opacity-100",
         )}
       >
+        {handoff ? (
+          <HandoffButton entries={handoff} phase={handoffPhase} ready={finished} />
+        ) : null}
         <HeaderButton
           label={withShortcut("Split right", "splitRight")}
           onClick={() => onSplit("row")}
