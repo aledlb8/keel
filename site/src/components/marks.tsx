@@ -234,7 +234,8 @@ export function StatusDot({
   return (
     <span
       aria-hidden
-      className={`shrink-0 rounded-full ${status === "working" ? "pulse-dot" : ""}`}
+      // Inline-block: wrapped in a plain span, an inline dot has no size at all.
+      className={`inline-block shrink-0 rounded-full align-middle ${status === "working" ? "pulse-dot" : ""}`}
       style={{ width: size, height: size, background: STATUS_COLOR[status] }}
     />
   );
