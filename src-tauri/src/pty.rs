@@ -16,8 +16,9 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
@@ -27,8 +28,19 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::procs;
 
 /// Read buffer per pane. A blocking `read` returns whatever is available up to
-/// this size, so a chatty agent naturally coalesces into few large sends.
+/// this size — which from ConPTY is usually a few hundred bytes, not this.
 const READ_BUFFER: usize = 64 * 1024;
+/// How long output waits for more before it is sent. ConPTY hands a repaint
+/// over in small pieces, and every send is a script evaluation on the webview's
+/// UI thread; a dozen busy agents made thousands of them a second. A few
+/// milliseconds turns a repaint into one message, well inside a frame, so
+/// typing does not feel it.
+const COALESCE_WINDOW: Duration = Duration::from_millis(4);
+/// Send at once when this much has gathered, whatever the window says.
+const COALESCE_MAX: usize = 256 * 1024;
+/// Reads waiting to be forwarded. Past this the reader stops reading, and the
+/// process blocks on its own output instead of Keel buffering it all.
+const COALESCE_QUEUE: usize = 256;
 /// Reject a single `pty_write` larger than this so a stuck paste cannot pin RAM.
 const MAX_PTY_WRITE: usize = 1_048_576;
 const WRITE_CHUNK: usize = 64 * 1024;
@@ -343,6 +355,29 @@ fn clamp_pty_dims(cols: u16, rows: u16) -> (u16, u16) {
     (cols.clamp(1, PTY_MAX_DIM), rows.clamp(1, PTY_MAX_DIM))
 }
 
+/// Forward PTY output in batches: the first chunk opens a window of
+/// [`COALESCE_WINDOW`], and everything that arrives inside it goes in one send.
+/// Returns when the reader hangs up (after sending what it left) or a send fails.
+fn forward_coalesced(chunks: &mpsc::Receiver<Vec<u8>>, mut send: impl FnMut(Vec<u8>) -> bool) {
+    while let Ok(mut batch) = chunks.recv() {
+        let deadline = Instant::now() + COALESCE_WINDOW;
+        let mut hung_up = false;
+        while batch.len() < COALESCE_MAX {
+            match chunks.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Ok(more) => batch.extend_from_slice(&more),
+                Err(RecvTimeoutError::Timeout) => break,
+                Err(RecvTimeoutError::Disconnected) => {
+                    hung_up = true;
+                    break;
+                }
+            }
+        }
+        if !send(batch) || hung_up {
+            return;
+        }
+    }
+}
+
 fn write_pty_bytes(writer: &mut dyn Write, data: &[u8]) -> Result<(), String> {
     for chunk in data.chunks(WRITE_CHUNK) {
         writer.write_all(chunk).map_err(|err| err.to_string())?;
@@ -535,6 +570,13 @@ pub fn pty_spawn(
         let generation = options.generation;
         let alive = Arc::clone(&alive);
         let app = app.clone();
+        let (chunks, batches) = mpsc::sync_channel::<Vec<u8>>(COALESCE_QUEUE);
+        let forwarder = std::thread::Builder::new()
+            .name(format!("keel-pty-out-{id}"))
+            .spawn(move || {
+                forward_coalesced(&batches, |bytes| on_data.send(Response::new(bytes)).is_ok());
+            })
+            .map_err(|err| format!("could not start the output thread: {err}"))?;
         std::thread::Builder::new()
             .name(format!("keel-pty-{id}"))
             .spawn(move || {
@@ -546,7 +588,7 @@ pub fn pty_spawn(
                             if !alive.load(Ordering::SeqCst) {
                                 break;
                             }
-                            if on_data.send(Response::new(buffer[..n].to_vec())).is_err() {
+                            if chunks.send(buffer[..n].to_vec()).is_err() {
                                 break;
                             }
                         }
@@ -554,6 +596,9 @@ pub fn pty_spawn(
                         Err(_) => break,
                     }
                 }
+                // The last bytes reach the terminal before it hears the exit.
+                drop(chunks);
+                let _ = forwarder.join();
                 alive.store(false, Ordering::SeqCst);
                 // A pane that is relaunched or switches profile gets a fresh
                 // session under the same id before this old reader winds down.
@@ -895,6 +940,65 @@ pub async fn pty_kill(app: AppHandle, id: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn output_queued_together_goes_out_as_one_send() {
+        let (chunks, batches) = mpsc::sync_channel(COALESCE_QUEUE);
+        for piece in [&b"one "[..], b"two ", b"three"] {
+            chunks.send(piece.to_vec()).unwrap();
+        }
+        drop(chunks);
+        let mut sent = Vec::new();
+        forward_coalesced(&batches, |bytes| {
+            sent.push(bytes);
+            true
+        });
+        assert_eq!(sent, vec![b"one two three".to_vec()]);
+    }
+
+    #[test]
+    fn output_after_a_pause_goes_out_separately() {
+        let (chunks, batches) = mpsc::sync_channel(COALESCE_QUEUE);
+        let writer = std::thread::spawn(move || {
+            chunks.send(b"first".to_vec()).unwrap();
+            std::thread::sleep(COALESCE_WINDOW * 10);
+            chunks.send(b"second".to_vec()).unwrap();
+        });
+        let mut sent = Vec::new();
+        forward_coalesced(&batches, |bytes| {
+            sent.push(bytes);
+            true
+        });
+        writer.join().unwrap();
+        assert_eq!(sent, vec![b"first".to_vec(), b"second".to_vec()]);
+    }
+
+    #[test]
+    fn a_full_batch_does_not_wait_for_the_window() {
+        let (chunks, batches) = mpsc::sync_channel(COALESCE_QUEUE);
+        chunks.send(vec![b'a'; COALESCE_MAX]).unwrap();
+        chunks.send(b"rest".to_vec()).unwrap();
+        drop(chunks);
+        let mut sizes = Vec::new();
+        forward_coalesced(&batches, |bytes| {
+            sizes.push(bytes.len());
+            true
+        });
+        assert_eq!(sizes, vec![COALESCE_MAX, 4]);
+    }
+
+    #[test]
+    fn a_failed_send_stops_forwarding() {
+        let (chunks, batches) = mpsc::sync_channel(COALESCE_QUEUE);
+        chunks.send(vec![b'a'; COALESCE_MAX]).unwrap();
+        chunks.send(b"rest".to_vec()).unwrap();
+        let mut sends = 0;
+        forward_coalesced(&batches, |_| {
+            sends += 1;
+            false
+        });
+        assert_eq!(sends, 1);
+    }
 
     #[test]
     fn env_name_accepts_shell_variables() {
