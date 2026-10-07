@@ -83,6 +83,39 @@ function proposeGrid(term: Terminal, host: HTMLElement) {
   };
 }
 
+/**
+ * Turn a terminal's painting on and off by hand.
+ *
+ * xterm stops painting only when an IntersectionObserver says its screen has
+ * left the viewport. A hidden pane stays where it is under `visibility:
+ * hidden`, so that never happens, and every agent on every hidden deck was
+ * repainted on every write. Keel knows which panes are on screen, so it says
+ * so instead, and xterm's own observer is switched off so it cannot overrule
+ * that. A paused terminal still parses output into its buffer and repaints in
+ * full when shown. Private API: if a release renames it, this returns null and
+ * xterm keeps its own behaviour.
+ */
+function paintSwitch(term: Terminal): ((on: boolean) => void) | null {
+  const service = (
+    term as unknown as {
+      _core: {
+        _renderService?: {
+          _handleIntersectionChange?: (entry: {
+            isIntersecting: boolean;
+            intersectionRatio: number;
+          }) => void;
+          _observerDisposable?: { clear?: () => void };
+        };
+      };
+    }
+  )._core._renderService;
+  const handle = service?._handleIntersectionChange;
+  if (typeof handle !== "function") return null;
+  service!._observerDisposable?.clear?.();
+  return (on) =>
+    handle.call(service, { isIntersecting: on, intersectionRatio: on ? 1 : 0 });
+}
+
 const isWindows = /Windows/i.test(navigator.userAgent);
 
 /**
@@ -484,7 +517,11 @@ export const TerminalSurface = memo(function TerminalSurface({
     findPrevious: () => false,
   });
   /** Wired up by the setup effect; the later effects only ever call these. */
-  const actions = useRef({ refit: () => {}, syncPty: () => {} });
+  const actions = useRef({
+    refit: () => {},
+    syncPty: () => {},
+    show: (_visible: boolean) => {},
+  });
   /** The size the PTY was last told about, and whether there is a PTY to tell. */
   const pty = useRef({ ready: false, cols: 0, rows: 0 });
   /** Last command string sampled, so adopting a CLI can read the screen already painted. */
@@ -618,6 +655,7 @@ export const TerminalSurface = memo(function TerminalSurface({
     term.unicode.activeVersion = "11";
 
     term.open(host);
+    const paint = paintSwitch(term);
     termRef.current = term;
     searchAddonRef.current = search;
     terminals.set(paneId, { term, search, find: findApi });
@@ -637,6 +675,8 @@ export const TerminalSurface = memo(function TerminalSurface({
     // CSS size of the host the last time the grid was recelled. Used to scale
     // the existing canvas during a live resize instead of blanking it.
     let lastFit = { w: 0, h: 0 };
+    // On screen. Effect 2 keeps this current; until it runs, assume not.
+    let shown = false;
 
     const syncPty = () => {
       const current = pty.current;
@@ -677,6 +717,12 @@ export const TerminalSurface = memo(function TerminalSurface({
     const refit = (mode: "live" | "commit" = "commit") => {
       if (disposed) return;
       if (host.clientWidth === 0 || host.clientHeight === 0) return;
+      // A hidden pane keeps the grid it has until it is shown again (effect 2
+      // refits then). Grid and PTY still agree, so nothing garbles, and a
+      // window resize no longer reflows the scrollback of every terminal in
+      // the app and makes every agent behind it repaint. The very first fit
+      // still happens, so a pane restored on a hidden deck starts the right size.
+      if (!shown && lastFit.w > 0) return;
 
       if (mode === "live" && lastFit.w > 0 && lastFit.h > 0) {
         const sx = host.clientWidth / lastFit.w;
@@ -702,7 +748,14 @@ export const TerminalSurface = memo(function TerminalSurface({
       commitFit();
     };
 
-    actions.current = { refit: () => refit("commit"), syncPty };
+    actions.current = {
+      refit: () => refit("commit"),
+      syncPty,
+      show: (visible) => {
+        shown = visible;
+        paint?.(visible);
+      },
+    };
 
     let webgl: WebglAddon | null = null;
     const slot: GpuSlot = {
@@ -856,15 +909,18 @@ export const TerminalSurface = memo(function TerminalSurface({
       cwd7.dispose();
       term.dispose();
       termRef.current = null;
-      actions.current = { refit: () => {}, syncPty: () => {} };
+      actions.current = { refit: () => {}, syncPty: () => {}, show: () => {} };
     };
   }, [paneId]);
 
-  // 2. GPU rendering follows visibility; the `gpu` pool above decides when a
-  //    context is taken and when it is reclaimed. Coming back on screen, force
-  //    a redraw so a compositor that discarded the hidden canvas does not show
-  //    one blank frame.
+  // 2. Painting and GPU rendering follow visibility; the `gpu` pool above
+  //    decides when a context is taken and when it is reclaimed. Painting is
+  //    switched on first, so the renderer a returning pane attaches draws.
+  //    Coming back on screen, force a redraw so a compositor that discarded the
+  //    hidden canvas does not show one blank frame, and catch the grid up with
+  //    any resize it sat out.
   useEffect(() => {
+    actions.current.show(visible);
     gpu.setVisible(paneId, visible);
     if (!visible) return;
     const term = termRef.current;
