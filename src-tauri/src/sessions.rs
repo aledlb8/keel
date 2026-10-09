@@ -74,25 +74,107 @@ pub(crate) fn grok_session_exists(
     if !is_encoded_segment(&encoded) || !is_encoded_segment(id) {
         return false;
     }
-    let root = if let Some(account) = account {
+    grok_home(app, account)
+        .is_some_and(|root| root.join("sessions").join(encoded).join(id).is_dir())
+}
+
+#[derive(serde::Deserialize)]
+struct ActiveSession {
+    session_id: String,
+    pid: u32,
+    #[serde(default)]
+    opened_at: Option<String>,
+}
+
+/// The chat a Grok process in this pane has open, read from Grok's registry of
+/// live sessions (`active_sessions.json`). On Windows no Grok hook can report
+/// it without a console window. Matched by owning process, never by time.
+#[tauri::command]
+pub async fn grok_pane_session(
+    app: AppHandle,
+    pane_id: String,
+    account_id: Option<String>,
+) -> Result<Option<String>, String> {
+    let Some(shell) = app.state::<crate::pty::PtyManager>().shell_pid(&pane_id) else {
+        return Ok(None);
+    };
+    crate::blocking::run(move || {
+        let Some(home) = grok_home(&app, account_id.as_deref()) else {
+            return Ok(None);
+        };
+        let Ok(text) = std::fs::read_to_string(home.join("active_sessions.json")) else {
+            return Ok(None);
+        };
+        let entries: Vec<ActiveSession> = serde_json::from_str(&text).unwrap_or_default();
+        Ok(pane_session(
+            &entries,
+            &crate::procs::process_snapshot(),
+            shell,
+            crate::procs::process_started_ms,
+        ))
+    })
+    .await
+}
+
+/// The newest entry owned by a `grok` process under this shell. An entry
+/// opened before its process started belongs to an earlier holder of the PID.
+fn pane_session(
+    entries: &[ActiveSession],
+    rows: &[crate::procs::ProcessRow],
+    shell: u32,
+    started_ms: impl Fn(u32) -> Option<u64>,
+) -> Option<String> {
+    let mut grok = std::collections::HashSet::new();
+    let mut frontier = vec![shell];
+    let mut seen = std::collections::HashSet::from([shell]);
+    while let Some(parent) = frontier.pop() {
+        for row in rows.iter().filter(|row| row.parent == parent) {
+            if row.pid == 0 || !seen.insert(row.pid) {
+                continue;
+            }
+            if crate::procs::executable_stem(&row.image) == "grok" {
+                grok.insert(row.pid);
+            }
+            frontier.push(row.pid);
+        }
+    }
+    let opened = |entry: &ActiveSession| {
+        let text = entry.opened_at.as_deref()?;
+        let at = time::OffsetDateTime::parse(text, &time::format_description::well_known::Rfc3339)
+            .ok()?;
+        u64::try_from(at.unix_timestamp_nanos() / 1_000_000).ok()
+    };
+    entries
+        .iter()
+        .filter(|entry| grok.contains(&entry.pid) && is_session_id(&entry.session_id))
+        .filter(|entry| match (started_ms(entry.pid), opened(entry)) {
+            // A second of slack for clocks read by different processes.
+            (Some(started), Some(opened)) => opened + 1_000 >= started,
+            _ => true,
+        })
+        .max_by_key(|entry| opened(entry).unwrap_or(0))
+        .map(|entry| entry.session_id.clone())
+}
+
+fn grok_home(app: &AppHandle, account: Option<&str>) -> Option<std::path::PathBuf> {
+    if let Some(account) = account {
         if account.is_empty()
             || !account
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
         {
-            return false;
+            return None;
         }
-        app.path()
+        return app
+            .path()
             .app_config_dir()
             .ok()
-            .map(|p| p.join("accounts").join(account))
-    } else {
-        std::env::var_os("GROK_HOME")
-            .filter(|v| !v.is_empty())
-            .map(std::path::PathBuf::from)
-            .or_else(|| crate::pty::home_dir().map(|p| p.join(".grok")))
-    };
-    root.is_some_and(|root| root.join("sessions").join(encoded).join(id).is_dir())
+            .map(|p| p.join("accounts").join(account));
+    }
+    std::env::var_os("GROK_HOME")
+        .filter(|v| !v.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| crate::pty::home_dir().map(|p| p.join(".grok")))
 }
 
 pub(crate) fn percent_encode(input: &str) -> String {
@@ -186,6 +268,48 @@ mod tests {
         let repaired = document.clone();
         super::repair_imported_grok_panes(&mut document, confirm);
         assert_eq!(document, repaired);
+    }
+
+    #[test]
+    fn grok_session_comes_from_this_panes_own_process() {
+        use crate::procs::ProcessRow;
+        let row = |pid, parent, image: &str| ProcessRow {
+            pid,
+            parent,
+            image: image.into(),
+        };
+        // Shell 10 runs grok 11; shell 20 (another pane) runs grok 21.
+        let rows = [
+            row(10, 1, "pwsh.exe"),
+            row(11, 10, "grok.exe"),
+            row(12, 11, "node.exe"),
+            row(20, 1, "pwsh.exe"),
+            row(21, 20, "grok.exe"),
+        ];
+        let entry = |id: &str, pid, opened: &str| super::ActiveSession {
+            session_id: id.into(),
+            pid,
+            opened_at: Some(opened.into()),
+        };
+        let started = |_| Some(1_760_000_000_000);
+        let entries = [
+            entry("other-pane", 21, "2025-10-09T08:53:30Z"),
+            entry("first-chat", 11, "2025-10-09T08:53:21Z"),
+            entry("after-new", 11, "2025-10-09T08:54:00.5Z"),
+            entry("child-process", 12, "2025-10-09T08:55:00Z"),
+        ];
+        assert_eq!(
+            super::pane_session(&entries, &rows, 10, started).as_deref(),
+            Some("after-new")
+        );
+        assert_eq!(
+            super::pane_session(&entries, &rows, 20, started).as_deref(),
+            Some("other-pane")
+        );
+        // Left behind by an earlier process that had the same PID.
+        let stale = [entry("stale", 11, "2025-10-09T08:00:00Z")];
+        assert_eq!(super::pane_session(&stale, &rows, 10, started), None);
+        assert_eq!(super::pane_session(&entries, &rows, 30, started), None);
     }
 
     #[test]

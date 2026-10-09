@@ -86,6 +86,16 @@ pub struct PtyManager {
 }
 
 impl PtyManager {
+    /// The pane's shell process, while it is running.
+    pub fn shell_pid(&self, id: &str) -> Option<u32> {
+        let sessions = self.sessions.lock().ok()?;
+        let session = sessions.get(id)?;
+        if !session.alive.load(Ordering::SeqCst) {
+            return None;
+        }
+        session.child.process_id()
+    }
+
     pub fn shutdown_all(&self) {
         let mut sessions = match self.sessions.lock() {
             Ok(guard) => guard,

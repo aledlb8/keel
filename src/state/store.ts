@@ -942,6 +942,23 @@ export const useKeel = create<KeelState>((set, get) => {
     });
   }
 
+  /**
+   * Grok's hooks cannot run on Windows without flashing a console, so read the
+   * chat its process in this pane has open. That also follows `/new`.
+   */
+  async function captureGrokSession(paneId: string) {
+    const pane = findPane(paneId);
+    if (!pane?.agentId || !pane.resumeAgent) return;
+    const agent = get().agents.find((entry) => entry.id === pane.agentId);
+    if (agent?.session?.store !== "grok") return;
+    const sessionId = await backend
+      .grokPaneSession(paneId, pane.accountId)
+      .catch(() => null);
+    if (sessionId && findPane(paneId)?.agentId === agent.id) {
+      get().bindSession(paneId, sessionId);
+    }
+  }
+
   function armActivity(paneId: string) {
     if (!activity.has(paneId)) activity.set(paneId, new AgentRuntime());
     set((state) => {
@@ -2533,6 +2550,12 @@ export const useKeel = create<KeelState>((set, get) => {
       }
 
       const signal = activity.get(paneId)?.input(data ?? "", performance.now());
+      if (data === "\r" || data === "\r\n") {
+        // Grok registers a chat once its first message is sent.
+        for (const delay of [2_000, 10_000]) {
+          setTimeout(() => void captureGrokSession(paneId), delay);
+        }
+      }
       if (signal === "report") return;
       acknowledge(paneId);
     },

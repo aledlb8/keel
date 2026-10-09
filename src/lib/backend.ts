@@ -22,6 +22,14 @@ export function agentCataloguePath(): Promise<string> {
   return invoke("agent_catalogue_path");
 }
 
+/** The chat the Grok process in this pane has open, from Grok's own registry. */
+export function grokPaneSession(
+  paneId: string,
+  accountId: string | null,
+): Promise<string | null> {
+  return invoke("grok_pane_session", { paneId, accountId });
+}
+
 export function loadState(): Promise<PersistedState | null> {
   return invoke("state_load");
 }

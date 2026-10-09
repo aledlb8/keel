@@ -65,6 +65,7 @@ pub fn run() {
             agents::agent_catalogue_defaults,
             agents::agent_catalogue_save,
             store::state_load,
+            sessions::grok_pane_session,
             store::state_save,
             store::state_path,
             store::list_subdirectories,

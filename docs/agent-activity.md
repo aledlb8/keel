@@ -106,6 +106,15 @@ Unlinked panes launch fresh. The unused recent-session API, private SQLite schem
 readers, timestamp discovery code and SQLite dependency have been removed.
 `sessions.rs` retains ID validation and the exact-ID legacy Grok identity repair.
 
+Grok is the exception to hook capture on Windows. Its command hooks would open a
+console window per event, and its HTTP hooks accept only `https://` and refuse
+loopback. Instead, Enter in a Grok pane makes Keel read Grok's own registry of
+live chats (`active_sessions.json`) after 2 and 10 seconds. It takes the entry
+whose `pid` is a `grok` process under that pane's shell, newest first, and
+ignores entries opened before that process started (an earlier holder of the
+PID). New Grok panes still launch bare; the captured ID is resumed with
+`--resume`, and a `/new` is picked up on the next Enter.
+
 Grok also imports the hooks in `~/.claude/settings.json`, which holds Keel's Claude
 observer. On Windows every Keel shell sets `GROK_CLAUDE_HOOKS_ENABLED=0`, so
 Grok skips that file instead of starting a console shell for each event. A
