@@ -481,6 +481,12 @@ pub fn pty_spawn(
         cmd.cwd(cwd);
     }
 
+    // Grok also runs the hooks in ~/.claude/settings.json, where Keel's Claude
+    // observer lives. On Windows Grok starts each one through a console shell,
+    // which flashes a window per event, and Keel ignores what they report from
+    // Grok anyway. Set for the whole shell so a Grok typed by hand is covered.
+    #[cfg(windows)]
+    cmd.env("GROK_CLAUDE_HOOKS_ENABLED", "0");
     for (key, value) in &options.env {
         if is_env_name(key) && is_env_value(value) {
             cmd.env(key, value);

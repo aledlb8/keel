@@ -106,6 +106,11 @@ Unlinked panes launch fresh. The unused recent-session API, private SQLite schem
 readers, timestamp discovery code and SQLite dependency have been removed.
 `sessions.rs` retains ID validation and the exact-ID legacy Grok identity repair.
 
+Grok also imports the hooks in `~/.claude/settings.json`, which holds Keel's Claude
+observer. On Windows every Keel shell sets `GROK_CLAUDE_HOOKS_ENABLED=0`, so
+Grok skips that file instead of starting a console shell for each event. A
+user's own Claude hooks therefore do not run inside Grok in a Keel pane.
+
 The linked indicator confirms a captured ID, not a successful future resume.
 Deleted provider history, disabled persistence, external account changes or an
 unsupported CLI version can prevent resumption. A hard kill can interrupt a save.
