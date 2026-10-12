@@ -90,7 +90,7 @@ export function VpnDialog() {
       >
         <header className="flex items-start gap-3 px-5 pb-4 pt-5">
           <span
-            className="grid size-9 shrink-0 place-items-center rounded-[10px] transition-colors"
+            className="grid size-9 shrink-0 place-items-center rounded-control transition-colors"
             style={{
               color,
               background: `color-mix(in srgb, ${color} 14%, transparent)`,
@@ -156,7 +156,7 @@ export function VpnDialog() {
 
           {!vpn.openvpnPath ? (
             <div
-              className="flex gap-2.5 rounded-[var(--keel-r-control)] px-3 py-2.5"
+              className="flex gap-2.5 rounded-control px-3 py-2.5"
               style={{
                 background:
                   "color-mix(in srgb, var(--keel-ansi-yellow) 9%, transparent)",
@@ -238,7 +238,7 @@ function StatusCard({ vpn }: { vpn: VpnState }) {
           : "This PC is using your normal internet.";
 
   return (
-    <div className="overflow-hidden rounded-[12px] border border-line bg-[color:var(--keel-void)]">
+    <div className="overflow-hidden rounded-window border border-line bg-[color:var(--keel-void)]">
       <div className="flex items-center gap-3 px-3.5 py-3">
         <StatusLight tone={tone} color={color} size={10} />
         <div className="min-w-0 flex-1">
@@ -381,7 +381,7 @@ function SwitchRow({
       role="switch"
       aria-checked={checked}
       onClick={() => onChange(!checked)}
-      className="flex items-center gap-3 rounded-[var(--keel-r-control)] text-left outline-none"
+      className="flex items-center gap-3 rounded-control text-left outline-none"
     >
       <span className="min-w-0 flex-1">
         <span className="block text-row font-medium text-foreground">

@@ -474,7 +474,7 @@ export function Canvas({
           <button
             type="button"
             onClick={onAddTerminals}
-            className="flex w-[320px] flex-col items-center gap-2 rounded-[var(--keel-r-window)] border border-dashed border-line-strong px-6 py-7 text-center transition-colors hover:border-foreground/25 hover:bg-veil"
+            className="flex w-[320px] flex-col items-center gap-2 rounded-window border border-dashed border-line-strong px-6 py-7 text-center transition-colors hover:border-foreground/25 hover:bg-veil"
           >
             <Terminal className="size-5 text-faint" />
             <span className="text-title text-foreground">Add terminals</span>
@@ -482,7 +482,7 @@ export function Canvas({
               Pick how many of each agent to run in {project.name}.
             </span>
             {shortcutKeys("addTerminals") ? (
-              <span className="mt-1 rounded-[var(--keel-r-chip)] bg-veil-2 px-2 py-1 text-small font-medium text-faint">
+              <span className="mt-1 rounded-chip bg-veil-2 px-2 py-1 text-small font-medium text-faint">
                 {shortcutKeys("addTerminals")}
               </span>
             ) : null}
@@ -523,18 +523,18 @@ function DropOverlay({
     <div className="absolute inset-0 z-40 cursor-grabbing">
       {source ? (
         <div
-          className="k-fade-in absolute rounded-[var(--keel-r-window)] bg-[color:var(--keel-void)]/65"
+          className="k-fade-in absolute rounded-window bg-[color:var(--keel-void)]/65"
           style={source}
         />
       ) : null}
 
       {landing ? (
         <div
-          className="k-fade-in absolute grid place-items-center rounded-[var(--keel-r-window)] border border-foreground/35 bg-foreground/[0.07] transition-[left,top,width,height] duration-200 ease-[cubic-bezier(0.32,0.72,0,1)]"
+          className="k-fade-in absolute grid place-items-center rounded-window border border-foreground/35 bg-foreground/[0.07] transition-[left,top,width,height] duration-200 ease-fold"
           style={landing}
         >
           {drag.target?.zone === "center" ? (
-            <span className="rounded-[var(--keel-r-chip)] bg-popover px-2 py-1 text-body text-dim shadow-[var(--keel-lift)]">
+            <span className="rounded-chip bg-popover px-2 py-1 text-body text-dim shadow-[var(--keel-lift)]">
               Swap places
             </span>
           ) : null}
@@ -542,7 +542,7 @@ function DropOverlay({
       ) : null}
 
       <div
-        className="k-chip-in pointer-events-none absolute left-0 top-0 flex h-7 items-center gap-1.5 rounded-[var(--keel-r-control)] border border-line-strong bg-popover pl-1.5 pr-2.5 text-body shadow-[var(--keel-lift-strong)]"
+        className="k-chip-in pointer-events-none absolute left-0 top-0 flex h-7 items-center gap-1.5 rounded-control border border-line-strong bg-popover pl-1.5 pr-2.5 text-body shadow-[var(--keel-lift-strong)]"
         style={{ transform: `translate(${drag.x + 14}px, ${drag.y + 14}px)` }}
       >
         <AgentMark

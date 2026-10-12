@@ -92,6 +92,11 @@
     --radius-window: var(--keel-r-window);
     --radius-control: var(--keel-r-control);
     --radius-chip: var(--keel-r-chip);
+    --radius-nub: var(--keel-r-nub);
+
+    --ease-settle: var(--keel-ease-settle);
+    --ease-leave: var(--keel-ease-leave);
+    --ease-fold: var(--keel-ease-fold);
     --radius-sm: var(--keel-r-chip);
     --radius-md: var(--keel-r-control);
     --radius-lg: var(--keel-r-window);
@@ -250,6 +255,12 @@
     --keel-r-window: 12px;
     --keel-r-control: 8px;
     --keel-r-chip: 6px;
+    /*
+     * Not a fourth size to choose from but the floor of the third: a mark no
+     * taller than a line of small text — a keycap, a hash, a ref, a git
+     * letter — cannot carry a 6px corner without turning into a pill.
+     */
+    --keel-r-nub: 4px;
     --keel-blur: 20px;
     --keel-blur-strong: 30px;
     /* Air around the floating terminals. Docked chrome never uses this. */
@@ -267,6 +278,18 @@
     --keel-h-dense: 28px;
     --keel-h-control: 26px;
     --keel-h-chip: 22px;
+
+    /*
+     * Three curves, one per kind of movement, so everything that arrives
+     * arrives the same way.
+     *
+     *   settle  something arriving: quick out of the gate, soft landing
+     *   leave   something going: gathers speed and is gone
+     *   fold    a shape changing size — a dock, the island — longer, calmer
+     */
+    --keel-ease-settle: cubic-bezier(0.2, 0.8, 0.2, 1);
+    --keel-ease-leave: cubic-bezier(0.4, 0, 1, 1);
+    --keel-ease-fold: cubic-bezier(0.32, 0.72, 0, 1);
 
     /* Two lifts. A pane gets the first, anything modal gets the second. */
     --keel-lift: 0 10px 30px -12px rgba(0, 0, 0, 0.75);
@@ -544,13 +567,13 @@
      */
     .k-row[data-motion="enter"] {
         overflow: hidden;
-        animation: k-row-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+        animation: k-row-in 220ms var(--keel-ease-settle) both;
     }
 
     .k-row[data-motion="leave"] {
         overflow: hidden;
         pointer-events: none;
-        animation: k-row-out 170ms cubic-bezier(0.4, 0, 1, 1) forwards;
+        animation: k-row-out 170ms var(--keel-ease-leave) forwards;
     }
 
     /*
@@ -568,7 +591,7 @@
         grid-template-rows: 0fr;
         opacity: 0;
         transition:
-            grid-template-rows 200ms cubic-bezier(0.2, 0.8, 0.2, 1),
+            grid-template-rows 200ms var(--keel-ease-settle),
             opacity 140ms ease;
     }
 
@@ -586,7 +609,7 @@
         min-height: 0;
         overflow: hidden;
         transform: translateY(-3px);
-        transition: transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+        transition: transform 200ms var(--keel-ease-settle);
     }
 
     .k-fold[data-open="true"] > .k-fold-body {
@@ -649,7 +672,7 @@
     /* A closing pane shrinks back into the ground before it is removed. */
     .k-pane-out {
         pointer-events: none;
-        animation: k-pane-out 170ms cubic-bezier(0.4, 0, 1, 1) forwards;
+        animation: k-pane-out 170ms var(--keel-ease-leave) forwards;
     }
 
     /* The drop preview on the canvas settles in rather than popping. */
@@ -658,7 +681,7 @@
     }
 
     .k-chip-in {
-        animation: k-chip-in 180ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+        animation: k-chip-in 180ms var(--keel-ease-settle) both;
     }
 
     /* Quiet heading over a group of rows. Sentence case, never tracked-out caps. */
@@ -741,7 +764,7 @@
      * mid-flight. The curve is the island's: quick to start, soft to land.
      */
     .k-dock {
-        --k-fold: cubic-bezier(0.32, 0.72, 0, 1);
+        --k-fold: var(--keel-ease-fold);
         /* `--dock-width` is set on the element: it is dragged, and the
          * numbers live with the seam that drags them, in `Dock.tsx`. The rail
          * is not yours to resize, so it stays here. */
@@ -1334,7 +1357,7 @@
         place-items: center;
         width: 16px;
         height: 16px;
-        border-radius: 4px;
+        border-radius: var(--keel-r-nub);
         background: color-mix(in srgb, var(--git) 14%, transparent);
         color: var(--git);
         font-size: var(--keel-type-micro);
@@ -1345,7 +1368,7 @@
     .k-hash {
         flex-shrink: 0;
         padding-inline: 5px;
-        border-radius: 4px;
+        border-radius: var(--keel-r-nub);
         background: var(--keel-veil-2);
         color: var(--keel-text-dim);
         font-family: var(--keel-font-mono);
@@ -1353,18 +1376,37 @@
         line-height: 18px;
     }
 
-    .k-kbd {
-        display: grid;
+    /*
+     * A key you press, drawn as one: a hairline ring with a heavier bottom
+     * edge, so it reads as a cap standing on the surface rather than a tag
+     * printed on it. Every hint that names a key — the launcher, the island,
+     * the shortcuts sheet — uses this one shape.
+     */
+    .k-keycap {
+        display: inline-grid;
         flex-shrink: 0;
         place-items: center;
         min-width: 18px;
-        height: 16px;
+        height: 18px;
         padding-inline: 4px;
-        border-radius: 4px;
-        background: var(--keel-veil-2);
+        border-radius: var(--keel-r-nub);
+        box-shadow:
+            inset 0 0 0 1px var(--keel-line-strong),
+            inset 0 -1px 0 0 var(--keel-line-strong);
         color: var(--keel-text-faint);
-        font-family: inherit;
+        font-family: var(--font-sans);
         font-size: var(--keel-type-micro);
+        font-weight: 500;
+        line-height: 1;
+    }
+
+    /* The shortcuts sheet, where the keys are the content, not a hint. */
+    .k-keycap[data-size="lg"] {
+        min-width: 24px;
+        height: 24px;
+        padding-inline: 6px;
+        border-radius: var(--keel-r-chip);
+        font-size: var(--keel-type-small);
     }
 
     .k-tag {
@@ -1673,7 +1715,7 @@
         max-width: 132px;
         height: 16px;
         padding-inline: 5px;
-        border-radius: 4px;
+        border-radius: var(--keel-r-nub);
         background: color-mix(in srgb, var(--ref) 14%, transparent);
         color: var(--ref);
         font-size: var(--keel-type-micro);
@@ -1776,7 +1818,7 @@
         box-shadow:
             var(--keel-lift),
             inset 0 0 0 1px var(--keel-line-strong);
-        animation: k-chip-in 180ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+        animation: k-chip-in 180ms var(--keel-ease-settle) both;
     }
 
     .k-selbar-btn {
@@ -2352,7 +2394,7 @@
      * is about to do. flex-grow animates where a width in a flex row cannot.
      */
     .k-pane-in {
-        animation: k-pane-in 240ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+        animation: k-pane-in 240ms var(--keel-ease-settle) both;
     }
 
     /* The caret in the newest pane on the stage. */
@@ -2369,7 +2411,7 @@
     .k-island {
         box-shadow: inset 0 1px 0 0 var(--keel-sheen);
         transition:
-            width 560ms cubic-bezier(0.32, 0.72, 0, 1),
+            width 560ms var(--keel-ease-fold),
             background-color 220ms ease;
     }
 
@@ -2383,7 +2425,7 @@
 
     /* What it says comes into focus as the shape arrives. */
     .k-island-swap {
-        animation: k-island-swap 420ms cubic-bezier(0.2, 0.8, 0.2, 1) 60ms both;
+        animation: k-island-swap 420ms var(--keel-ease-settle) 60ms both;
     }
 
     /* An agent finishing lights the rim in its colour, then lets it settle. */
@@ -2394,7 +2436,7 @@
         pointer-events: none;
         box-shadow: inset 0 0 0 1px
             color-mix(in srgb, var(--island-accent) 38%, transparent);
-        animation: k-island-glow 1800ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+        animation: k-island-glow 1800ms var(--keel-ease-settle) both;
     }
 
     /* Agents still working: a quiet light moving along the bottom edge. */
@@ -2612,7 +2654,7 @@
 
 .k-tip[data-ready] {
     opacity: 1;
-    animation: k-tip-in 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    animation: k-tip-in 140ms var(--keel-ease-settle);
 }
 
 .k-tip[data-side="bottom"] {
@@ -2666,7 +2708,7 @@
 .k-tip-keys kbd {
     min-width: 18px;
     padding: 1px 5px;
-    border-radius: 4px;
+    border-radius: var(--keel-r-nub);
     background: var(--keel-veil-2);
     box-shadow: inset 0 -1px 0 var(--keel-line-strong);
     color: var(--keel-text-dim);

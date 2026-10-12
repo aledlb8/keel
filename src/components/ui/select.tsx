@@ -30,10 +30,10 @@ function SelectValue({
 const TRIGGER = {
   /** A form field: bordered, full width, matches the text inputs. */
   field:
-    "h-9 w-full justify-between rounded-[var(--keel-r-control)] border border-line-strong bg-veil pl-3 pr-2.5 text-row hover:border-foreground/20 hover:bg-veil-2 focus-visible:border-foreground/40 data-[state=open]:border-foreground/40 data-[state=open]:bg-veil-2",
+    "h-9 w-full justify-between rounded-control border border-line-strong bg-veil pl-3 pr-2.5 text-row hover:border-foreground/20 hover:bg-veil-2 focus-visible:border-foreground/40 data-[state=open]:border-foreground/40 data-[state=open]:bg-veil-2",
   /** Inline in a line of text: no box until you reach for it, like a button. */
   ghost:
-    "h-8 rounded-[var(--keel-r-control)] pl-2 pr-1.5 hover:bg-veil-2 focus-visible:bg-veil-2 data-[state=open]:bg-veil-2",
+    "h-8 rounded-control pl-2 pr-1.5 hover:bg-veil-2 focus-visible:bg-veil-2 data-[state=open]:bg-veil-2",
 } as const
 
 function SelectTrigger({
@@ -79,7 +79,7 @@ function SelectContent({
         align={align}
         sideOffset={sideOffset}
         className={cn(
-          "relative z-50 max-h-(--radix-select-content-available-height) min-w-(--radix-select-trigger-width) origin-(--radix-select-content-transform-origin) overflow-hidden rounded-[var(--keel-r-window)] border border-line-strong bg-popover text-popover-foreground shadow-[var(--keel-lift-strong)] duration-100 data-[side=bottom]:slide-in-from-top-1 data-[side=top]:slide-in-from-bottom-1 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "relative z-50 max-h-(--radix-select-content-available-height) min-w-(--radix-select-trigger-width) origin-(--radix-select-content-transform-origin) overflow-hidden rounded-window border border-line-strong bg-popover text-popover-foreground shadow-[var(--keel-lift-strong)] duration-100 data-[side=bottom]:slide-in-from-top-1 data-[side=top]:slide-in-from-bottom-1 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           className
         )}
         {...props}
@@ -120,7 +120,7 @@ function SelectItem({
     <SelectPrimitive.Item
       data-slot="select-item"
       className={cn(
-        "relative flex w-full cursor-default items-center gap-2 rounded-[var(--keel-r-chip)] py-[7px] pr-8 pl-2.5 text-row outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0",
+        "relative flex w-full cursor-default items-center gap-2 rounded-chip py-[7px] pr-8 pl-2.5 text-row outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0",
         className
       )}
       {...props}

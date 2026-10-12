@@ -22,12 +22,12 @@ let focusBeforeMenu: Element | null = null;
  * Radix CSS variables for size and origin differ between the two.
  */
 export const MENU_SURFACE =
-  "z-50 min-w-[216px] overflow-x-hidden overflow-y-auto rounded-[var(--keel-r-window)] border border-line-strong bg-popover p-1 text-popover-foreground shadow-[var(--keel-lift-strong)] backdrop-blur-[var(--keel-blur-strong)] duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95";
+  "z-50 min-w-[216px] overflow-x-hidden overflow-y-auto rounded-window border border-line-strong bg-popover p-1 text-popover-foreground shadow-[var(--keel-lift-strong)] backdrop-blur-[var(--keel-blur-strong)] duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95";
 
 const SURFACE = `${MENU_SURFACE} max-h-(--radix-context-menu-content-available-height) origin-(--radix-context-menu-content-transform-origin)`;
 
 export const MENU_ITEM =
-  "relative flex h-[var(--keel-h-row)] cursor-default items-center gap-2.5 rounded-[var(--keel-r-chip)] px-2.5 text-row text-foreground outline-hidden select-none focus:bg-veil-3 data-disabled:pointer-events-none data-disabled:opacity-40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5 [&_svg]:text-dim focus:[&_svg]:text-foreground";
+  "relative flex h-[var(--keel-h-row)] cursor-default items-center gap-2.5 rounded-chip px-2.5 text-row text-foreground outline-hidden select-none focus:bg-veil-3 data-disabled:pointer-events-none data-disabled:opacity-40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5 [&_svg]:text-dim focus:[&_svg]:text-foreground";
 
 export const MENU_DESTRUCTIVE =
   "data-[variant=destructive]:text-[color:var(--keel-dead)] data-[variant=destructive]:[&_svg]:text-[color:var(--keel-dead)] data-[variant=destructive]:focus:bg-[color-mix(in_srgb,var(--keel-dead)_16%,transparent)]";

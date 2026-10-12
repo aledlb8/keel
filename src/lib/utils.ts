@@ -20,6 +20,9 @@ export const cn = createCn({
       "font-size": [
         { text: ["micro", "small", "body", "row", "title", "display"] },
       ],
+      // The three radii, likewise: unknown names would never displace one
+      // another, so `cn("rounded-control", className)` could not be overridden.
+      rounded: [{ rounded: ["window", "control", "chip"] }],
     },
   },
 })

@@ -65,7 +65,7 @@ export function Overview({ project, agents, onClose }: OverviewProps) {
           type="button"
           aria-label="Close overview"
           onClick={onClose}
-          className="k-icon-btn size-[30px] rounded-[var(--keel-r-control)]"
+          className="k-icon-btn size-[30px] rounded-control"
         >
           <X className="size-4" />
         </button>
@@ -102,7 +102,7 @@ export function Overview({ project, agents, onClose }: OverviewProps) {
                 }
               }}
               className={cn(
-                "group/deck flex flex-col overflow-hidden rounded-[14px] border bg-[color:var(--keel-chrome)] shadow-[var(--keel-lift)] transition-[border-color,box-shadow,transform] duration-150",
+                "group/deck flex flex-col overflow-hidden rounded-window border bg-[color:var(--keel-chrome)] shadow-[var(--keel-lift)] transition-[border-color,box-shadow,transform] duration-150",
                 over === deck.id
                   ? "border-foreground/40 shadow-[var(--keel-lift-strong)]"
                   : active
@@ -166,7 +166,7 @@ export function Overview({ project, agents, onClose }: OverviewProps) {
               <button
                 type="button"
                 onClick={open}
-                className="mx-2 mb-2 flex aspect-[16/10] flex-col rounded-[10px] bg-[color:var(--keel-void)] p-1.5"
+                className="mx-2 mb-2 flex aspect-[16/10] flex-col rounded-control bg-[color:var(--keel-void)] p-1.5"
               >
                 <LayoutSchematic
                   deck={deck}
@@ -189,7 +189,7 @@ export function Overview({ project, agents, onClose }: OverviewProps) {
             useKeel.getState().addDeck(project.id);
             onClose();
           }}
-          className="flex min-h-[200px] flex-col items-center justify-center gap-2.5 rounded-[14px] border border-dashed border-line-strong text-row font-medium text-dim transition-colors hover:border-foreground/25 hover:bg-veil hover:text-foreground"
+          className="flex min-h-[200px] flex-col items-center justify-center gap-2.5 rounded-window border border-dashed border-line-strong text-row font-medium text-dim transition-colors hover:border-foreground/25 hover:bg-veil hover:text-foreground"
         >
           <span className="grid size-8 place-items-center rounded-full bg-veil-2">
             <Plus className="size-4" />

@@ -31,7 +31,7 @@ export function LayoutSchematic(props: LayoutSchematicProps) {
 
   if (!props.deck.tree) {
     return (
-      <div className="grid h-full place-items-center rounded-[8px] border border-dashed border-line-strong text-body text-faint">
+      <div className="grid h-full place-items-center rounded-control border border-dashed border-line-strong text-body text-faint">
         Empty deck
       </div>
     );
@@ -74,7 +74,7 @@ function Node({
         onDragEnd={onPaneDragEnd}
         title={title}
         className={cn(
-          "relative flex min-h-0 min-w-0 flex-1 flex-col gap-1.5 overflow-hidden rounded-[8px] border border-line p-2 text-left",
+          "relative flex min-h-0 min-w-0 flex-1 flex-col gap-1.5 overflow-hidden rounded-control border border-line p-2 text-left",
           "transition-[border-color,opacity] duration-150 hover:border-line-strong",
           draggable && "cursor-grab active:cursor-grabbing",
           draggingPaneId === node.id && "opacity-30",

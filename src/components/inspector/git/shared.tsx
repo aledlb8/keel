@@ -106,7 +106,7 @@ export function Empty({
 }) {
   return (
     <div className="flex flex-col items-center px-6 pb-4 pt-8 text-center">
-      <span className="grid size-9 place-items-center rounded-[var(--keel-r-control)] bg-veil-2 shadow-[inset_0_1px_0_0_var(--keel-sheen)]">
+      <span className="grid size-9 place-items-center rounded-control bg-veil-2 shadow-[inset_0_1px_0_0_var(--keel-sheen)]">
         <Icon aria-hidden className="size-4 text-dim" />
       </span>
       <p className="mt-3 text-row text-dim">{title}</p>
@@ -144,7 +144,7 @@ export function Section({
           type="button"
           aria-expanded={open}
           onClick={onToggle}
-          className="flex h-6 min-w-0 flex-1 items-center gap-1.5 rounded-[var(--keel-r-chip)] pl-2 pr-1.5 text-left"
+          className="flex h-6 min-w-0 flex-1 items-center gap-1.5 rounded-chip pl-2 pr-1.5 text-left"
         >
           <ChevronRight
             aria-hidden

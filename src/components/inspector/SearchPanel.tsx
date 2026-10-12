@@ -521,7 +521,7 @@ function Notice({
 }) {
   return (
     <div className="flex flex-col items-center px-6 pt-8 text-center">
-      <span className="grid size-9 place-items-center rounded-[var(--keel-r-control)] bg-veil-2 shadow-[inset_0_1px_0_0_var(--keel-sheen)]">
+      <span className="grid size-9 place-items-center rounded-control bg-veil-2 shadow-[inset_0_1px_0_0_var(--keel-sheen)]">
         <Icon aria-hidden className="size-4 text-dim" />
       </span>
       <p className="mt-3 text-row text-dim">{title}</p>

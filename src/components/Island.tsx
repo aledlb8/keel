@@ -941,7 +941,7 @@ function Switcher({
   }
 
   return (
-    <div className="flex w-[min(580px,calc(100vw-24px))] flex-col overflow-hidden rounded-[var(--keel-r-window)] border border-line-strong bg-popover text-foreground shadow-[var(--keel-lift-strong)]">
+    <div className="flex w-[min(580px,calc(100vw-24px))] flex-col overflow-hidden rounded-window border border-line-strong bg-popover text-foreground shadow-[var(--keel-lift-strong)]">
       <label className="flex h-12 shrink-0 items-center gap-3 border-b border-line px-4">
         <Search className="size-4 shrink-0 text-faint" />
         <input
@@ -995,7 +995,7 @@ function Switcher({
                   onPointerMove={() => index !== active && setActive(index)}
                   onClick={entry.run}
                   className={cn(
-                    "mx-1.5 flex h-11 w-[calc(100%-12px)] items-center gap-3 rounded-[var(--keel-r-control)] px-2.5 text-left outline-none transition-colors duration-75",
+                    "mx-1.5 flex h-11 w-[calc(100%-12px)] items-center gap-3 rounded-control px-2.5 text-left outline-none transition-colors duration-75",
                     index === active &&
                       "bg-veil-2 shadow-[inset_0_1px_0_0_var(--keel-sheen)]",
                   )}
@@ -1044,7 +1044,7 @@ function Switcher({
 
 function Tile({ children }: { children: ReactNode }) {
   return (
-    <span className="grid size-6 shrink-0 place-items-center rounded-[7px] bg-veil-2 text-dim shadow-[inset_0_0_0_1px_var(--keel-line)]">
+    <span className="grid size-6 shrink-0 place-items-center rounded-chip bg-veil-2 text-dim shadow-[inset_0_0_0_1px_var(--keel-line)]">
       {children}
     </span>
   );
@@ -1052,7 +1052,7 @@ function Tile({ children }: { children: ReactNode }) {
 
 function Keys({ children }: { children: ReactNode }) {
   return (
-    <kbd className="inline-grid h-[18px] min-w-[18px] shrink-0 place-items-center rounded-[4px] px-1 font-sans text-micro font-medium text-faint shadow-[inset_0_0_0_1px_var(--keel-line-strong),inset_0_-1px_0_0_var(--keel-line-strong)]">
+    <kbd className="k-keycap">
       {children}
     </kbd>
   );

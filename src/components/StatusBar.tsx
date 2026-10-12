@@ -145,7 +145,7 @@ function DeckPill({
       title={keys ? `${deck.name} (${keys})` : deck.name}
       onClick={onSelect}
       className={cn(
-        "h-[18px] min-w-[18px] rounded-[var(--keel-r-chip)] px-1.5 text-small font-medium tabular-nums transition-colors",
+        "h-[18px] min-w-[18px] rounded-chip px-1.5 text-small font-medium tabular-nums transition-colors",
         active
           ? "bg-veil-3 text-foreground shadow-[inset_0_1px_0_0_var(--keel-sheen)]"
           : "text-faint hover:bg-veil-2 hover:text-foreground",
@@ -172,7 +172,7 @@ function AssistantChip() {
       aria-label={title}
       onClick={() => useAssistant.getState().openDialog()}
       className={cn(
-        "flex h-[var(--keel-h-chip)] shrink-0 items-center gap-2 rounded-[var(--keel-r-chip)] px-2 text-small font-medium transition-colors hover:bg-veil-2 hover:text-foreground",
+        "flex h-[var(--keel-h-chip)] shrink-0 items-center gap-2 rounded-chip px-2 text-small font-medium transition-colors hover:bg-veil-2 hover:text-foreground",
         tone === "idle" ? "text-faint" : "text-dim",
       )}
     >
@@ -199,7 +199,7 @@ function VpnChip() {
       aria-label={title}
       onClick={() => useKeel.getState().openVpnSettings()}
       className={cn(
-        "flex h-[var(--keel-h-chip)] shrink-0 items-center gap-2 rounded-[var(--keel-r-chip)] px-2 text-small font-medium transition-colors hover:bg-veil-2 hover:text-foreground",
+        "flex h-[var(--keel-h-chip)] shrink-0 items-center gap-2 rounded-chip px-2 text-small font-medium transition-colors hover:bg-veil-2 hover:text-foreground",
         tone === "idle" ? "text-faint" : "text-dim",
       )}
     >

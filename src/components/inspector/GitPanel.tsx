@@ -88,7 +88,7 @@ export function GitPanel() {
 
   if (!git) {
     return (
-      <p className="mx-[var(--keel-inset)] rounded-[var(--keel-r-control)] bg-[color:var(--keel-dead)]/10 px-2.5 py-2 text-body leading-snug text-[color:var(--keel-dead)]">
+      <p className="mx-[var(--keel-inset)] rounded-control bg-[color:var(--keel-dead)]/10 px-2.5 py-2 text-body leading-snug text-[color:var(--keel-dead)]">
         {gitError}
       </p>
     );
@@ -101,7 +101,7 @@ export function GitPanel() {
         <OperationBanner git={git} busy={busy} />
         <GitNav git={git} view={view} />
         {gitError ? (
-          <p className="mx-[var(--keel-inset)] mb-2 rounded-[var(--keel-r-control)] bg-[color:var(--keel-dead)]/10 px-2.5 py-2 text-body leading-snug text-[color:var(--keel-dead)]">
+          <p className="mx-[var(--keel-inset)] mb-2 rounded-control bg-[color:var(--keel-dead)]/10 px-2.5 py-2 text-body leading-snug text-[color:var(--keel-dead)]">
             {gitError}
           </p>
         ) : null}

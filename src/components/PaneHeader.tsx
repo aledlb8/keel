@@ -261,7 +261,7 @@ export function PaneHeader({
           title={pane.sessionReady
             ? "This pane reopens its linked conversation."
             : "No conversation linked yet. Reopening this pane will start a new chat."}
-          className={pane.sessionReady ? "text-faint" : "text-amber-400"}
+          className={pane.sessionReady ? "text-faint" : "text-working"}
         >
           {pane.sessionReady ? <History className="size-3" /> : <CircleAlert className="size-3" />}
         </span>
@@ -275,7 +275,7 @@ export function PaneHeader({
             <button
               type="button"
               title={`Profile: ${currentAccount?.name ?? "Default"}`}
-              className="flex h-5 min-w-0 max-w-32 items-center gap-1 rounded-[var(--keel-r-chip)] px-1.5 text-small text-dim outline-none transition-colors duration-100 hover:bg-veil-2 hover:text-foreground focus-visible:bg-veil-2 data-[state=open]:bg-veil-2 data-[state=open]:text-foreground"
+              className="flex h-5 min-w-0 max-w-32 items-center gap-1 rounded-chip px-1.5 text-small text-dim outline-none transition-colors duration-100 hover:bg-veil-2 hover:text-foreground focus-visible:bg-veil-2 data-[state=open]:bg-veil-2 data-[state=open]:text-foreground"
             >
               <span className="truncate">
                 {currentAccount?.name ?? "Default"}

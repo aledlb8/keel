@@ -89,7 +89,7 @@ type Field = "name" | "command" | "short" | "accent" | "accountEnv";
 type Problems = Partial<Record<Field, string>>;
 
 const FIELD =
-  "w-full min-w-0 rounded-[var(--keel-r-control)] border border-line-strong bg-veil px-2.5 text-body text-foreground outline-none transition-colors placeholder:text-faint hover:border-foreground/20 focus:border-foreground/40 focus:bg-veil-2 aria-invalid:border-[color:var(--keel-dead)]/70";
+  "w-full min-w-0 rounded-control border border-line-strong bg-veil px-2.5 text-body text-foreground outline-none transition-colors placeholder:text-faint hover:border-foreground/20 focus:border-foreground/40 focus:bg-veil-2 aria-invalid:border-[color:var(--keel-dead)]/70";
 
 function expandHex(value: string): string | null {
   const match = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(value.trim());
@@ -536,7 +536,7 @@ export function AgentSettingsDialog() {
                 <button
                   type="button"
                   onClick={addAgent}
-                  className="flex flex-col items-center gap-3 rounded-[var(--keel-r-window)] border border-dashed border-line-strong px-10 py-8 text-row text-dim transition-colors hover:border-foreground/25 hover:bg-veil hover:text-foreground"
+                  className="flex flex-col items-center gap-3 rounded-window border border-dashed border-line-strong px-10 py-8 text-row text-dim transition-colors hover:border-foreground/25 hover:bg-veil hover:text-foreground"
                 >
                   <span className="grid size-9 place-items-center rounded-full bg-veil-2">
                     <Plus className="size-4" />
@@ -616,7 +616,7 @@ function RailAction({
       title={title}
       onClick={onClick}
       disabled={disabled}
-      className="flex h-7 items-center gap-1.5 rounded-[var(--keel-r-chip)] px-2 text-body text-faint transition-colors hover:bg-veil-2 hover:text-foreground disabled:pointer-events-none"
+      className="flex h-7 items-center gap-1.5 rounded-chip px-2 text-body text-faint transition-colors hover:bg-veil-2 hover:text-foreground disabled:pointer-events-none"
     >
       {children}
     </button>
@@ -777,7 +777,7 @@ function AgentEditor({
             aria-label="Name"
             aria-invalid={Boolean(problems.name)}
             spellCheck={false}
-            className="-ml-1.5 h-9 w-full rounded-[var(--keel-r-control)] bg-transparent px-1.5 text-display font-semibold tracking-[-0.02em] text-foreground outline-none transition-colors placeholder:text-faint hover:bg-veil focus:bg-veil-2"
+            className="-ml-1.5 h-9 w-full rounded-control bg-transparent px-1.5 text-display font-semibold tracking-[-0.02em] text-foreground outline-none transition-colors placeholder:text-faint hover:bg-veil focus:bg-veil-2"
           />
           {problems.name ? (
             <FieldError message={problems.name} />
@@ -940,7 +940,7 @@ function PanePreview({
 
   return (
     <div
-      className="overflow-hidden rounded-[var(--keel-r-window)] transition-shadow duration-150"
+      className="overflow-hidden rounded-window transition-shadow duration-150"
       style={{
         background: `color-mix(in srgb, ${accent} 6%, var(--keel-term-solid))`,
         boxShadow: `inset 0 0 0 1px ${ring}, var(--keel-lift)`,
@@ -1081,7 +1081,7 @@ function ColourPicker({
           spellCheck={false}
           aria-label="Hex colour"
           aria-invalid={Boolean(problem)}
-          className="h-7 w-[84px] rounded-[var(--keel-r-chip)] bg-transparent px-2 text-right font-mono text-body text-dim outline-none transition-colors placeholder:text-faint hover:bg-veil focus:bg-veil-2 focus:text-foreground aria-invalid:text-[color:var(--keel-dead)]"
+          className="h-7 w-[84px] rounded-chip bg-transparent px-2 text-right font-mono text-body text-dim outline-none transition-colors placeholder:text-faint hover:bg-veil focus:bg-veil-2 focus:text-foreground aria-invalid:text-[color:var(--keel-dead)]"
         />
       </div>
       <FieldError message={problem} />
@@ -1108,8 +1108,8 @@ function ProfilesOff({
   const valid = ENV_NAME.test(clean);
 
   return (
-    <div className="flex gap-3.5 rounded-[var(--keel-r-window)] bg-veil p-4 shadow-[inset_0_1px_0_0_var(--keel-sheen)]">
-      <span className="grid size-8 shrink-0 place-items-center rounded-[var(--keel-r-control)] bg-veil-2 text-dim">
+    <div className="flex gap-3.5 rounded-window bg-veil p-4 shadow-[inset_0_1px_0_0_var(--keel-sheen)]">
+      <span className="grid size-8 shrink-0 place-items-center rounded-control bg-veil-2 text-dim">
         <UsersRound className="size-4" />
       </span>
       <div className="flex min-w-0 flex-1 flex-col gap-3">
@@ -1172,8 +1172,8 @@ function ProfileList({
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex flex-col gap-px rounded-[var(--keel-r-window)] bg-veil p-1 shadow-[inset_0_1px_0_0_var(--keel-sheen)]">
-        <div className="group flex h-12 items-center gap-3 rounded-[var(--keel-r-control)] px-2.5 transition-colors hover:bg-veil">
+      <div className="flex flex-col gap-px rounded-window bg-veil p-1 shadow-[inset_0_1px_0_0_var(--keel-sheen)]">
+        <div className="group flex h-12 items-center gap-3 rounded-control px-2.5 transition-colors hover:bg-veil">
           <span className="grid size-7 shrink-0 place-items-center rounded-full bg-veil-2 text-dim">
             <UserRound className="size-3.5" />
           </span>
@@ -1220,7 +1220,7 @@ function ProfileList({
         <button
           type="button"
           onClick={add}
-          className="flex h-10 items-center gap-3 rounded-[var(--keel-r-control)] px-2.5 text-row text-dim transition-colors hover:bg-veil-2 hover:text-foreground"
+          className="flex h-10 items-center gap-3 rounded-control px-2.5 text-row text-dim transition-colors hover:bg-veil-2 hover:text-foreground"
         >
           <span className="grid size-7 shrink-0 place-items-center rounded-full border border-dashed border-line-strong">
             <Plus className="size-3.5" />
@@ -1258,7 +1258,7 @@ function ProfileRow({
 
   if (confirming) {
     return (
-      <div className="flex h-12 items-center gap-3 rounded-[var(--keel-r-control)] bg-[color:color-mix(in_srgb,var(--keel-dead)_8%,transparent)] px-2.5 animate-in fade-in-0">
+      <div className="flex h-12 items-center gap-3 rounded-control bg-[color:color-mix(in_srgb,var(--keel-dead)_8%,transparent)] px-2.5 animate-in fade-in-0">
         <span className="min-w-0 flex-1">
           <span className="block truncate text-row text-foreground">
             Remove {account.name}?
@@ -1285,7 +1285,7 @@ function ProfileRow({
 
   return (
     <div
-      className="group flex h-12 items-center gap-3 rounded-[var(--keel-r-control)] px-2.5 transition-colors hover:bg-veil animate-in fade-in-0 duration-150"
+      className="group flex h-12 items-center gap-3 rounded-control px-2.5 transition-colors hover:bg-veil animate-in fade-in-0 duration-150"
       onDoubleClick={() => !renaming && onStartRename()}
     >
       <span
@@ -1415,7 +1415,7 @@ function Advanced({
         type="button"
         onClick={() => setOpen((previous) => !previous)}
         aria-expanded={open}
-        className="-ml-1 flex w-fit items-center gap-1.5 rounded-[var(--keel-r-chip)] px-1 py-0.5 text-row font-medium text-dim transition-colors hover:text-foreground"
+        className="-ml-1 flex w-fit items-center gap-1.5 rounded-chip px-1 py-0.5 text-row font-medium text-dim transition-colors hover:text-foreground"
       >
         <ChevronRight
           className={cn(

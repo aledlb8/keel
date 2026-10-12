@@ -203,7 +203,7 @@ export const PaneView = memo(function PaneView({
           ref={nodeRef}
           data-pane={pane.id}
           className={cn(
-            "group/pane absolute flex flex-col overflow-hidden rounded-[var(--keel-r-window)]",
+            "group/pane absolute flex flex-col overflow-hidden rounded-window",
             "transition-[box-shadow,border-color] duration-150 ease-out",
             closing && "k-pane-out",
             // Instant hide, not a fade. Opacity-crossing a WebGL canvas blanks

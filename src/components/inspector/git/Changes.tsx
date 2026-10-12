@@ -507,7 +507,7 @@ export function ChangesView({ git, busy }: { git: GitStatus; busy: boolean }) {
 
 function TruncatedNotice({ shown, total }: { shown: number; total: number }) {
   return (
-    <p className="mx-[var(--keel-inset)] mb-1.5 shrink-0 rounded-[var(--keel-r-control)] bg-veil px-3 py-2 text-small text-faint">
+    <p className="mx-[var(--keel-inset)] mb-1.5 shrink-0 rounded-control bg-veil px-3 py-2 text-small text-faint">
       Showing {shown.toLocaleString()} of {total.toLocaleString()} changes. Build output or
       dependencies may be missing from .gitignore.
     </p>
@@ -714,7 +714,7 @@ function OptionChip({ label, onClear }: { label: string; onClear: () => void }) 
         type="button"
         aria-label={`Turn off ${label.toLowerCase()}`}
         onClick={onClear}
-        className="grid size-3.5 place-items-center rounded-[3px] hover:bg-veil-3"
+        className="grid size-3.5 place-items-center rounded-nub hover:bg-veil-3"
       >
         <X className="size-2.5" />
       </button>
@@ -735,7 +735,7 @@ function CleanTree({ git, busy }: { git: GitStatus; busy: boolean }) {
 
   return (
     <div className="flex flex-col gap-1.5 px-[var(--keel-inset)] pt-0.5">
-      <div className="flex items-center gap-3 rounded-[var(--keel-r-control)] bg-veil px-3 py-2.5">
+      <div className="flex items-center gap-3 rounded-control bg-veil px-3 py-2.5">
         <span className="grid size-7 shrink-0 place-items-center rounded-full bg-[color:var(--keel-done)]/12">
           <Check className="size-3.5 text-[color:var(--keel-done)]" />
         </span>
@@ -759,7 +759,7 @@ function CleanTree({ git, busy }: { git: GitStatus; busy: boolean }) {
         <button
           type="button"
           onClick={() => workspace().setGitView("stashes")}
-          className="flex items-center gap-2.5 rounded-[var(--keel-r-control)] px-3 py-2 text-left text-body text-faint hover:bg-veil hover:text-dim"
+          className="flex items-center gap-2.5 rounded-control px-3 py-2 text-left text-body text-faint hover:bg-veil hover:text-dim"
         >
           <Archive aria-hidden className="size-3.5 shrink-0" />
           {plural(stashes, "stash", "stashes")} set aside
@@ -769,7 +769,7 @@ function CleanTree({ git, busy }: { git: GitStatus; busy: boolean }) {
         <button
           type="button"
           onClick={() => workspace().setGitView("history")}
-          className="flex items-center gap-2.5 rounded-[var(--keel-r-control)] px-3 py-2 text-left text-body text-faint hover:bg-veil hover:text-dim"
+          className="flex items-center gap-2.5 rounded-control px-3 py-2 text-left text-body text-faint hover:bg-veil hover:text-dim"
         >
           <GitCommitHorizontal aria-hidden className="size-3.5 shrink-0" />
           See the history of {git.branch ?? "this commit"}

@@ -54,7 +54,7 @@ export function StashesView({ git, busy }: { git: GitStatus; busy: boolean }) {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto pb-3">
       <form
-        className="mx-[var(--keel-inset)] mb-2 flex flex-col gap-2 rounded-[var(--keel-r-control)] bg-veil p-2"
+        className="mx-[var(--keel-inset)] mb-2 flex flex-col gap-2 rounded-control bg-veil p-2"
         onSubmit={(event) => {
           event.preventDefault();
           stash();

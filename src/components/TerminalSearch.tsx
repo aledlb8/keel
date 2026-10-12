@@ -70,7 +70,7 @@ export function TerminalSearch({
   return (
     <div
       role="search"
-      className="absolute top-2 right-2 z-20 flex max-w-[calc(100%-16px)] items-center gap-0.5 rounded-[var(--keel-r-control)] border border-line-strong bg-[color:var(--keel-chrome-strong)] p-1 shadow-[var(--keel-lift)]"
+      className="absolute top-2 right-2 z-20 flex max-w-[calc(100%-16px)] items-center gap-0.5 rounded-control border border-line-strong bg-[color:var(--keel-chrome-strong)] p-1 shadow-[var(--keel-lift)]"
       onKeyDown={onBarKeyDown}
     >
       <div className="k-field min-w-0 w-[220px] flex-1">

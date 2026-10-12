@@ -163,7 +163,7 @@ function Setup({ snapshot }: { snapshot: AssistantSnapshot }) {
     <div className="flex flex-col">
       <header className="relative px-7 pb-6 pt-7">
         <CloseButton className="absolute right-4 top-4" />
-        <span className="grid size-10 place-items-center rounded-[12px] bg-veil-2 text-foreground shadow-[inset_0_1px_0_0_var(--keel-sheen)]">
+        <span className="grid size-10 place-items-center rounded-window bg-veil-2 text-foreground shadow-[inset_0_1px_0_0_var(--keel-sheen)]">
           <Send className="size-[18px] -translate-x-px translate-y-px" />
         </span>
         <DialogTitle className="mt-4 text-display font-semibold tracking-[-0.015em]">
@@ -260,7 +260,7 @@ function TokenForm() {
         >
           @BotFather
         </button>
-        , send <code className="rounded-[4px] bg-veil-2 px-1 font-mono text-small text-foreground">/newbot</code>,
+        , send <code className="rounded-nub bg-veil-2 px-1 font-mono text-small text-foreground">/newbot</code>,
         pick a name, and paste the token it replies with.
       </p>
       <div className="flex gap-2">
@@ -274,7 +274,7 @@ function TokenForm() {
           onChange={(event) => setToken(event.target.value)}
           aria-label="Bot token"
           aria-invalid={error ? true : undefined}
-          className="h-8 min-w-0 flex-1 rounded-[var(--keel-r-control)] bg-[color:var(--keel-void)] px-2.5 font-mono text-body text-foreground shadow-[inset_0_0_0_1px_var(--keel-line-strong)] outline-none placeholder:font-sans placeholder:text-faint focus:shadow-[inset_0_0_0_1px_var(--keel-text-dim)] aria-invalid:shadow-[inset_0_0_0_1px_var(--keel-dead)]"
+          className="h-8 min-w-0 flex-1 rounded-control bg-[color:var(--keel-void)] px-2.5 font-mono text-body text-foreground shadow-[inset_0_0_0_1px_var(--keel-line-strong)] outline-none placeholder:font-sans placeholder:text-faint focus:shadow-[inset_0_0_0_1px_var(--keel-text-dim)] aria-invalid:shadow-[inset_0_0_0_1px_var(--keel-dead)]"
         />
         <Button size="sm" type="submit" disabled={busy || !token.trim()} className="h-8">
           {busy ? <LoaderCircle className="animate-spin" /> : null}
@@ -304,7 +304,7 @@ function QrCode({ text, size = 148 }: { text: string; size?: number }) {
     return d;
   }, [qr]);
   return (
-    <span className="block shrink-0 rounded-[12px] bg-[#ededed] p-2.5" style={{ width: size, height: size }}>
+    <span className="block shrink-0 rounded-window bg-[#ededed] p-2.5" style={{ width: size, height: size }}>
       <svg viewBox={`0 0 ${cells} ${cells}`} width="100%" height="100%" shapeRendering="crispEdges" aria-hidden>
         <path d={path} fill="#0a0a0a" />
       </svg>
@@ -475,8 +475,8 @@ function Message({ entry }: { entry: AssistantLogEntry }) {
     <div className={cn("group flex max-w-[82%] flex-col gap-1", mine ? "self-end items-end" : "self-start")}>
       <div
         className={cn(
-          "rounded-[14px] px-3 py-2 text-row leading-[1.5]",
-          mine && "rounded-br-[5px] bg-veil-3 text-foreground",
+          "rounded-window px-3 py-2 text-row leading-[1.5]",
+          mine && "rounded-br-nub bg-veil-3 text-foreground",
           !mine && !failed && "rounded-bl-[5px] bg-veil-1 text-foreground shadow-[inset_0_0_0_1px_var(--keel-line)]",
           failed &&
             "rounded-bl-[5px] text-[color:var(--keel-dead)] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--keel-dead)_35%,transparent)]",
@@ -498,7 +498,7 @@ function ToolRow({ labels }: { labels: string[] }) {
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
-        className="flex items-center gap-1 rounded-[6px] py-0.5 pr-1.5 text-small text-faint hover:text-dim"
+        className="flex items-center gap-1 rounded-chip py-0.5 pr-1.5 text-small text-faint hover:text-dim"
         aria-expanded={open}
       >
         <ChevronRight className={cn("size-3 transition-transform", open && "rotate-90")} />
@@ -547,7 +547,7 @@ function Markdown({ text }: { text: string }) {
         index % 2 === 1 ? (
           <pre
             key={index}
-            className="overflow-x-auto rounded-[8px] bg-[color:var(--keel-void)] px-2.5 py-2 font-mono text-small leading-relaxed text-dim"
+            className="overflow-x-auto rounded-control bg-[color:var(--keel-void)] px-2.5 py-2 font-mono text-small leading-relaxed text-dim"
           >
             {block.replace(/\n$/, "")}
           </pre>
@@ -575,7 +575,7 @@ function inline(line: string): ReactNode[] {
   const parts = line.split(/(`[^`]+`|\*\*[^*]+\*\*)/g);
   return parts.map((part, index) =>
     part.startsWith("`") && part.endsWith("`") && part.length > 2 ? (
-      <code key={index} className="rounded-[4px] bg-veil-2 px-1 font-mono text-[0.92em]">
+      <code key={index} className="rounded-nub bg-veil-2 px-1 font-mono text-[0.92em]">
         {part.slice(1, -1)}
       </code>
     ) : part.startsWith("**") && part.endsWith("**") && part.length > 4 ? (
@@ -617,7 +617,7 @@ function Composer({ snapshot, name }: { snapshot: AssistantSnapshot; name: strin
 
   return (
     <div className="border-t border-line p-3">
-      <div className="flex items-end gap-2 rounded-[12px] bg-[color:var(--keel-void)] p-1.5 pl-3 shadow-[inset_0_0_0_1px_var(--keel-line)] focus-within:shadow-[inset_0_0_0_1px_var(--keel-line-strong)]">
+      <div className="flex items-end gap-2 rounded-window bg-[color:var(--keel-void)] p-1.5 pl-3 shadow-[inset_0_0_0_1px_var(--keel-line)] focus-within:shadow-[inset_0_0_0_1px_var(--keel-line-strong)]">
         <textarea
           ref={field}
           rows={1}
@@ -634,7 +634,7 @@ function Composer({ snapshot, name }: { snapshot: AssistantSnapshot; name: strin
             aria-label="Stop"
             title="Stop the current task"
             onClick={() => void useAssistant.getState().stop()}
-            className="grid size-7 shrink-0 place-items-center rounded-[8px] bg-veil-3 text-foreground hover:bg-veil-2"
+            className="grid size-7 shrink-0 place-items-center rounded-control bg-veil-3 text-foreground hover:bg-veil-2"
           >
             <Square className="size-3 fill-current" />
           </button>
@@ -644,7 +644,7 @@ function Composer({ snapshot, name }: { snapshot: AssistantSnapshot; name: strin
           aria-label="Send"
           disabled={!draft.trim()}
           onClick={() => void send()}
-          className="grid size-7 shrink-0 place-items-center rounded-[8px] bg-foreground text-[color:var(--keel-void)] transition-opacity disabled:opacity-25"
+          className="grid size-7 shrink-0 place-items-center rounded-control bg-foreground text-[color:var(--keel-void)] transition-opacity disabled:opacity-25"
         >
           <ArrowUp className="size-4" />
         </button>
@@ -758,7 +758,7 @@ function AgentChoice({ snapshot }: { snapshot: AssistantSnapshot }) {
                 aria-pressed={on}
                 onClick={() => configure({ agentId: agent.id })}
                 className={cn(
-                  "grid aspect-square place-items-center rounded-[10px] transition-[background-color,box-shadow]",
+                  "grid aspect-square place-items-center rounded-control transition-[background-color,box-shadow]",
                   on ? "bg-veil-3" : "hover:bg-veil-2",
                 )}
                 style={

@@ -163,7 +163,7 @@ function MenubarTrigger({
     <Primitive.Trigger
       data-slot="menubar-trigger"
       className={cn(
-        "flex h-[var(--keel-h-control)] items-center rounded-[var(--keel-r-control)] px-2.5 text-row text-dim outline-none transition-[background-color,color] duration-100 select-none hover:bg-veil-2 hover:text-foreground focus-visible:bg-veil-2 focus-visible:text-foreground data-[state=open]:bg-veil-3 data-[state=open]:text-foreground data-[state=open]:shadow-[inset_0_1px_0_0_var(--keel-sheen)]",
+        "flex h-[var(--keel-h-control)] items-center rounded-control px-2.5 text-row text-dim outline-none transition-[background-color,color] duration-100 select-none hover:bg-veil-2 hover:text-foreground focus-visible:bg-veil-2 focus-visible:text-foreground data-[state=open]:bg-veil-3 data-[state=open]:text-foreground data-[state=open]:shadow-[inset_0_1px_0_0_var(--keel-sheen)]",
         className,
       )}
       {...props}

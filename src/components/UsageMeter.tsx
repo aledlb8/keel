@@ -109,7 +109,7 @@ export function UsageMeter() {
           <button
             type="button"
             aria-label={`Usage: ${summary}`}
-            className="flex h-[var(--keel-h-chip)] items-center rounded-[var(--keel-r-chip)] px-0.5 outline-none transition-colors duration-100 hover:bg-veil-2 focus-visible:bg-veil-2 data-[state=open]:bg-veil-2"
+            className="flex h-[var(--keel-h-chip)] items-center rounded-chip px-0.5 outline-none transition-colors duration-100 hover:bg-veil-2 focus-visible:bg-veil-2 data-[state=open]:bg-veil-2"
           >
             {rows.map((row, index) => (
               <Fragment key={row.key}>
@@ -262,7 +262,7 @@ function UsageCard({
   );
 
   return (
-    <div className="w-[348px] overflow-hidden rounded-[var(--keel-r-window)] border border-line-strong bg-popover text-foreground shadow-[var(--keel-lift-strong)]">
+    <div className="w-[348px] overflow-hidden rounded-window border border-line-strong bg-popover text-foreground shadow-[var(--keel-lift-strong)]">
       <header className="flex h-11 items-center gap-2 pl-4 pr-2">
         <h2 className="text-row font-semibold tracking-[-0.01em]">Usage</h2>
         {fetchedAt ? (
@@ -373,7 +373,7 @@ function Login({
   return (
     <section
       className={cn(
-        "rounded-[var(--keel-r-control)] transition-colors duration-150",
+        "rounded-control transition-colors duration-150",
         row.active
           ? "bg-veil-2 shadow-[inset_0_1px_0_0_var(--keel-sheen)]"
           : "bg-veil",
@@ -384,7 +384,7 @@ function Login({
           type="button"
           onClick={onToggle}
           aria-expanded={open}
-          className="flex h-11 w-full items-center gap-2.5 rounded-[var(--keel-r-control)] px-3 outline-none transition-colors hover:bg-veil focus-visible:bg-veil-2"
+          className="flex h-11 w-full items-center gap-2.5 rounded-control px-3 outline-none transition-colors hover:bg-veil focus-visible:bg-veil-2"
         >
           {heading}
         </button>

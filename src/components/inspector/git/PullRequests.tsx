@@ -84,7 +84,7 @@ export function PullRequestsView({ git, busy }: { git: GitStatus; busy: boolean 
                 disabled={busy || !git.upstream}
                 onClick={() => setComposing(true)}
                 title={git.upstream ? undefined : "Publish the branch first"}
-                className="mx-[var(--keel-inset)] mb-2 flex w-[calc(100%-var(--keel-inset)*2)] items-center gap-2.5 rounded-[var(--keel-r-control)] bg-veil px-3 py-2.5 text-left hover:bg-veil-2 disabled:opacity-50"
+                className="mx-[var(--keel-inset)] mb-2 flex w-[calc(100%-var(--keel-inset)*2)] items-center gap-2.5 rounded-control bg-veil px-3 py-2.5 text-left hover:bg-veil-2 disabled:opacity-50"
               >
                 <span className="grid size-7 shrink-0 place-items-center rounded-full bg-veil-2">
                   <Plus className="size-3.5 text-dim" />
@@ -283,7 +283,7 @@ function PrForm({ git, busy, onDone }: { git: GitStatus; busy: boolean; onDone: 
 
   return (
     <form
-      className="mx-[var(--keel-inset)] mb-2 flex flex-col gap-1.5 rounded-[var(--keel-r-control)] bg-veil p-2"
+      className="mx-[var(--keel-inset)] mb-2 flex flex-col gap-1.5 rounded-control bg-veil p-2"
       onSubmit={(event) => {
         event.preventDefault();
         if (!title.trim() || busy) return;

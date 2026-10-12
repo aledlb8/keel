@@ -34,4 +34,10 @@ describe("cn", () => {
   it("still lets one colour replace another", () => {
     assert.equal(cn("text-dim", "text-foreground"), "text-foreground");
   });
+
+  it("lets one named radius replace another, or a stock one", () => {
+    assert.equal(cn("rounded-control", "rounded-window"), "rounded-window");
+    assert.equal(cn("rounded-chip", "rounded-full"), "rounded-full");
+    assert.equal(cn("rounded-full", "rounded-chip"), "rounded-chip");
+  });
 });

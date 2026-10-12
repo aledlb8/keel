@@ -271,7 +271,7 @@ function BranchPicker({ git, busy }: { git: GitStatus; busy: boolean }) {
           <div className="mt-1.5 flex shrink-0 gap-1 border-t border-line pt-1.5">
             <button
               type="button"
-              className="flex h-7 flex-1 items-center gap-2 rounded-[var(--keel-r-chip)] px-2 text-body text-dim hover:bg-veil-2 hover:text-foreground"
+              className="flex h-7 flex-1 items-center gap-2 rounded-chip px-2 text-body text-dim hover:bg-veil-2 hover:text-foreground"
               onClick={() => {
                 setOpen(false);
                 prompt({
@@ -296,7 +296,7 @@ function BranchPicker({ git, busy }: { git: GitStatus; busy: boolean }) {
             </button>
             <button
               type="button"
-              className="flex h-7 items-center gap-2 rounded-[var(--keel-r-chip)] px-2 text-body text-dim hover:bg-veil-2 hover:text-foreground"
+              className="flex h-7 items-center gap-2 rounded-chip px-2 text-body text-dim hover:bg-veil-2 hover:text-foreground"
               onClick={() => {
                 setOpen(false);
                 workspace().setGitView("branches");
@@ -336,7 +336,7 @@ function PickRow({
       onMouseMove={onHover}
       onClick={onPick}
       className={cn(
-        "flex h-[var(--keel-h-dense)] cursor-default items-center gap-2.5 rounded-[var(--keel-r-chip)] px-2.5 text-row text-foreground",
+        "flex h-[var(--keel-h-dense)] cursor-default items-center gap-2.5 rounded-chip px-2.5 text-row text-foreground",
         active && "bg-veil-3",
       )}
     >

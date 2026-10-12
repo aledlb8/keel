@@ -207,7 +207,7 @@ export function ShortcutsDialog({
           </div>
 
           <div className="flex items-center gap-2">
-            <label className="flex h-9 min-w-0 flex-1 items-center gap-2.5 rounded-[var(--keel-r-control)] bg-veil px-3 shadow-[inset_0_0_0_1px_var(--keel-line)] transition-shadow focus-within:shadow-[inset_0_0_0_1px_var(--keel-line-strong)]">
+            <label className="flex h-9 min-w-0 flex-1 items-center gap-2.5 rounded-control bg-veil px-3 shadow-[inset_0_0_0_1px_var(--keel-line)] transition-shadow focus-within:shadow-[inset_0_0_0_1px_var(--keel-line-strong)]">
               <Search className="size-3.5 shrink-0 text-faint" />
               <input
                 value={query}
@@ -274,7 +274,7 @@ export function ShortcutsDialog({
                   <h3 className="px-1 pb-1.5 text-small font-medium text-faint">
                     {group}
                   </h3>
-                  <div className="flex flex-col gap-px rounded-[var(--keel-r-window)] bg-veil p-1 shadow-[inset_0_1px_0_0_var(--keel-sheen)]">
+                  <div className="flex flex-col gap-px rounded-window bg-veil p-1 shadow-[inset_0_1px_0_0_var(--keel-sheen)]">
                     {rows.map((shortcut) => (
                       <ShortcutRow
                         key={shortcut.id}
@@ -379,7 +379,7 @@ function ShortcutRow({
   return (
     <div
       className={cn(
-        "group/row rounded-[var(--keel-r-control)] transition-colors duration-100",
+        "group/row rounded-control transition-colors duration-100",
         recording || note ? "bg-veil-2" : "hover:bg-veil",
       )}
     >
@@ -438,7 +438,7 @@ function ShortcutRow({
           onKeyUp={recording ? onKeyUp : undefined}
           onBlur={recording ? onStopListening : undefined}
           className={cn(
-            "flex h-8 shrink-0 items-center justify-end rounded-[var(--keel-r-control)] px-1.5 outline-none transition-[background-color,box-shadow] duration-150",
+            "flex h-8 shrink-0 items-center justify-end rounded-control px-1.5 outline-none transition-[background-color,box-shadow] duration-150",
             recording
               ? // Room for the prompt and a few held keys, only while listening,
                 // so a reset button otherwise sits right beside its keys.
@@ -458,7 +458,7 @@ function ShortcutRow({
           ) : binding ? (
             <Caps parts={bindingParts(binding, shortcut.family)} />
           ) : (
-            <span className="rounded-[5px] border border-dashed border-line-strong px-2 py-[3px] text-small text-faint">
+            <span className="rounded-chip border border-dashed border-line-strong px-2 py-[3px] text-small text-faint">
               Not set
             </span>
           )}
@@ -539,11 +539,8 @@ function Cap({
 }) {
   return (
     <kbd
-      className={cn(
-        "inline-grid shrink-0 place-items-center rounded-[5px] font-sans font-medium shadow-[inset_0_0_0_1px_var(--keel-line-strong),inset_0_-1px_0_0_var(--keel-line-strong)]",
-        small ? "h-5 min-w-5 px-1 text-micro" : "h-6 min-w-6 px-1.5 text-small",
-        muted ? "text-faint" : "bg-veil-2 text-foreground",
-      )}
+      data-size={small ? undefined : "lg"}
+      className={cn("k-keycap", muted ? "text-faint" : "bg-veil-2 text-foreground")}
     >
       {children}
     </kbd>

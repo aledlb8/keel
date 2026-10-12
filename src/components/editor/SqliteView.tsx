@@ -150,7 +150,7 @@ function SideItem({
       data-active={active}
       onClick={onClick}
       className={cn(
-        "flex h-[var(--keel-h-chip)] shrink-0 items-center gap-2 rounded-[var(--keel-r-chip)] px-2 text-left text-body transition-colors",
+        "flex h-[var(--keel-h-chip)] shrink-0 items-center gap-2 rounded-chip px-2 text-left text-body transition-colors",
         active ? "bg-veil-3 text-foreground" : "text-dim hover:bg-veil hover:text-foreground",
       )}
     >

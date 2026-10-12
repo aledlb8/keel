@@ -393,10 +393,10 @@ function Stage({
     <div
       role="group"
       aria-label="Layout after opening terminals"
-      className="flex h-[min(40vh,320px)] flex-col gap-1.5 rounded-[var(--keel-r-window)] bg-[color:var(--keel-void)] p-1.5 shadow-[inset_0_0_0_1px_var(--keel-line)]"
+      className="flex h-[min(40vh,320px)] flex-col gap-1.5 rounded-window bg-[color:var(--keel-void)] p-1.5 shadow-[inset_0_0_0_1px_var(--keel-line)]"
     >
       {picks.length === 0 ? (
-        <div className="grid flex-1 place-items-center rounded-[7px] border border-dashed border-line-strong px-10 text-center text-row leading-relaxed text-faint">
+        <div className="grid flex-1 place-items-center rounded-chip border border-dashed border-line-strong px-10 text-center text-row leading-relaxed text-faint">
           {placeholder}
         </div>
       ) : (
@@ -418,7 +418,7 @@ function Stage({
                 <div
                   key={tile.pane.id}
                   title={`${tile.pane.title} (already open)`}
-                  className="flex min-w-0 flex-1 flex-col justify-center overflow-hidden rounded-[7px] border border-line bg-veil-2 px-2 text-small text-faint"
+                  className="flex min-w-0 flex-1 flex-col justify-center overflow-hidden rounded-chip border border-line bg-veil-2 px-2 text-small text-faint"
                 >
                   <span className="truncate text-dim">{tile.pane.title}</span>
                   <span className="truncate">Already open</span>
@@ -459,7 +459,7 @@ function StageTile({
       title={`Remove ${key.name}`}
       aria-label={`Remove ${key.name}`}
       className={cn(
-        "group/tile @container relative flex min-w-0 flex-1 flex-col overflow-hidden rounded-[7px] text-left",
+        "group/tile @container relative flex min-w-0 flex-1 flex-col overflow-hidden rounded-chip text-left",
         growing && "k-pane-in",
       )}
       style={{
@@ -490,7 +490,7 @@ function StageTile({
         ) : null}
       </span>
 
-      <span className="absolute right-1 top-1 grid size-4 place-items-center rounded-[4px] bg-[color:var(--keel-void)]/70 text-dim opacity-0 transition-opacity duration-100 group-hover/tile:opacity-100 group-focus-visible/tile:opacity-100">
+      <span className="absolute right-1 top-1 grid size-4 place-items-center rounded-nub bg-[color:var(--keel-void)]/70 text-dim opacity-0 transition-opacity duration-100 group-hover/tile:opacity-100 group-focus-visible/tile:opacity-100">
         <X className="size-3" />
       </span>
     </button>
@@ -529,7 +529,7 @@ function AgentKey({
           : `Add ${entry.name}. Right-click to remove one.`
       }
       className={cn(
-        "flex h-[52px] items-center gap-2.5 rounded-[var(--keel-r-control)] pl-2 pr-3 text-left transition-[background-color,transform] duration-100 active:translate-y-px disabled:pointer-events-none disabled:opacity-40",
+        "flex h-[52px] items-center gap-2.5 rounded-control pl-2 pr-3 text-left transition-[background-color,transform] duration-100 active:translate-y-px disabled:pointer-events-none disabled:opacity-40",
         lit ? "bg-veil-2" : "bg-veil hover:bg-veil-2",
       )}
       style={{
@@ -649,7 +649,7 @@ function FolderPicker({
 
 function Kbd({ children }: { children: ReactNode }) {
   return (
-    <kbd className="inline-grid h-[18px] min-w-[18px] shrink-0 place-items-center rounded-[4px] px-1 font-sans text-small font-medium text-faint shadow-[inset_0_0_0_1px_var(--keel-line-strong),inset_0_-1px_0_0_var(--keel-line-strong)]">
+    <kbd className="k-keycap">
       {children}
     </kbd>
   );

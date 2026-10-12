@@ -87,7 +87,7 @@ export function FilePreview({
       return (
         <Stage>
           <div className="flex w-full max-w-md flex-col items-center gap-4">
-            <span className="grid size-16 place-items-center rounded-[var(--keel-r-window)] bg-veil-2 shadow-[inset_0_1px_0_0_var(--keel-sheen)]">
+            <span className="grid size-16 place-items-center rounded-window bg-veil-2 shadow-[inset_0_1px_0_0_var(--keel-sheen)]">
               <Music aria-hidden className="size-6 text-dim" />
             </span>
             <p className="max-w-full truncate text-row text-dim">{name}</p>

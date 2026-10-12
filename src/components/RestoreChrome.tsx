@@ -28,7 +28,7 @@ export function RestoreChrome() {
       ) : null}
       {showFailed ? (
         <div className="absolute inset-0 z-40 grid place-items-center bg-scrim backdrop-blur-[var(--keel-blur-strong)]">
-          <div className="w-[320px] rounded-[var(--keel-r-window)] border border-line-strong bg-[color:var(--keel-chrome-strong)] px-5 py-5 text-center shadow-[var(--keel-lift-strong)] backdrop-blur-[var(--keel-blur-strong)]">
+          <div className="w-[320px] rounded-window border border-line-strong bg-[color:var(--keel-chrome-strong)] px-5 py-5 text-center shadow-[var(--keel-lift-strong)] backdrop-blur-[var(--keel-blur-strong)]">
             <p className="text-title text-foreground">
               Couldn&apos;t restore your layout
             </p>
