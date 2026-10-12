@@ -27,7 +27,7 @@ import { Grid2X2, Plus } from "lucide-react";
 import { assistantView } from "@/components/AssistantDialog";
 import { UsageMeter } from "@/components/UsageMeter";
 import { StatusLight, vpnView } from "@/components/VpnDialog";
-import { withShortcut } from "@/lib/keymap";
+import { deckShortcutKeys, withShortcut } from "@/lib/keymap";
 import { statusPlace } from "@/lib/statusPath";
 import { cn } from "@/lib/utils";
 import type { Deck, Project } from "@/lib/types";
@@ -137,10 +137,12 @@ function DeckPill({
   active: boolean;
   onSelect: () => void;
 }) {
+  // The chord follows the keymap: deck jumping can be rebound, or unbound.
+  const keys = deckShortcutKeys(index);
   return (
     <button
       type="button"
-      title={`${deck.name}${index < 9 ? ` (Ctrl+${index + 1})` : ""}`}
+      title={keys ? `${deck.name} (${keys})` : deck.name}
       onClick={onSelect}
       className={cn(
         "h-[18px] min-w-[18px] rounded-[var(--keel-r-chip)] px-1.5 text-small font-medium tabular-nums transition-colors",
