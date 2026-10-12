@@ -13,10 +13,12 @@
  * by the work on it, not just "Deck 2" and a pair of agent marks.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Plus, X } from "lucide-react";
 
+import { InlineRename } from "@/components/InlineRename";
 import { LayoutSchematic } from "@/components/LayoutSchematic";
+import { deckShortcutKeys } from "@/lib/keymap";
 import { listPanes } from "@/lib/tree";
 import { cn } from "@/lib/utils";
 import type { Agent, Project } from "@/lib/types";
@@ -110,6 +112,11 @@ export function Overview({ project, agents, onClose }: OverviewProps) {
             >
               <div className="flex h-11 items-center gap-2.5 pl-3 pr-2">
                 <span
+                  title={
+                    deckShortcutKeys(index)
+                      ? `${deck.name} (${deckShortcutKeys(index)})`
+                      : undefined
+                  }
                   className={cn(
                     "grid size-5 shrink-0 place-items-center rounded-full text-small font-semibold tabular-nums",
                     active
@@ -121,13 +128,12 @@ export function Overview({ project, agents, onClose }: OverviewProps) {
                 </span>
 
                 {renaming === deck.id ? (
-                  <DeckNameInput
-                    initial={deck.name}
-                    onCommit={(name) => {
-                      useKeel.getState().renameDeck(project.id, deck.id, name);
-                      setRenaming(null);
-                    }}
-                    onCancel={() => setRenaming(null)}
+                  <InlineRename
+                    value={deck.name}
+                    onCommit={(name) =>
+                      useKeel.getState().renameDeck(project.id, deck.id, name)
+                    }
+                    onDone={() => setRenaming(null)}
                   />
                 ) : (
                   <button
@@ -192,34 +198,5 @@ export function Overview({ project, agents, onClose }: OverviewProps) {
         </button>
       </div>
     </div>
-  );
-}
-
-function DeckNameInput({
-  initial,
-  onCommit,
-  onCancel,
-}: {
-  initial: string;
-  onCommit: (name: string) => void;
-  onCancel: () => void;
-}) {
-  const ref = useRef<HTMLInputElement | null>(null);
-  useEffect(() => {
-    ref.current?.select();
-  }, []);
-
-  return (
-    <input
-      ref={ref}
-      autoFocus
-      defaultValue={initial}
-      onBlur={(event) => onCommit(event.target.value)}
-      onKeyDown={(event) => {
-        if (event.key === "Enter") onCommit(event.currentTarget.value);
-        if (event.key === "Escape") onCancel();
-      }}
-      className="min-w-0 flex-1 rounded-[var(--keel-r-chip)] border border-line-strong bg-veil-2 px-2 py-1 text-row outline-none transition-colors focus:border-foreground/40"
-    />
   );
 }
