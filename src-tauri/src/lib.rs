@@ -161,7 +161,11 @@ pub fn run() {
         .on_window_event(|window, event| {
             // CloseRequested is a *request*. Killing PTYs here would destroy
             // unsaved work before the UI can ask. The frontend confirms, then
-            // destroys the window; Destroyed is what tears children down.
+            // destroys the window; the main window's Destroyed is what tears
+            // children down. Other windows only show panes the main one owns.
+            if window.label() != pty::MAIN_WINDOW {
+                return;
+            }
             match event {
                 tauri::WindowEvent::CloseRequested { api, .. } => {
                     api.prevent_close();
