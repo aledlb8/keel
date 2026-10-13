@@ -650,23 +650,27 @@ pub fn home_dir() -> Option<PathBuf> {
     }
 }
 
+/// A pane's process started; windows waiting to draw it can attach now.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PtySpawned {
+    pub id: String,
+    pub generation: u64,
+}
+
+/// Start a pane's shell. No window draws it yet; one attaches when it wants to.
+///
+/// A pane that is restarted keeps its terminal: the new process writes below
+/// what the old one left, the way it does in a terminal you rerun something in.
 #[tauri::command]
 pub fn pty_spawn(
     app: AppHandle,
     manager: State<'_, PtyManager>,
     options: SpawnOptions,
-    on_data: Channel<Response>,
 ) -> Result<(), String> {
-    // Two windows can both believe they own a pane for a moment while it moves
-    // between them. The second to ask for this generation gets the running
-    // process, not a replacement that kills it.
-    if let Some((output, generation, true)) = session_output(&app, &options.id)? {
+    // Asking twice for the same generation must not kill the running process.
+    if let Some((_, generation, true)) = session_output(&app, &options.id)? {
         if generation == options.generation {
-            let mut out = lock_output(&output);
-            on_data
-                .send(Response::new(out.vt.replay()))
-                .map_err(|err| format!("could not replay the terminal: {err}"))?;
-            out.view = Some(on_data);
             return Ok(());
         }
     }
@@ -838,9 +842,21 @@ pub fn pty_spawn(
     let writer: PtyWriter = Arc::new(Mutex::new(writer));
 
     let alive = hooks.alive.clone();
+    // The previous process's terminal, if this pane had one, carries on.
+    let vt = session_output(&app, &options.id)?
+        .map(|(previous, _, _)| {
+            let mut previous = lock_output(&previous);
+            previous.view = None;
+            std::mem::replace(&mut previous.vt, Vt::new(2, 1))
+        })
+        .map(|mut vt| {
+            vt.resize(cols, rows);
+            vt
+        })
+        .unwrap_or_else(|| Vt::new(cols, rows));
     let output: SharedOutput = Arc::new(Mutex::new(Output {
-        vt: Vt::new(cols, rows),
-        view: Some(on_data),
+        vt,
+        view: None,
         screen_wanted: true,
         last_screen: None,
         noted_at: None,
@@ -947,6 +963,13 @@ pub fn pty_spawn(
         let _ = previous.child.kill();
     }
     drop(sessions);
+    let _ = app.emit(
+        "pty:spawned",
+        PtySpawned {
+            id: options.id.clone(),
+            generation: options.generation,
+        },
+    );
 
     // Typed in, not exec'd, so the shell is still there when the agent quits.
     // Writer lock only — never the session map — so a blocked stdin cannot

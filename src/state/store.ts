@@ -154,6 +154,15 @@ export interface RenameTarget {
   where: "sidebar" | "pane";
 }
 
+/** How one generation of a pane's process started. */
+export interface SpawnRecord {
+  generation: number;
+  /** The private-VPN proxy its environment points at, if any. */
+  proxyPort: number | null;
+  /** Set when it could not start. */
+  error?: string | undefined;
+}
+
 /** What a caller needs to describe a terminal it wants opened. */
 export interface PaneSpec {
   agentId: string | null;
@@ -211,6 +220,13 @@ export interface KeelState {
   /** Pane finished its post-reopen spawn attempt. */
   settleRestore: (paneId: string, ok: boolean) => void;
   noteSpawnFail: (paneId: string) => void;
+  /**
+   * How each pane's current process started: the VPN proxy it was given, or
+   * why it could not start. Written by the supervisor; read by whichever
+   * window draws the pane.
+   */
+  spawned: Record<string, SpawnRecord>;
+  noteSpawned: (paneId: string, record: SpawnRecord) => void;
   noteHostLost: () => void;
   clearHostLost: () => void;
   refreshAgents: () => Promise<void>;
@@ -1193,6 +1209,7 @@ export const useKeel = create<KeelState>((set, get) => {
     mainBounds: undefined,
     arrangements: {},
     windowFocus: null,
+    spawned: {},
 
     async flushPersist() {
       await persist(true);
@@ -1352,6 +1369,10 @@ export const useKeel = create<KeelState>((set, get) => {
 
     noteSpawnFail(paneId) {
       get().settleRestore(paneId, false);
+    },
+
+    noteSpawned(paneId, record) {
+      set((state) => ({ spawned: { ...state.spawned, [paneId]: record } }));
     },
 
     noteHostLost() {

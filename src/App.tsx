@@ -12,10 +12,11 @@
  * gesture that resizes two panes against each other, and is remembered with
  * the window rather than with the projects.
  *
- * Every deck of every project stays mounted for the whole session — only the
- * active one is visible. Hiding rather than unmounting is what lets you switch
- * away from six running agents and come back to them still running, scrollback
- * intact.
+ * Every pane's process runs whether or not anything draws it: the supervisor
+ * starts them all, and Rust keeps each one's screen and scrollback. The canvas
+ * draws the deck on screen and keeps the few before it ready, which is what
+ * lets you switch away from six running agents and come back to them still
+ * running, scrollback intact.
  *
  * The chrome stays compact. Anything the app wants to *say* lives in a menu or
  * a dialog; the space next to a terminal belongs to the terminal.
@@ -63,6 +64,7 @@ import {
 import { startMirrorHost } from "@/lib/mirror";
 import { startPaneEvents } from "@/lib/paneEvents";
 import { startScreenHost } from "@/lib/screenHost";
+import { startSupervisor } from "@/lib/supervisor";
 import { mainDeckOf, MAIN_WINDOW } from "@/lib/screens";
 import { pruneRecent } from "@/lib/recentFiles";
 import { startWindowFocusTracking } from "@/lib/windowFocus";
@@ -206,9 +208,13 @@ export default function App() {
   useEffect(() => {
     let alive = true;
     let stopScreens: (() => void) | undefined;
-    // Screens need the saved state first: which decks they show, and where.
+    let stopSupervisor: (() => void) | undefined;
+    // Both need the saved state first: which panes to start, which decks go
+    // in windows of their own and where.
     void useKeel.getState().init().then(() => {
-      if (alive) stopScreens = startScreenHost();
+      if (!alive) return;
+      stopSupervisor = startSupervisor();
+      stopScreens = startScreenHost();
     });
     const stopMirror = startMirrorHost();
     const stopTracking = startAttentionTracking();
@@ -225,6 +231,7 @@ export default function App() {
     return () => {
       alive = false;
       stopScreens?.();
+      stopSupervisor?.();
       stopMirror();
       stopTracking();
       stopAudio();

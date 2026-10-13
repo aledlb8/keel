@@ -58,13 +58,17 @@ function outputChannel(onData: (bytes: Uint8Array) => void): Channel<ArrayBuffer
   return channel;
 }
 
-export async function spawnPty(
-  options: SpawnOptions,
-  onData: (bytes: Uint8Array) => void,
-): Promise<OutputChannel> {
-  const channel = outputChannel(onData);
-  await invoke("pty_spawn", { options, onData: channel });
-  return { id: channel.id };
+/** Start a pane's process. No window draws it until one attaches. */
+export function spawnPty(options: SpawnOptions): Promise<void> {
+  return invoke("pty_spawn", { options });
+}
+
+/** A pane's process is up; a window waiting to draw it can attach. */
+export function onPtySpawned(
+  handler: (id: string, generation: number) => void,
+): Promise<() => void> {
+  return listen<{ id: string; generation: number }>("pty:spawned", (event) =>
+    handler(event.payload.id, event.payload.generation));
 }
 
 export interface Attachment {

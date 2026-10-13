@@ -28,7 +28,6 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { canHandOff } from "@/lib/handoff";
-import { applySession } from "@/lib/launch";
 import type { TitleSource } from "@/lib/paneTitle";
 import { agentAccent } from "@/lib/tokens";
 import type { Agent, AgentAccount, Pane, PaneActivity } from "@/lib/types";
@@ -62,7 +61,6 @@ export interface PaneViewProps {
   onRestart: (paneId: string) => void;
   onAccountChange: (paneId: string, accountId: string | null) => void;
   onCreateAccount: (paneId: string, agentId: string, name: string) => void;
-  onSpawnResult?: ((paneId: string, ok: boolean, reason?: string) => void) | undefined;
   onTitle: (paneId: string, title: string, source: TitleSource) => void;
   /** A press on the header that may become a drag. Must be stable: this is memoised. */
   onDragStart: (paneId: string, event: React.PointerEvent) => void;
@@ -134,7 +132,6 @@ export const PaneView = memo(function PaneView({
   onRestart,
   onAccountChange,
   onCreateAccount,
-  onSpawnResult,
   onTitle,
   onDragStart,
 }: PaneViewProps) {
@@ -290,24 +287,11 @@ export const PaneView = memo(function PaneView({
               ) : (
               <TerminalSurface
                 paneId={pane.id}
-                cwd={cwd}
-                command={
-                  pane.resumeAgent && agent
-                    ? applySession(agent.command, agent.session, {
-                        sessionId: pane.sessionId,
-                        sessionReady: pane.sessionReady,
-                      })
-                    : null
-                }
-                launchAgentId={pane.resumeAgent ? pane.agentId : null}
-                accountEnv={agent?.accountEnv ?? null}
-                accountId={pane.accountId}
                 generation={generation}
                 visible={!hidden}
                 focused={focused}
                 onActivity={onActivity}
                 onFocus={onFocus}
-                onSpawnResult={onSpawnResult}
                 onTitle={onTitle}
               />
               )}

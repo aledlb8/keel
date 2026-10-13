@@ -25,12 +25,11 @@ import { createPromptDraft, type TitleSource } from "@/lib/paneTitle";
 import {
   attachPty,
   detachPty,
+  onPtySpawned,
   ptyPaste,
   ptyQuiet,
-  ptySample,
   ptyText,
   resizePty,
-  spawnPty,
   writePty,
   type OutputChannel,
 } from "@/lib/pty";
@@ -421,18 +420,11 @@ function keelTerminalTheme(): ITheme {
 
 export interface TerminalSurfaceProps {
   paneId: string;
-  cwd: string | null;
-  /** Typed into the shell once. Changing it does nothing until a restart. */
-  command: string | null;
   /**
-   * Catalogue id of `command` when Keel typed it. A plain shell passes null;
-   * a CLI started later is recognised from the process, not from this prop.
+   * Which of the pane's processes to draw. The supervisor starts each one
+   * (`src/lib/supervisor.ts`); this only attaches to it, and bumping it
+   * attaches to the next, below what the last one left.
    */
-  launchAgentId?: string | null | undefined;
-  /** CLI-specific config-home variable and the selected isolated profile. */
-  accountEnv?: string | null | undefined;
-  accountId?: string | null | undefined;
-  /** Bumping this respawns the process in the same terminal, keeping scrollback. */
   generation: number;
   /** On the active deck of the active project — i.e. actually on screen. */
   visible: boolean;
@@ -440,8 +432,6 @@ export interface TerminalSurfaceProps {
   /** Keystrokes, resizes and (re)starts — the things output is a reply to. */
   onActivity?: ((paneId: string, kind: PaneActivity, data?: string) => void) | undefined;
   onFocus: (paneId: string) => void;
-  /** Spawn settled — ok or fail. Used for reopen chrome + spawn-fail UI. */
-  onSpawnResult?: ((paneId: string, ok: boolean, reason?: string) => void) | undefined;
   /**
    * A prompt was submitted. Titles and folders the shell reports come from
    * Rust to the main window directly, whichever window is drawing the pane.
@@ -455,17 +445,11 @@ export interface TerminalSurfaceProps {
  */
 export const TerminalSurface = memo(function TerminalSurface({
   paneId,
-  cwd,
-  command,
-  launchAgentId = null,
-  accountEnv,
-  accountId,
   generation,
   visible,
   focused,
   onActivity,
   onFocus,
-  onSpawnResult,
   onTitle,
 }: TerminalSurfaceProps) {
   const spawnAllowed = useKeel((state) => state.vpn.spawnAllowed);
@@ -473,22 +457,23 @@ export const TerminalSurface = memo(function TerminalSurface({
   const vpnPhase = useKeel((state) => state.vpn.phase);
   const vpnError = useKeel((state) => state.vpn.error);
   const proxyPort = useKeel((state) => state.vpn.proxyPort);
-  const startedGeneration = useRef<number | null>(null);
+  const record = useKeel((state) => {
+    const spawned = state.spawned[paneId];
+    return spawned?.generation === generation ? spawned : null;
+  });
   // Connect-on-launch holds new shells only while the tunnel is still being
   // attempted. An error or idle phase must never block terminals from loading.
   const launchHold = autoConnect && vpnPhase === "connecting";
-  const canStart =
-    (spawnAllowed && !launchHold) || startedGeneration.current === generation;
-  const vpnWait = !canStart && (!spawnAllowed || launchHold);
-  const [spawnedProxyPort, setSpawnedProxyPort] = useState<number | null>(null);
   const restoring = useKeel((state) =>
     state.restoreStatus === "restoring" && paneId in state.restorePanes,
   );
-  const [settledGeneration, setSettledGeneration] = useState<number | null>(null);
-  const starting = settledGeneration !== generation;
+  const [attachedGeneration, setAttachedGeneration] = useState<number | null>(null);
+  const starting = attachedGeneration !== generation;
+  const vpnWait = starting && !record && (!spawnAllowed || launchHold);
+  const spawnError = starting ? (record?.error ?? null) : null;
   const needsVpnRestart =
     !starting && vpnPhase === "connected" &&
-    proxyPort !== null && spawnedProxyPort !== proxyPort;
+    proxyPort !== null && (record?.proxyPort ?? null) !== proxyPort;
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const searchAddonRef = useRef<SearchAddon | null>(null);
@@ -523,17 +508,14 @@ export const TerminalSurface = memo(function TerminalSurface({
   const pty = useRef({ ready: false, cols: 0, rows: 0 });
   /** The channel this window's output arrives on, so leaving can let it go. */
   const output = useRef<OutputChannel | null>(null);
-  /** Last command string sampled, so adopting a CLI can read the screen already painted. */
-  const seenCommand = useRef(command);
   const promptDraft = useRef(createPromptDraft());
   // Latest callbacks without re-running the setup effect.
   const handlers = useRef({
     onActivity,
     onFocus,
-    onSpawnResult,
     onTitle,
   });
-  handlers.current = { onActivity, onFocus, onSpawnResult, onTitle };
+  handlers.current = { onActivity, onFocus, onTitle };
 
   const runFind = (
     direction: "next" | "previous",
@@ -906,19 +888,20 @@ export const TerminalSurface = memo(function TerminalSurface({
     actions.current.refit();
   }, [paneId, visible]);
 
-  // 3. Draw the process here. If Rust already runs this generation of the pane
-  // — another window drew it, or this one did before a remount — attach and
-  // replay it. Otherwise start it, holding off while a private VPN tunnel is
-  // still coming up so agent traffic does not leak out the PC's normal route.
+  // 3. Draw the pane's process. The supervisor starts it; this attaches, as
+  // soon as it exists, and is sent a replay of its screen and scrollback before
+  // anything new. A restart bumps the generation and attaches to the next
+  // process, whose terminal is the same one: the replay has the old output
+  // above the new, so the xterm starts over from it rather than doubling it.
   //
-  // Re-runs only when the pane is explicitly restarted. A second run for the
-  // same generation would replay the screen twice, so the VPN hold waits on
-  // the store inside this run rather than re-running it.
+  // Re-runs only when the generation changes. A second run for the same one
+  // would replay the screen twice.
   useEffect(() => {
     let cancelled = false;
-    let stopWaiting = () => {};
+    let attaching = false;
     const term = termRef.current;
     if (!term) return;
+    promptDraft.current.reset();
 
     const isCurrent = () => !cancelled &&
       (useKeel.getState().generations[paneId] ?? 0) === generation;
@@ -931,18 +914,25 @@ export const TerminalSurface = memo(function TerminalSurface({
       }
     };
 
-    const attach = async (): Promise<boolean> => {
+    const attach = async () => {
+      if (attaching || !isCurrent()) return;
+      attaching = true;
       const attachment = await attachPty(paneId, generation, write).catch(() => null);
-      if (!attachment) return false;
+      attaching = false;
+      if (!attachment) return;
       if (!isCurrent()) {
         void detachPty(paneId, attachment.channel).catch(() => {});
-        return true;
+        return;
       }
+      stopWaiting();
+      const leaving = output.current;
       output.current = attachment.channel;
-      startedGeneration.current = generation;
+      if (leaving) void detachPty(paneId, leaving).catch(() => {});
+      pty.current.ready = false;
       const { cols, rows } = attachment.attached;
       // The replay is drawn at the size Rust's grid is; only once it has been
       // parsed does this window fit it, and that resize has the program repaint.
+      term.reset();
       if (term.cols !== cols || term.rows !== rows) term.resize(cols, rows);
       attachment.release();
       term.write("", () => {
@@ -951,100 +941,26 @@ export const TerminalSurface = memo(function TerminalSurface({
         actions.current.refit();
         actions.current.syncPty();
       });
-      setSettledGeneration(generation);
-      return true;
+      setAttachedGeneration(generation);
     };
 
-    const networkReady = () => {
-      const vpn = useKeel.getState().vpn;
-      return vpn.spawnAllowed && !(vpn.autoConnect && vpn.phase === "connecting");
+    // Not started yet: the supervisor says when it is.
+    const spawned = onPtySpawned((id, started) => {
+      if (id === paneId && started === generation) void attach();
+    });
+    // And in case that was missed, look again now and then until attached.
+    const retry = setInterval(() => void attach(), 1_000);
+    const stopWaiting = () => {
+      clearInterval(retry);
+      void spawned.then((stop) => stop());
     };
+    void attach();
 
-    const start = async () => {
-      startedGeneration.current = generation;
-      const networkAtStart = useKeel.getState().vpn;
-      const startingProxyPort =
-        networkAtStart.phase === "connected" ? networkAtStart.proxyPort : null;
-      promptDraft.current.reset();
-      pty.current.ready = false;
-      useKeel.getState().noteShellSpawn(
-        paneId,
-        command ? launchAgentId : null,
-        accountId ?? null,
-      );
-      handlers.current.onActivity?.(paneId, "spawn");
-      // Size the PTY from the real grid, not whatever xterm defaulted to.
-      actions.current.refit();
-      const cols = term.cols || 80;
-      const rows = term.rows || 24;
-      try {
-        const channel = await spawnPty(
-          {
-            id: paneId,
-            generation,
-            cwd,
-            command,
-            agentId: command ? launchAgentId : null,
-            accountEnv,
-            accountId,
-            cols,
-            rows,
-          },
-          write,
-        );
-        if (!isCurrent()) return;
-        output.current = channel;
-        setSpawnedProxyPort(startingProxyPort);
-        pty.current = { ready: true, cols, rows };
-        // The layout may have moved while the process was starting.
-        actions.current.syncPty();
-        handlers.current.onSpawnResult?.(paneId, true);
-      } catch (error) {
-        if (!isCurrent()) return;
-        const reason = String(error);
-        // Keep a brief stream note; actionable UI lives in toast + Relaunch.
-        term.writeln(`\r\n\x1b[31m${reason}\x1b[0m`);
-        handlers.current.onSpawnResult?.(paneId, false, reason);
-      } finally {
-        if (isCurrent()) setSettledGeneration(generation);
-      }
-    };
-
-    void (async () => {
-      if (await attach() || cancelled) return;
-      if (!networkReady()) {
-        await new Promise<void>((resolve) => {
-          const unsubscribe = useKeel.subscribe(() => {
-            if (!networkReady()) return;
-            unsubscribe();
-            resolve();
-          });
-          stopWaiting = unsubscribe;
-        });
-        if (cancelled) return;
-      }
-      await start();
-    })();
     return () => {
       cancelled = true;
       stopWaiting();
     };
-    // Spawn inputs are read at restart time; generation is the explicit trigger.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paneId, generation]);
-
-  // A CLI typed into an already-open shell paints before the pane is bound to
-  // it. Output that arrived while this was still a shell was not read for agent
-  // status, so have Rust read the screen once when the command identity changes.
-  // A restart flips the generation and clears `pty.ready` first; that screen
-  // belongs to the old process.
-  useEffect(() => {
-    const previous = seenCommand.current;
-    seenCommand.current = command;
-    if (!command || command === previous) return;
-    if (!pty.current.ready || startedGeneration.current !== generation) return;
-    void ptySample(paneId, generation).catch(() => {});
-  }, [command, generation, paneId]);
 
   // 4. Focus follows the layout, so keystrokes land where the border says.
   // Leave the caret in the find field if that is what just received the click.
@@ -1116,27 +1032,40 @@ export const TerminalSurface = memo(function TerminalSurface({
       {starting ? (
         <div className="absolute inset-0 z-10 grid place-items-center bg-[color:var(--keel-term-solid)]">
           <div role="status" className="flex max-w-64 flex-col items-center gap-2 px-4 text-center">
-            {vpnPhase === "error" && vpnWait ? null : (
+            {spawnError || (vpnPhase === "error" && vpnWait) ? null : (
               <LoaderCircle aria-hidden className="size-5 text-faint motion-safe:animate-spin" />
             )}
             <p className="text-row font-medium text-dim">
-              {vpnWait
-                ? vpnPhase === "error"
-                  ? "VPN didn't connect"
-                  : "Waiting for VPN…"
-                : restoring
-                  ? "Restoring terminal…"
-                  : "Starting terminal…"}
+              {spawnError
+                ? "Couldn't start this terminal"
+                : vpnWait
+                  ? vpnPhase === "error"
+                    ? "VPN didn't connect"
+                    : "Waiting for VPN…"
+                  : restoring
+                    ? "Restoring terminal…"
+                    : "Starting terminal…"}
             </p>
             <p className="max-h-28 overflow-y-auto text-body leading-relaxed break-words text-faint">
-              {vpnWait
-                ? vpnPhase === "error"
-                  ? (vpnError ?? "The private tunnel did not come up.")
-                  : autoConnect
-                    ? "This terminal will start when the VPN is connected."
-                    : "This terminal will start when the connection attempt finishes."
-                : "Opening the shell and preparing your session."}
+              {spawnError
+                ? spawnError
+                : vpnWait
+                  ? vpnPhase === "error"
+                    ? (vpnError ?? "The private tunnel did not come up.")
+                    : autoConnect
+                      ? "This terminal will start when the VPN is connected."
+                      : "This terminal will start when the connection attempt finishes."
+                  : "Opening the shell and preparing your session."}
             </p>
+            {spawnError ? (
+              <button
+                type="button"
+                className="k-tag mt-1"
+                onClick={() => useKeel.getState().restartPane(paneId)}
+              >
+                Try again
+              </button>
+            ) : null}
             {vpnWait ? (
               <div className="mt-1 flex flex-wrap items-center justify-center gap-2">
                 {vpnPhase === "error" ? (

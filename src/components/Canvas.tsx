@@ -9,13 +9,16 @@
  *  - **Terminals.** A single flat list, keyed by pane id, positioned absolutely
  *    from those measurements.
  *
- * Because that list is flat and spans every deck this window owns, a pane can be
- * split, moved, zoomed, or carried to another deck entirely without React ever
- * reparenting it. Reparenting would remount the terminal and replay it.
+ * Because that list is flat and spans every deck this window keeps, a pane can
+ * be split, moved, zoomed, or carried to another deck entirely without React
+ * ever reparenting it. Reparenting would remount the terminal and replay it.
  *
  * A window owns the decks it may show: the main window every deck no screen
- * has, a screen its one deck. A deck that moves to another window unmounts here
- * and mounts there; its process carries on in Rust and the new window attaches.
+ * has, a screen its one deck. Of those it keeps terminals only for the deck on
+ * screen and the few shown just before it, so flipping between them is
+ * instant. Every other deck's processes, screens and scrollback carry on in
+ * Rust with no xterm at all, and its terminals attach and replay when it comes
+ * back. A deck that moves to another window does the same there.
  *
  * Dragging a pane by its header works off the same measurements: where the
  * pointer is (see `dropTargetAt`) decides which pane or group it would land
@@ -31,11 +34,11 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 import { Terminal } from "lucide-react";
-import { toast } from "sonner";
 
 import { AgentMark } from "@/components/AgentMark";
 import { PaneView } from "@/components/PaneView";
 import { dropTargetAt, type Box, type DropTarget } from "@/lib/dock";
+import { notePaneBox } from "@/lib/paneSize";
 import type { TitleSource } from "@/lib/paneTitle";
 import { shortcutKeys } from "@/lib/keymap";
 import { agentAccent } from "@/lib/tokens";
@@ -63,6 +66,9 @@ import { useWorkspace } from "@/state/workspace";
 const GAP = 12;
 
 type Rect = Box;
+
+/** Decks whose terminals stay drawn: the one on screen and the ones just before. */
+const WARM_DECKS = 3;
 
 /** How far the pointer travels before a press on a header becomes a drag. */
 const DRAG_THRESHOLD = 5;
@@ -126,6 +132,12 @@ export function Canvas({
   // The drag handlers outlive a render; they read the deck on screen here.
   const shownRef = useRef(shown);
   shownRef.current = shown;
+  // Most recently shown first. Decks that leave the window drop out.
+  const warm = useRef<string[]>([]);
+  if (deck && warm.current[0] !== deck.id) {
+    warm.current = [deck.id, ...warm.current.filter((id) => id !== deck.id)].slice(0, WARM_DECKS);
+  }
+  warm.current = warm.current.filter((id) => owns(id));
 
   // Decided during render, not in an effect: a pane's own layout effect runs
   // before this component's, and it has to see the window already open.
@@ -170,6 +182,8 @@ export function Canvas({
         width: Math.max(0, Math.round(box.width - GAP)),
         height: Math.max(0, Math.round(box.height - GAP)),
       };
+      // So a process started before anything draws it starts near its size.
+      notePaneBox(id, next[id].width, next[id].height);
     }
 
     setRects((previous) => {
@@ -262,30 +276,6 @@ export function Canvas({
       useKeel.getState().createPaneAccount(project.id, paneId, agentId, name);
     },
     [project],
-  );
-
-  const onSpawnResult = useCallback(
-    (paneId: string, ok: boolean, reason?: string) => {
-      const keel = useKeel.getState();
-      if (ok) {
-        keel.settleRestore(paneId, true);
-        return;
-      }
-
-      keel.noteSpawnFail(paneId);
-      const body =
-        reason && reason.trim()
-          ? reason.trim()
-          : "The agent process failed to start.";
-      toast.error("Couldn't start agent", {
-        description: body,
-        action: {
-          label: "Try again",
-          onClick: () => restartPane(paneId),
-        },
-      });
-    },
-    [restartPane],
   );
 
   /**
@@ -406,7 +396,7 @@ export function Canvas({
       )}
 
       {projects.flatMap((item) =>
-        item.decks.filter((candidate) => owns(candidate.id)).flatMap((candidate) =>
+        item.decks.filter((candidate) => warm.current.includes(candidate.id)).flatMap((candidate) =>
           listPanes(candidate.tree).map((paneId) => {
             const pane = candidate.panes[paneId];
             if (!pane) return null;
@@ -444,7 +434,6 @@ export function Canvas({
                 onRestart={restartPane}
                 onAccountChange={changeAccount}
                 onCreateAccount={createAccount}
-                onSpawnResult={onSpawnResult}
                 onDragStart={startPaneDrag}
               />
             );
