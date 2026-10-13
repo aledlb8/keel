@@ -53,9 +53,12 @@ export type ShortcutId =
   | "toggleSidebar"
   | "toggleInspector"
   | "menuBar"
-  | "rename";
+  | "rename"
+  | "deckToWindow"
+  | "focusWindow"
+  | "sendDeck";
 
-export type ShortcutGroup = "Jump" | "Panes" | "Decks" | "View";
+export type ShortcutGroup = "Jump" | "Panes" | "Decks" | "Windows" | "View";
 
 /** How much of the chord is yours to choose: all of it, or only the modifiers. */
 export type ShortcutFamily = "single" | "digits" | "arrows";
@@ -99,6 +102,7 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
   "Jump",
   "Panes",
   "Decks",
+  "Windows",
   "View",
 ];
 
@@ -230,6 +234,28 @@ export const SHORTCUTS: Shortcut[] = [
     group: "Decks",
     family: "single",
     defaults: bind("KeyO", { ctrl: true }),
+  },
+  {
+    id: "deckToWindow",
+    label: "Open the deck in a window of its own",
+    group: "Windows",
+    family: "single",
+    defaults: bind("KeyN", { ctrl: true, shift: true }),
+  },
+  {
+    // The arrow says which way: the Keel window on the screen in that direction.
+    id: "focusWindow",
+    label: "Go to the window on the next screen",
+    group: "Windows",
+    family: "arrows",
+    defaults: bind("ArrowLeft", { ctrl: true, alt: true }),
+  },
+  {
+    id: "sendDeck",
+    label: "Send the deck to the next screen",
+    group: "Windows",
+    family: "arrows",
+    defaults: bind("ArrowLeft", { ctrl: true, alt: true, shift: true }),
   },
   {
     id: "toggleSidebar",
@@ -509,7 +535,10 @@ export type ShortcutMatch =
   | { action: "overview" }
   | { action: "toggleSidebar" }
   | { action: "toggleInspector" }
-  | { action: "menuBar" };
+  | { action: "menuBar" }
+  | { action: "deckToWindow" }
+  | { action: "focusWindow"; direction: MoveDirection }
+  | { action: "sendDeck"; direction: MoveDirection };
 
 export interface Chord {
   code: string;
@@ -553,10 +582,10 @@ export function matchShortcut(
     if (shortcut.id === "jumpDeck") {
       return { action: "jumpDeck", index: deckIndexOf(event.code) ?? 0 };
     }
-    if (shortcut.id === "movePane") {
+    if (shortcut.family === "arrows") {
       const direction = MOVES[event.code];
       if (!direction) continue;
-      return { action: "movePane", direction };
+      return { action: shortcut.id, direction } as ShortcutMatch;
     }
     return { action: shortcut.id } as ShortcutMatch;
   }

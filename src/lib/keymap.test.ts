@@ -157,6 +157,21 @@ describe("matchShortcut", () => {
     );
   });
 
+  it("maps Ctrl+Alt+arrows to windows, and with Shift to sending the deck", () => {
+    assert.deepEqual(
+      matchShortcut(chord("ArrowRight", { ctrlKey: true, altKey: true })),
+      { action: "focusWindow", direction: "right" },
+    );
+    assert.deepEqual(
+      matchShortcut(chord("ArrowUp", { ctrlKey: true, altKey: true, shiftKey: true })),
+      { action: "sendDeck", direction: "up" },
+    );
+    assert.deepEqual(
+      matchShortcut(chord("KeyN", { ctrlKey: true, shiftKey: true })),
+      { action: "deckToWindow" },
+    );
+  });
+
   it("maps the unmodified function keys", () => {
     assert.deepEqual(matchShortcut(chord("F8")), { action: "nextWaiting" });
     assert.deepEqual(matchShortcut(chord("F11")), { action: "fullscreen" });
