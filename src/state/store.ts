@@ -98,11 +98,13 @@ import {
   screenOfDeck,
 } from "../lib/screens.ts";
 import {
+  askToAddTerminals,
   closeScreenWindow,
   displays,
   focusPaneIn,
   focusWindow,
   openScreenWindow,
+  setWindowOnTop,
   windowBounds,
   type Placement,
 } from "../lib/windows.ts";
@@ -461,7 +463,13 @@ export interface KeelState {
    * screen has that window brought forward instead. The main window moves to
    * another deck if it was showing this one.
    */
-  openScreen: (projectId: string, deckId: string, placement?: Placement) => void;
+  openScreen: (
+    projectId: string,
+    deckId: string,
+    placement?: Placement,
+    /** A popped-out pane's deck: where its terminals go back to. */
+    returnTo?: string,
+  ) => void;
   /** Close a screen; its deck goes back to the main window. */
   closeScreen: (screenId: string) => void;
   /** A screen's window is gone however it went; forget the screen. */
@@ -477,6 +485,18 @@ export interface KeelState {
   noteWindowFocus: (label: string, focused: boolean, paneId: string | null) => void;
   /** Make a login for an agent and move a pane onto it, restarting the pane. */
   createPaneAccount: (projectId: string, paneId: string, agentId: string, name: string) => void;
+  /** Carry a running terminal onto a deck of its own, made for it. */
+  movePaneToNewDeck: (projectId: string, paneId: string) => void;
+  /**
+   * Put one terminal in a small window of its own, kept above everything —
+   * to keep an eye on an agent while you work elsewhere. It goes on a deck of
+   * its own, so the window has exactly it.
+   */
+  popOutPane: (projectId: string, paneId: string) => void;
+  /** Keep a screen above every other window, or stop. */
+  setScreenOnTop: (screenId: string, onTop: boolean) => void;
+  /** Open "add terminals" for a deck, in whichever window shows it. */
+  addTerminalsTo: (projectId: string, deckId: string) => void;
   /** Give the keyboard to the Keel window that way from window `fromLabel`. */
   focusToward: (fromLabel: string, direction: MoveDirection) => void;
   /**
@@ -1018,6 +1038,39 @@ export const useKeel = create<KeelState>((set, get) => {
     const deck = project ? deckOfPane(project, paneId) : null;
     if (!deck) return;
     updateDeck(projectId, deck.id, change);
+  }
+
+  /**
+   * Drop a screen from the list; its deck goes back to the main window. A
+   * popped-out pane's terminals go back to the deck they came from, and the
+   * deck made for the window goes. Returns where the terminals now are, or
+   * `null` if there was no such screen.
+   */
+  function forgetScreen(screenId: string): string | null {
+    const screen = get().screens.find((item) => item.id === screenId);
+    if (!screen) return null;
+    set((state) => ({ screens: state.screens.filter((item) => item.id !== screenId) }));
+    persist();
+    const project = get().projects.find((item) => item.id === screen.projectId);
+    const made = project?.decks.find((deck) => deck.id === screen.deckId);
+    const home = project?.decks.find((deck) => deck.id === screen.returnTo);
+    if (!project || !made || !home || screenOfDeck(get().screens, home.id)) return screen.deckId;
+    for (const paneId of listPanes(made.tree)) {
+      get().movePaneToDeck(project.id, paneId, home.id);
+    }
+    // Empty now, so closing it ends no terminal.
+    if (listPanes(get().projects.find((item) => item.id === project.id)?.decks
+      .find((deck) => deck.id === made.id)?.tree ?? null).length === 0) {
+      get().removeDeck(project.id, made.id);
+    }
+    return home.id;
+  }
+
+  /** Add an empty deck at the end of a project, leaving which one is shown alone. */
+  function createDeck(projectId: string, name: string): string {
+    const deck = emptyDeck(name);
+    updateProject(projectId, (current) => ({ ...current, decks: [...current.decks, deck] }));
+    return deck.id;
   }
 
   /** `deckId` if the project has it, else the deck the main window shows. */
@@ -2142,13 +2195,9 @@ export const useKeel = create<KeelState>((set, get) => {
     addDeck(projectId, name) {
       const project = get().projects.find((item) => item.id === projectId);
       if (!project) return null;
-      const deck = emptyDeck(name?.trim() || `Deck ${project.decks.length + 1}`);
-      updateProject(projectId, (current) => ({
-        ...current,
-        decks: [...current.decks, deck],
-        activeDeckId: deck.id,
-      }));
-      return deck.id;
+      const deckId = createDeck(projectId, name?.trim() || `Deck ${project.decks.length + 1}`);
+      updateProject(projectId, (current) => ({ ...current, activeDeckId: deckId }));
+      return deckId;
     },
 
     removeDeck(projectId, deckId) {
@@ -2633,7 +2682,7 @@ export const useKeel = create<KeelState>((set, get) => {
       }));
     },
 
-    openScreen(projectId, deckId, placement = {}) {
+    openScreen(projectId, deckId, placement = {}, returnTo) {
       const state = get();
       const existing = screenOfDeck(state.screens, deckId);
       if (existing) {
@@ -2642,7 +2691,14 @@ export const useKeel = create<KeelState>((set, get) => {
       }
       const project = state.projects.find((item) => item.id === projectId);
       if (!project?.decks.some((deck) => deck.id === deckId)) return;
-      const screen: Screen = { id: makeId("scr"), projectId, deckId, bounds: placement.bounds };
+      const screen: Screen = {
+        id: makeId("scr"),
+        projectId,
+        deckId,
+        bounds: placement.bounds,
+        ...(placement.onTop ? { onTop: true } : {}),
+        ...(returnTo ? { returnTo } : {}),
+      };
       const home = deckAfterLeaving(project, state.screens, deckId);
       set({ screens: [...state.screens, screen] });
       if (home && home !== project.activeDeckId) {
@@ -2656,16 +2712,12 @@ export const useKeel = create<KeelState>((set, get) => {
     },
 
     closeScreen(screenId) {
-      if (!get().screens.some((screen) => screen.id === screenId)) return;
-      set((state) => ({ screens: state.screens.filter((screen) => screen.id !== screenId) }));
-      persist();
+      if (forgetScreen(screenId) === null) return;
       void closeScreenWindow(screenId).catch(() => {});
     },
 
     noteScreenClosed(screenId) {
-      if (!get().screens.some((screen) => screen.id === screenId)) return;
-      set((state) => ({ screens: state.screens.filter((screen) => screen.id !== screenId) }));
-      persist();
+      forgetScreen(screenId);
     },
 
     showOnScreen(screenId, deckId) {
@@ -2681,9 +2733,13 @@ export const useKeel = create<KeelState>((set, get) => {
       const others = state.screens.filter((item) => item.id !== screenId);
       const home = deckAfterLeaving(project, others, deckId);
       set({
-        screens: state.screens.map((item) =>
-          item.id === screenId ? { ...item, projectId: project.id, deckId } : item,
-        ),
+        screens: state.screens.map((item) => {
+          if (item.id !== screenId) return item;
+          // Showing another deck, it is a window like any other now: the deck
+          // it was popped out on stays a deck.
+          const { returnTo: _returnTo, ...rest } = item;
+          return { ...rest, projectId: project.id, deckId };
+        }),
       });
       if (home && home !== project.activeDeckId) {
         updateProject(project.id, (current) => ({ ...current, activeDeckId: home }));
@@ -2695,11 +2751,12 @@ export const useKeel = create<KeelState>((set, get) => {
     bringDeckHome(deckId) {
       const screen = screenOfDeck(get().screens, deckId);
       if (!screen) return;
-      get().closeScreen(screen.id);
+      const landed = forgetScreen(screen.id) ?? deckId;
+      void closeScreenWindow(screen.id).catch(() => {});
       const project = get().projects.find((item) => item.id === screen.projectId);
-      if (!project) return;
+      if (!project?.decks.some((deck) => deck.id === landed)) return;
       set({ activeProjectId: project.id });
-      updateProject(project.id, (current) => ({ ...current, activeDeckId: deckId }));
+      updateProject(project.id, (current) => ({ ...current, activeDeckId: landed }));
       void focusWindow(MAIN_WINDOW).catch(() => {});
     },
 
@@ -2719,7 +2776,7 @@ export const useKeel = create<KeelState>((set, get) => {
       }
       persist();
       for (const screen of wanted) {
-        void openScreenWindow(screen.id, { bounds: screen.bounds }).catch(() => {
+        void openScreenWindow(screen.id, { bounds: screen.bounds, onTop: screen.onTop ?? false }).catch(() => {
           get().noteScreenClosed(screen.id);
         });
       }
@@ -2798,6 +2855,77 @@ export const useKeel = create<KeelState>((set, get) => {
         if (own) await openScreenWindow(own.id, { monitor: target.name });
         else get().openScreen(project.id, deckId, { monitor: target.name });
       })().catch(() => {});
+    },
+
+    movePaneToNewDeck(projectId, paneId) {
+      const project = get().projects.find((item) => item.id === projectId);
+      const pane = project ? deckOfPane(project, paneId)?.panes[paneId] : undefined;
+      if (!project || !pane) return;
+      const deckId = createDeck(projectId, `Deck ${project.decks.length + 1}`);
+      get().movePaneToDeck(projectId, paneId, deckId);
+      if (!screenOfDeck(get().screens, deckId)) get().selectDeck(projectId, deckId);
+    },
+
+    popOutPane(projectId, paneId) {
+      const project = get().projects.find((item) => item.id === projectId);
+      const pane = project ? deckOfPane(project, paneId)?.panes[paneId] : undefined;
+      if (!project || !pane) return;
+      const origin = deckOfPane(project, paneId)!.id;
+      const deckId = createDeck(projectId, pane.title || "Popped out");
+      get().movePaneToDeck(projectId, paneId, deckId);
+      // A small window in the far corner of the window it came from, or of
+      // the main monitor's free space when that window is not on screen.
+      const width = 760;
+      const height = 480;
+      const corner = (area: { x: number; y: number; width: number; height: number }) => ({
+        x: area.x + Math.max(0, area.width - width - 24),
+        y: area.y + Math.max(0, area.height - height - 24),
+        width,
+        height,
+      });
+      void Promise.all([windowBounds(), displays()])
+        .then(([places, monitors]) => {
+          const from = places.get(MAIN_WINDOW);
+          const primary = monitors.find((item) => item.primary) ?? monitors[0];
+          const area = from && displayAt(monitors, from)
+            ? from
+            : primary
+              ? { x: primary.workX, y: primary.workY, width: primary.workWidth, height: primary.workHeight }
+              : null;
+          get().openScreen(
+            projectId,
+            deckId,
+            { bounds: area ? corner(area) : undefined, onTop: true },
+            origin,
+          );
+        })
+        .catch(() => get().openScreen(projectId, deckId, { onTop: true }, origin));
+    },
+
+    setScreenOnTop(screenId, onTop) {
+      if (!get().screens.some((screen) => screen.id === screenId)) return;
+      set((state) => ({
+        screens: state.screens.map((screen) => {
+          if (screen.id !== screenId) return screen;
+          const { onTop: _was, ...rest } = screen;
+          return onTop ? { ...rest, onTop: true } : rest;
+        }),
+      }));
+      persist();
+      void setWindowOnTop(screenLabel(screenId), onTop).catch(() => {});
+    },
+
+    addTerminalsTo(projectId, deckId) {
+      const screen = screenOfDeck(get().screens, deckId);
+      if (screen) {
+        const label = screenLabel(screen.id);
+        void focusWindow(label).catch(() => {});
+        void askToAddTerminals(label).catch(() => {});
+        return;
+      }
+      get().selectProject(projectId);
+      get().selectDeck(projectId, deckId);
+      get().setLauncher(true);
     },
 
     createPaneAccount(projectId, paneId, agentId, name) {

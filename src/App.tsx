@@ -514,6 +514,7 @@ export default function App() {
       project && useWorkspace.getState().removeProjectSafely(project.id),
     newDeck: () => project && useKeel.getState().addDeck(project.id),
     showOverview: () => setOverview(true),
+    deckToWindow: () => project && deck && useKeel.getState().openScreen(project.id, deck.id),
     fullscreenPane: () =>
       project &&
       deck?.focused &&

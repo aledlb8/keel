@@ -236,7 +236,14 @@ export function readScreens(raw: unknown, projects: readonly Project[]): Screen[
     if (!project?.decks.some((deck) => deck.id === deckId)) continue;
     ids.add(id);
     decks.add(deckId);
-    screens.push({ id, projectId, deckId, bounds: readBounds(entry.bounds) });
+    screens.push({
+      id,
+      projectId,
+      deckId,
+      bounds: readBounds(entry.bounds),
+      ...(entry.onTop === true ? { onTop: true } : {}),
+      ...(typeof entry.returnTo === "string" ? { returnTo: entry.returnTo } : {}),
+    });
   }
   return screens;
 }

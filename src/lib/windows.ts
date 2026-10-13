@@ -14,6 +14,7 @@ import type { Display, WindowBounds } from "./types.ts";
 export interface Placement {
   bounds?: WindowBounds | undefined;
   monitor?: string | null | undefined;
+  onTop?: boolean | undefined;
 }
 
 export function displays(): Promise<Display[]> {
@@ -34,6 +35,10 @@ export function placeWindow(label: string, placement: Placement): Promise<void> 
 
 export function focusWindow(label: string): Promise<void> {
   return invoke("window_focus", { label });
+}
+
+export function setWindowOnTop(label: string, onTop: boolean): Promise<void> {
+  return invoke("window_on_top", { label, onTop });
 }
 
 /** Every Keel window's current place, by label. */
@@ -66,6 +71,16 @@ export function onScreenClosed(handler: (label: string) => void): Promise<() => 
 /** Have the window drawing a pane put the keyboard in its terminal. */
 export function focusPaneIn(label: string, paneId: string): Promise<void> {
   return emitTo(label, "keel:focus-pane", paneId);
+}
+
+/** Have a screen open its own "add terminals" dialog. */
+export function askToAddTerminals(label: string): Promise<void> {
+  return emitTo(label, "keel:add-terminals", null);
+}
+
+/** The main window asked this screen to open its "add terminals" dialog. */
+export function onAddTerminalsRequest(handler: () => void): Promise<() => void> {
+  return listen("keel:add-terminals", () => handler());
 }
 
 /** The main window asked this window to focus one of its terminals. */

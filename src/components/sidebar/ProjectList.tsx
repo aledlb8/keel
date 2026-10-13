@@ -18,7 +18,7 @@
  * looking for a name, the arrangement it happens to sit in is noise.
  */
 
-import { Plus, X } from "lucide-react";
+import { AppWindow, Plus, X } from "lucide-react";
 import { ChevronRight } from "lucide-react";
 
 import { AgentMark } from "@/components/AgentMark";
@@ -400,11 +400,9 @@ function DeckGroup({
     renaming ? null : { kind: "deck", projectId: project.id, deckId: deck.id },
   );
 
+  const away = useKeel((state) => state.screens.some((screen) => screen.deckId === deck.id));
   const addHere = () => {
-    const state = useKeel.getState();
-    state.selectProject(project.id);
-    state.selectDeck(project.id, deck.id);
-    state.setLauncher(true);
+    useKeel.getState().addTerminalsTo(project.id, deck.id);
     tree.onNavigate();
   };
 
@@ -444,6 +442,11 @@ function DeckGroup({
         ) : (
           <>
             <span className="k-row-name">{deck.name}</span>
+            {away ? (
+              <span title="In a window of its own" className="flex shrink-0 text-faint">
+                <AppWindow aria-label="In a window of its own" className="size-3" />
+              </span>
+            ) : null}
             {!active && attention ? <StatusDot status={attention} /> : null}
             <Count value={count} className={HIDE_ON_HOVER.deck} />
             <RowActions group="deck">

@@ -49,6 +49,9 @@ import {
   UserRound,
   UsersRound,
   X,
+  AppWindow,
+  PanelLeftClose,
+  PictureInPicture2,
 } from "lucide-react";
 
 import { AgentMark } from "@/components/AgentMark";
@@ -61,11 +64,11 @@ import { canHandOff, handoffTargets, targetLabel } from "@/lib/handoff";
 import { agentAccent } from "@/lib/tokens";
 import type { Agent } from "@/lib/types";
 import { lookingAt, waitingPanes } from "@/lib/island";
+import { mainDeckOf, screenOfDeck } from "@/lib/screens";
 import { deckShortcutKeys, shortcutKeys } from "@/lib/keymap";
 import { listPanes } from "@/lib/tree";
 import { repairSidebar, workspaceOf } from "@/lib/workspaces";
 import {
-  activeDeck,
   deckOfPane,
   useKeel,
   type RenameTarget,
@@ -108,7 +111,7 @@ function inFront() {
   const state = useKeel.getState();
   const project =
     state.projects.find((item) => item.id === state.activeProjectId) ?? null;
-  const deck = activeDeck(project);
+  const deck = mainDeckOf(project, state.screens);
   const focused =
     deck?.focused && listPanes(deck.tree).includes(deck.focused)
       ? deck.focused
@@ -350,6 +353,14 @@ export function viewBarMenu(
       shortcut: shortcutKeys("balance"),
       disabled: !deck?.tree,
       onSelect: actions.balance,
+    },
+    {
+      kind: "item",
+      label: "Open the deck in its own window",
+      icon: AppWindow,
+      shortcut: shortcutKeys("deckToWindow"),
+      disabled: !deck,
+      onSelect: actions.deckToWindow,
     },
     { kind: "separator" },
     {
@@ -664,6 +675,7 @@ export function deckMenu(projectId: string, deckId: string): MenuEntry[] {
   const deck = project?.decks[index];
   if (!project || !deck) return [];
   const count = listPanes(deck.tree).length;
+  const away = screenOfDeck(state.screens, deckId);
 
   return [
     { kind: "label", label: `Deck ${index + 1} · ${deck.name}` },
@@ -672,12 +684,31 @@ export function deckMenu(projectId: string, deckId: string): MenuEntry[] {
       label: "Add terminals…",
       icon: Plus,
       shortcut: shortcutKeys("addTerminals"),
-      onSelect: () => {
-        state.selectProject(projectId);
-        state.selectDeck(projectId, deckId);
-        state.setLauncher(true);
-      },
+      onSelect: () => state.addTerminalsTo(projectId, deckId),
     },
+    ...(away
+      ? ([
+          {
+            kind: "item",
+            label: "Go to its window",
+            icon: AppWindow,
+            onSelect: () => state.selectDeck(projectId, deckId),
+          },
+          {
+            kind: "item",
+            label: "Back to the main window",
+            icon: PanelLeftClose,
+            onSelect: () => state.bringDeckHome(deckId),
+          },
+        ] satisfies MenuEntry[])
+      : ([
+          {
+            kind: "item",
+            label: "Open in its own window",
+            icon: AppWindow,
+            onSelect: () => state.openScreen(projectId, deckId),
+          },
+        ] satisfies MenuEntry[])),
     { kind: "separator" },
     {
       kind: "item",
@@ -846,12 +877,15 @@ export function paneMenu(
           kind: "item",
           label: "New deck",
           icon: Plus,
-          onSelect: () => {
-            const target = state.addDeck(projectId);
-            if (target) state.movePaneToDeck(projectId, paneId, target);
-          },
+          onSelect: () => state.movePaneToNewDeck(projectId, paneId),
         },
       ],
+    },
+    {
+      kind: "item",
+      label: "Pop out",
+      icon: PictureInPicture2,
+      onSelect: () => state.popOutPane(projectId, paneId),
     },
     ...(handoff.length > 0
       ? [{ kind: "sub", label: "Hand off to", icon: Forward, entries: handoff } satisfies MenuEntry]

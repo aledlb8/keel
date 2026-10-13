@@ -47,6 +47,8 @@ export interface TitlebarActions {
   newDeck: () => void;
   selectDeck: (deckId: string) => void;
   showOverview: () => void;
+  /** Open the deck in front in a window of its own. */
+  deckToWindow: () => void;
   fullscreenPane: () => void;
   splitRight: () => void;
   splitDown: () => void;

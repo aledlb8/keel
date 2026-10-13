@@ -313,6 +313,13 @@ export interface Screen {
   projectId: string;
   deckId: string;
   bounds?: WindowBounds | undefined;
+  /** Kept above every other window: a pane popped out to keep an eye on. */
+  onTop?: boolean | undefined;
+  /**
+   * A popped-out pane's own deck was made for the window. When the window
+   * closes its terminals go back to this deck, and the made-up deck goes.
+   */
+  returnTo?: string | undefined;
 }
 
 /** Where every window was, for one set of monitors. */

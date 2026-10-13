@@ -11,7 +11,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Check, ChevronDown, Minus, PanelLeftClose, Square, X } from "lucide-react";
+import { Check, ChevronDown, Minus, PanelLeftClose, Pin, PinOff, Square, X } from "lucide-react";
 
 import { Canvas } from "@/components/Canvas";
 import { focusTerminal } from "@/components/Island";
@@ -30,7 +30,7 @@ import { waitingPanes } from "@/lib/island";
 import { bindingFor, isEditableTarget, matchesBinding, matchShortcut } from "@/lib/keymap";
 import { screenLabel, screenOfDeck } from "@/lib/screens";
 import { startWindowFocusTracking } from "@/lib/windowFocus";
-import { onFocusPaneRequest } from "@/lib/windows";
+import { onAddTerminalsRequest, onFocusPaneRequest } from "@/lib/windows";
 import { cycleEditorTab } from "@/lib/editorTabs";
 import { useKeel } from "@/state/store";
 import { useWorkspace } from "@/state/workspace";
@@ -67,7 +67,9 @@ export default function ScreenApp({ screenId }: { screenId: string }) {
     const blockNativeMenu = (event: MouseEvent) => event.preventDefault();
     window.addEventListener("contextmenu", blockNativeMenu);
     const stopFocus = onFocusPaneRequest((paneId) => focusTerminal(paneId));
+    const stopAdd = onAddTerminalsRequest(() => useKeel.getState().setLauncher(true));
     return () => {
+      void stopAdd.then((stop) => stop());
       window.removeEventListener("focus", report);
       window.removeEventListener("blur", report);
       document.removeEventListener("focusin", report);
@@ -204,6 +206,14 @@ function ScreenBar({ screenId }: { screenId: string }) {
       </div>
 
       <div data-tauri-drag-region className="relative z-10 flex min-w-0 items-stretch justify-end">
+        {screen ? (
+          <WindowButton
+            label={screen.onTop ? "Stop keeping on top" : "Keep on top of other windows"}
+            onClick={() => keel().setScreenOnTop(screenId, !screen.onTop)}
+          >
+            {screen.onTop ? <PinOff className="size-3.5" /> : <Pin className="size-3.5" />}
+          </WindowButton>
+        ) : null}
         {deck ? (
           <WindowButton label="Back to the main window" onClick={() => keel().bringDeckHome(deck.id)}>
             <PanelLeftClose className="size-3.5" />
