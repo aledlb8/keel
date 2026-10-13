@@ -67,6 +67,7 @@ export interface TitlebarActions {
   filterSidebar: () => void;
   findInFiles: () => void;
   jumpToWaiting: () => void;
+  openBoard: () => void;
 }
 
 export interface TitlebarProps {

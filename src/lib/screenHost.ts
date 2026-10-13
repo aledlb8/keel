@@ -27,7 +27,9 @@ import {
 import type { Arrangement, Display, WindowBounds } from "./types.ts";
 import {
   displays,
+  onBoardClosed,
   onScreenClosed,
+  openBoardWindow,
   onWindowBounds,
   placeWindow,
 } from "./windows.ts";
@@ -110,6 +112,15 @@ export function startScreenHost(): () => void {
     const keel = useKeel.getState();
     const saved = keel.arrangements[fingerprint];
     apply(saved ?? current(), monitors);
+    // The board comes back where it was, or at its default place if that
+    // monitor is gone.
+    const board = keel.board;
+    if (board) {
+      const bounds = board.bounds && boundsVisible(monitors, board.bounds) ? board.bounds : undefined;
+      void openBoardWindow({ bounds, onTop: board.onTop ?? false }).catch(() => {
+        useKeel.getState().noteBoardClosed();
+      });
+    }
   })();
 
   // Keep this set's arrangement current as screens open, close and move.
@@ -136,6 +147,7 @@ export function startScreenHost(): () => void {
     const screenId = screenIdOf(label);
     if (screenId) useKeel.getState().noteScreenClosed(screenId);
   });
+  const stopBoard = onBoardClosed(() => useKeel.getState().noteBoardClosed());
 
   const poll = setInterval(() => void check(), DISPLAY_POLL_MS);
 
@@ -147,5 +159,6 @@ export function startScreenHost(): () => void {
     clearTimeout(boundsTimer);
     void stopBounds.then((stop) => stop());
     void stopClosed.then((stop) => stop());
+    void stopBoard.then((stop) => stop());
   };
 }

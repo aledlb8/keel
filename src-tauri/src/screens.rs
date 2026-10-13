@@ -19,6 +19,13 @@ use crate::pty::MAIN_WINDOW;
 
 /// Labels of screen windows start with this; the rest is the screen's id.
 pub const SCREEN_PREFIX: &str = "screen-";
+/// The agent board: every agent in Keel, in a small window of its own.
+pub const BOARD_WINDOW: &str = "board";
+
+/// A window Keel opened, which the commands below may move and focus.
+fn is_keel_window(label: &str) -> bool {
+    label == MAIN_WINDOW || label == BOARD_WINDOW || label.starts_with(SCREEN_PREFIX)
+}
 
 /// Smallest a window is allowed to be, logical pixels. Matches the main window.
 const MIN_WIDTH: f64 = 600.0;
@@ -240,22 +247,30 @@ fn screen_label(id: &str) -> Result<String, String> {
     }
 }
 
-/// Open the window for screen `id`, or bring it forward if it is open, and
-/// put it where `placement` says.
-#[tauri::command(async)]
-pub async fn screen_open(app: AppHandle, id: String, placement: Placement) -> Result<(), String> {
-    let label = screen_label(&id)?;
-    if let Some(window) = app.get_webview_window(&label) {
-        place(&window, &placement);
+/// Open a Keel window labelled `label`, or bring it forward if it is open, and
+/// put it where `placement` says. `size` and `min` are logical pixels. With
+/// nowhere in particular to go, a window that `fills` takes a whole monitor;
+/// one that does not opens at `size` in the middle of the main one.
+fn open_window(
+    app: &AppHandle,
+    label: &str,
+    placement: &Placement,
+    size: (f64, f64),
+    min: (f64, f64),
+    fills: bool,
+) -> Result<(), String> {
+    let unplaced = placement.bounds.is_none() && placement.monitor.is_none();
+    if let Some(window) = app.get_webview_window(label) {
+        place(&window, placement);
         let _ = window.unminimize();
         let _ = window.set_focus();
         return Ok(());
     }
     // Built hidden so it never flashes at the default place first.
-    let window = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("index.html".into()))
+    let window = WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html".into()))
         .title("Keel")
-        .inner_size(1200.0, 800.0)
-        .min_inner_size(MIN_WIDTH, MIN_HEIGHT)
+        .inner_size(size.0, size.1)
+        .min_inner_size(min.0, min.1)
         .decorations(false)
         .transparent(true)
         .shadow(true)
@@ -266,11 +281,56 @@ pub async fn screen_open(app: AppHandle, id: String, placement: Placement) -> Re
         .map_err(|err| format!("could not open a window: {err}"))?;
     #[cfg(windows)]
     crate::disable_browser_accelerator_keys(&window);
-    place(&window, &placement);
+    if unplaced && !fills {
+        if let Some(on_top) = placement.on_top {
+            let _ = window.set_always_on_top(on_top);
+        }
+        let _ = window.center();
+    } else {
+        place(&window, placement);
+    }
     window
         .show()
         .map_err(|err| format!("could not show the window: {err}"))?;
     let _ = window.set_focus();
+    Ok(())
+}
+
+/// Open the window for screen `id`, or bring it forward if it is open, and
+/// put it where `placement` says.
+#[tauri::command(async)]
+pub async fn screen_open(app: AppHandle, id: String, placement: Placement) -> Result<(), String> {
+    let label = screen_label(&id)?;
+    open_window(
+        &app,
+        &label,
+        &placement,
+        (1200.0, 800.0),
+        (MIN_WIDTH, MIN_HEIGHT),
+        true,
+    )
+}
+
+/// Open the agent board, or bring it forward.
+#[tauri::command(async)]
+pub async fn board_open(app: AppHandle, placement: Placement) -> Result<(), String> {
+    open_window(
+        &app,
+        BOARD_WINDOW,
+        &placement,
+        (360.0, 640.0),
+        (260.0, 240.0),
+        false,
+    )
+}
+
+#[tauri::command(async)]
+pub async fn board_close(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(BOARD_WINDOW) {
+        window
+            .destroy()
+            .map_err(|err| format!("could not close the board: {err}"))?;
+    }
     Ok(())
 }
 
@@ -294,7 +354,7 @@ pub async fn window_place(
     label: String,
     placement: Placement,
 ) -> Result<(), String> {
-    if label != MAIN_WINDOW && !label.starts_with(SCREEN_PREFIX) {
+    if !is_keel_window(&label) {
         return Err("not a Keel window".into());
     }
     let window = app
@@ -307,8 +367,8 @@ pub async fn window_place(
 /// Keep a Keel window above every other window, or stop.
 #[tauri::command(async)]
 pub async fn window_on_top(app: AppHandle, label: String, on_top: bool) -> Result<(), String> {
-    if !label.starts_with(SCREEN_PREFIX) {
-        return Err("only screens float".into());
+    if label == MAIN_WINDOW || !is_keel_window(&label) {
+        return Err("only screens and the board float".into());
     }
     let window = app
         .get_webview_window(&label)
@@ -321,7 +381,7 @@ pub async fn window_on_top(app: AppHandle, label: String, on_top: bool) -> Resul
 /// Bring a Keel window forward and give it the keyboard.
 #[tauri::command(async)]
 pub async fn window_focus(app: AppHandle, label: String) -> Result<(), String> {
-    if label != MAIN_WINDOW && !label.starts_with(SCREEN_PREFIX) {
+    if !is_keel_window(&label) {
         return Err("not a Keel window".into());
     }
     let window = app
@@ -366,6 +426,9 @@ pub fn on_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) {
         }
         WindowEvent::Destroyed if label.starts_with(SCREEN_PREFIX) => {
             let _ = app.emit_to(MAIN_WINDOW, "screen:closed", label);
+        }
+        WindowEvent::Destroyed if label == BOARD_WINDOW => {
+            let _ = app.emit_to(MAIN_WINDOW, "board:closed", ());
         }
         _ => {}
     }

@@ -50,6 +50,7 @@ import {
   UsersRound,
   X,
   AppWindow,
+  LayoutList,
   PanelLeftClose,
   PictureInPicture2,
 } from "lucide-react";
@@ -252,6 +253,12 @@ export function goBarMenu(actions: TitlebarActions): MenuEntry[] {
       icon: BellDot,
       shortcut: shortcutKeys("nextWaiting"),
       onSelect: actions.jumpToWaiting,
+    },
+    {
+      kind: "item",
+      label: "Agent board",
+      icon: LayoutList,
+      onSelect: actions.openBoard,
     },
     { kind: "separator" },
     {

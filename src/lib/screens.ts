@@ -20,6 +20,8 @@ import type { MoveDirection } from "./tree.ts";
 
 export const MAIN_WINDOW = "main";
 export const SCREEN_PREFIX = "screen-";
+/** Every agent in Keel, in a small window of its own. */
+export const BOARD_WINDOW = "board";
 
 /** How many sets of monitors to remember arrangements for. */
 const ARRANGEMENTS_KEPT = 8;
@@ -218,6 +220,16 @@ export function readBounds(raw: unknown): WindowBounds | undefined {
 }
 
 const SCREEN_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+export function readBoard(raw: unknown): { bounds?: WindowBounds; onTop?: boolean } | null {
+  if (!raw || typeof raw !== "object") return null;
+  const entry = raw as Record<string, unknown>;
+  const bounds = readBounds(entry.bounds);
+  return {
+    ...(bounds ? { bounds } : {}),
+    ...(entry.onTop === true ? { onTop: true } : {}),
+  };
+}
 
 /** Saved screens whose deck still exists, each deck on one screen at most. */
 export function readScreens(raw: unknown, projects: readonly Project[]): Screen[] {

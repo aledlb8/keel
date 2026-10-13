@@ -29,6 +29,19 @@ export function closeScreenWindow(id: string): Promise<void> {
   return invoke("screen_close", { id });
 }
 
+export function openBoardWindow(placement: Placement = {}): Promise<void> {
+  return invoke("board_open", { placement });
+}
+
+export function closeBoardWindow(): Promise<void> {
+  return invoke("board_close");
+}
+
+/** The agent board's window is gone, however it was closed. Main window only. */
+export function onBoardClosed(handler: () => void): Promise<() => void> {
+  return listen("board:closed", () => handler());
+}
+
 export function placeWindow(label: string, placement: Placement): Promise<void> {
   return invoke("window_place", { label, placement });
 }

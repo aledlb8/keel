@@ -74,6 +74,8 @@ pub fn run() {
             screens::displays,
             screens::screen_open,
             screens::screen_close,
+            screens::board_open,
+            screens::board_close,
             screens::window_place,
             screens::window_focus,
             screens::window_on_top,

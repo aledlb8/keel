@@ -79,10 +79,12 @@ import type {
   VpnState,
   Workspace,
   Arrangement,
+  BoardSettings,
   Screen,
   WindowBounds,
 } from "../lib/types.ts";
 import {
+  BOARD_WINDOW,
   MAIN_WINDOW,
   deckAfterLeaving,
   displayAt,
@@ -90,6 +92,7 @@ import {
   mainDeckOf,
   nearestToward,
   readArrangements,
+  readBoard,
   readBounds,
   readScreens,
   screenIdOf,
@@ -99,10 +102,12 @@ import {
 } from "../lib/screens.ts";
 import {
   askToAddTerminals,
+  closeBoardWindow,
   closeScreenWindow,
   displays,
   focusPaneIn,
   focusWindow,
+  openBoardWindow,
   openScreenWindow,
   setWindowOnTop,
   windowBounds,
@@ -499,6 +504,12 @@ export interface KeelState {
   rememberArrangements: (arrangements: Record<string, Arrangement>) => void;
   noteWindowBounds: (label: string, bounds: WindowBounds) => void;
   noteWindowFocus: (label: string, focused: boolean, paneId: string | null) => void;
+  /** The agent board while it is open, else `null`. */
+  board: BoardSettings | null;
+  openBoard: () => void;
+  closeBoard: () => void;
+  noteBoardClosed: () => void;
+  setBoardOnTop: (onTop: boolean) => void;
   /** Make a login for an agent and move a pane onto it, restarting the pane. */
   createPaneAccount: (projectId: string, paneId: string, agentId: string, name: string) => void;
   /** Carry a running terminal onto a deck of its own, made for it. */
@@ -932,6 +943,7 @@ export const useKeel = create<KeelState>((set, get) => {
         screens,
         mainBounds,
         arrangements,
+        board,
       } = get();
       const projectIds = new Set(projects.map((project) => project.id));
       const cleaned = normalizeWorkspaces(workspaces, projectIds);
@@ -951,6 +963,7 @@ export const useKeel = create<KeelState>((set, get) => {
         screens,
         mainBounds,
         arrangements,
+        board,
       };
       const saving = saves.enqueue(document).then(
         () => { set({ persistError: null }); },
@@ -1210,6 +1223,7 @@ export const useKeel = create<KeelState>((set, get) => {
     arrangements: {},
     windowFocus: null,
     spawned: {},
+    board: null,
 
     async flushPersist() {
       await persist(true);
@@ -1296,6 +1310,7 @@ export const useKeel = create<KeelState>((set, get) => {
         activeProjectId,
         screens,
         mainBounds: readBounds(document?.mainBounds),
+        board: readBoard(document?.board),
         arrangements: readArrangements(document?.arrangements, projects),
         ready: true,
         restoreStatus: paneCount > 0 ? "restoring" : "idle",
@@ -1844,6 +1859,11 @@ export const useKeel = create<KeelState>((set, get) => {
         void focusWindow(label).catch(() => {});
         void focusPaneIn(label, paneId).catch(() => {});
         return true;
+      }
+      if (typeof document !== "undefined" && !document.hasFocus()) {
+        // Asked from another window — the board, a screen: come forward.
+        void focusWindow(MAIN_WINDOW).catch(() => {});
+        void focusPaneIn(MAIN_WINDOW, paneId).catch(() => {});
       }
       set({ activeProjectId: project.id });
       updateProject(project.id, (current) => ({
@@ -2814,6 +2834,13 @@ export const useKeel = create<KeelState>((set, get) => {
         persist();
         return;
       }
+      if (label === BOARD_WINDOW) {
+        const board = get().board;
+        if (!board) return;
+        set({ board: { ...board, bounds } });
+        persist();
+        return;
+      }
       const screenId = screenIdOf(label);
       if (!screenId || !get().screens.some((screen) => screen.id === screenId)) return;
       set((state) => ({
@@ -2947,6 +2974,37 @@ export const useKeel = create<KeelState>((set, get) => {
       get().selectProject(projectId);
       get().selectDeck(projectId, deckId);
       get().setLauncher(true);
+    },
+
+    openBoard() {
+      const board = get().board ?? {};
+      set({ board });
+      persist();
+      void openBoardWindow({ bounds: board.bounds, onTop: board.onTop ?? false }).catch(() => {
+        get().noteBoardClosed();
+      });
+    },
+
+    closeBoard() {
+      if (!get().board) return;
+      set({ board: null });
+      persist();
+      void closeBoardWindow().catch(() => {});
+    },
+
+    noteBoardClosed() {
+      if (!get().board) return;
+      set({ board: null });
+      persist();
+    },
+
+    setBoardOnTop(onTop) {
+      const board = get().board;
+      if (!board) return;
+      const { onTop: _was, ...rest } = board;
+      set({ board: onTop ? { ...rest, onTop: true } : rest });
+      persist();
+      void setWindowOnTop(BOARD_WINDOW, onTop).catch(() => {});
     },
 
     createPaneAccount(projectId, paneId, agentId, name) {

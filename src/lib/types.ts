@@ -322,6 +322,12 @@ export interface Screen {
   returnTo?: string | undefined;
 }
 
+/** The agent board, while it is open: where it is, and whether it floats. */
+export interface BoardSettings {
+  bounds?: WindowBounds | undefined;
+  onTop?: boolean | undefined;
+}
+
 /** Where every window was, for one set of monitors. */
 export interface Arrangement {
   main?: WindowBounds | undefined;
@@ -364,4 +370,6 @@ export interface PersistedState {
    * (see `displayFingerprint`), so docking a laptop puts them all back.
    */
   arrangements?: Record<string, Arrangement> | undefined;
+  /** Present while the agent board is open. */
+  board?: BoardSettings | null | undefined;
 }

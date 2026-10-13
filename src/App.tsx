@@ -65,6 +65,7 @@ import { startMirrorHost } from "@/lib/mirror";
 import { startPaneEvents } from "@/lib/paneEvents";
 import { startScreenHost } from "@/lib/screenHost";
 import { startSupervisor } from "@/lib/supervisor";
+import { onFocusPaneRequest } from "@/lib/windows";
 import { mainDeckOf, MAIN_WINDOW } from "@/lib/screens";
 import { pruneRecent } from "@/lib/recentFiles";
 import { startWindowFocusTracking } from "@/lib/windowFocus";
@@ -222,6 +223,8 @@ export default function App() {
     const stopFocus = startWindowFocusTracking();
     const stopAssistant = startAssistant();
     const stopPanes = startPaneEvents();
+    // Another window went to one of this window's terminals.
+    const stopFocusRequests = onFocusPaneRequest((paneId) => focusTerminal(paneId));
     const stopHost = onHostLost(() => useKeel.getState().noteHostLost());
     const stopClose = startCloseGuard();
     // No browser context menu anywhere: "Reload" and "Inspect" have no business
@@ -238,6 +241,7 @@ export default function App() {
       stopFocus();
       stopAssistant();
       stopPanes();
+      void stopFocusRequests.then((stop) => stop());
       stopHost();
       stopClose();
       window.removeEventListener("contextmenu", blockNativeMenu);
@@ -572,6 +576,7 @@ export default function App() {
         document.querySelector<HTMLInputElement>("[data-grep-query]")?.focus();
       });
     },
+    openBoard: () => useKeel.getState().openBoard(),
     jumpToWaiting: () => {
       const paneId = useKeel.getState().jumpToNextWaiting();
       if (!paneId) return;

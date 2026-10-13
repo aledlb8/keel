@@ -66,8 +66,8 @@ export function startMirrorHost(): () => void {
   const flush = () => {
     timer = undefined;
     const state = useKeel.getState();
-    if (state.screens.length === 0) {
-      // Nobody to tell. The next screen asks for everything anyway.
+    if (state.screens.length === 0 && state.board === null) {
+      // Nobody to tell. The next window asks for everything anyway.
       sent = null;
       return;
     }
