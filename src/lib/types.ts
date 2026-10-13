@@ -289,6 +289,53 @@ export interface VpnState extends VpnSettings {
   dialogOpen: boolean;
 }
 
+/** A window's place on the desktop, in physical pixels. */
+export interface WindowBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  maximized?: boolean | undefined;
+  /** The monitor it was on when it was saved, by name. */
+  monitor?: string | null | undefined;
+}
+
+/**
+ * A window of its own showing one deck, beside the main window.
+ *
+ * The main window owns everything; a screen only shows a deck and sends what
+ * you do there back. A deck is on at most one screen. Every deck that is not on
+ * one stays with the main window, which never shows a deck a screen has.
+ */
+export interface Screen {
+  /** Also names the window: `screen-<id>`. */
+  id: string;
+  projectId: string;
+  deckId: string;
+  bounds?: WindowBounds | undefined;
+}
+
+/** Where every window was, for one set of monitors. */
+export interface Arrangement {
+  main?: WindowBounds | undefined;
+  screens: Screen[];
+}
+
+/** One monitor, in physical pixels. */
+export interface Display {
+  name: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  workX: number;
+  workY: number;
+  workWidth: number;
+  workHeight: number;
+  scale: number;
+  primary: boolean;
+}
+
 /** Everything written to disk. Live PTYs are deliberately not part of it. */
 export interface PersistedState {
   version: 5;
@@ -301,4 +348,13 @@ export interface PersistedState {
   vpn?: VpnSettings | undefined;
   /** Only the shortcuts you changed; everything else follows the defaults. */
   keybindings?: KeybindingOverrides | undefined;
+  /** Decks open in windows of their own. */
+  screens?: Screen[] | undefined;
+  /** Where the main window was. */
+  mainBounds?: WindowBounds | undefined;
+  /**
+   * The windows as they were left on each set of monitors, by fingerprint
+   * (see `displayFingerprint`), so docking a laptop puts them all back.
+   */
+  arrangements?: Record<string, Arrangement> | undefined;
 }

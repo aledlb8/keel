@@ -81,7 +81,7 @@ export interface TitlebarProps {
  * a lot of separate work upright. Drawn as a solid so it reads as a shape at
  * 14px rather than as a stray chevron.
  */
-function KeelMark() {
+export function KeelMark() {
   return (
     <svg
       width="14"
@@ -220,7 +220,7 @@ function BarMenu({
   );
 }
 
-function WindowButton({
+export function WindowButton({
   label,
   onClick,
   danger,

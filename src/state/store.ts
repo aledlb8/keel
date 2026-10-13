@@ -78,7 +78,34 @@ import type {
   VpnSettings,
   VpnState,
   Workspace,
+  Arrangement,
+  Screen,
+  WindowBounds,
 } from "../lib/types.ts";
+import {
+  MAIN_WINDOW,
+  deckAfterLeaving,
+  displayAt,
+  displayToward,
+  mainDeckOf,
+  nearestToward,
+  readArrangements,
+  readBounds,
+  readScreens,
+  screenIdOf,
+  sameDisplay,
+  screenLabel,
+  screenOfDeck,
+} from "../lib/screens.ts";
+import {
+  closeScreenWindow,
+  displays,
+  focusPaneIn,
+  focusWindow,
+  openScreenWindow,
+  windowBounds,
+  type Placement,
+} from "../lib/windows.ts";
 import {
   dissolveWorkspace as dissolveWorkspaceLayout,
   emptyWorkspace,
@@ -350,9 +377,15 @@ export interface KeelState {
   addPane: (
     projectId: string,
     spec: PaneSpec,
-    placement?: { beside?: string | null; direction?: Direction },
+    placement?: {
+      beside?: string | null;
+      direction?: Direction;
+      /** The deck to add it to. Left out, the deck the main window shows. */
+      deck?: string;
+    },
   ) => string | null;
-  addPanes: (projectId: string, specs: PaneSpec[]) => void;
+  /** Onto `deckId`, or the deck the main window shows for the project. */
+  addPanes: (projectId: string, specs: PaneSpec[], deckId?: string) => void;
   duplicatePane: (
     projectId: string,
     paneId: string,
@@ -383,7 +416,8 @@ export interface KeelState {
     change: (ref: EditorRef) => EditorRef | null,
   ) => void;
   focusPane: (projectId: string, paneId: string) => void;
-  cyclePane: (projectId: string, step: 1 | -1) => void;
+  /** On `deckId`, or the deck the main window shows for the project. */
+  cyclePane: (projectId: string, step: 1 | -1, deckId?: string) => void;
   movePane: (
     projectId: string,
     paneId: string,
@@ -407,8 +441,50 @@ export interface KeelState {
     seam: number,
     delta: number,
   ) => void;
-  balanceLayout: (projectId: string) => void;
+  /** On `deckId`, or the deck the main window shows for the project. */
+  balanceLayout: (projectId: string, deckId?: string) => void;
   toggleZoom: (projectId: string, paneId: string) => void;
+
+  /** Decks in windows of their own. */
+  screens: Screen[];
+  /** Where the main window was, to come back there. */
+  mainBounds: WindowBounds | undefined;
+  /** Where every window was on each set of monitors. */
+  arrangements: Record<string, Arrangement>;
+  /**
+   * The Keel window that has the keyboard, and the terminal focused in it,
+   * as the windows report them. Not saved.
+   */
+  windowFocus: { label: string; paneId: string | null } | null;
+  /**
+   * Show a deck in a window of its own, placed as asked. A deck already on a
+   * screen has that window brought forward instead. The main window moves to
+   * another deck if it was showing this one.
+   */
+  openScreen: (projectId: string, deckId: string, placement?: Placement) => void;
+  /** Close a screen; its deck goes back to the main window. */
+  closeScreen: (screenId: string) => void;
+  /** A screen's window is gone however it went; forget the screen. */
+  noteScreenClosed: (screenId: string) => void;
+  /** Have a screen show another deck. The one it showed goes back to the main window. */
+  showOnScreen: (screenId: string, deckId: string) => void;
+  /** Bring the main window's deck for a project back from its screen. */
+  bringDeckHome: (deckId: string) => void;
+  /** Swap in a saved arrangement of screens, as far as its decks still exist. */
+  arrangeScreens: (arrangement: Arrangement) => void;
+  rememberArrangements: (arrangements: Record<string, Arrangement>) => void;
+  noteWindowBounds: (label: string, bounds: WindowBounds) => void;
+  noteWindowFocus: (label: string, focused: boolean, paneId: string | null) => void;
+  /** Make a login for an agent and move a pane onto it, restarting the pane. */
+  createPaneAccount: (projectId: string, paneId: string, agentId: string, name: string) => void;
+  /** Give the keyboard to the Keel window that way from window `fromLabel`. */
+  focusToward: (fromLabel: string, direction: MoveDirection) => void;
+  /**
+   * Send a deck to the monitor that way from window `fromLabel`: onto the
+   * screen there, home to the main window if that is there, or into a new
+   * window filling that monitor.
+   */
+  sendDeckToward: (fromLabel: string, deckId: string, direction: MoveDirection) => void;
 
   noteOutput: (paneId: string) => void;
   noteActivity: (paneId: string, kind: PaneActivity, data?: string) => void;
@@ -809,8 +885,18 @@ export const useKeel = create<KeelState>((set, get) => {
       saveTimer = null;
       if (!get().ready) return Promise.resolve();
       if (get().restoreStatus === "failed") return Promise.resolve();
-      const { projects, workspaces, sidebar, activeProjectId, accounts, vpn, keybindings } =
-        get();
+      const {
+        projects,
+        workspaces,
+        sidebar,
+        activeProjectId,
+        accounts,
+        vpn,
+        keybindings,
+        screens,
+        mainBounds,
+        arrangements,
+      } = get();
       const projectIds = new Set(projects.map((project) => project.id));
       const cleaned = normalizeWorkspaces(workspaces, projectIds);
       const document: PersistedState = {
@@ -826,6 +912,9 @@ export const useKeel = create<KeelState>((set, get) => {
           profileId: persistedProfileId(vpn.profileId),
         },
         keybindings,
+        screens,
+        mainBounds,
+        arrangements,
       };
       const saving = saves.enqueue(document).then(
         () => { set({ persistError: null }); },
@@ -929,6 +1018,13 @@ export const useKeel = create<KeelState>((set, get) => {
     const deck = project ? deckOfPane(project, paneId) : null;
     if (!deck) return;
     updateDeck(projectId, deck.id, change);
+  }
+
+  /** `deckId` if the project has it, else the deck the main window shows. */
+  function targetDeck(project: Project | undefined, deckId?: string): Deck | null {
+    if (!project) return null;
+    if (deckId) return project.decks.find((deck) => deck.id === deckId) ?? null;
+    return mainDeckOf(project, get().screens) ?? activeDeck(project);
   }
 
   /** Looking at a finished agent — focusing it, typing into it — clears "done". */
@@ -1040,6 +1136,10 @@ export const useKeel = create<KeelState>((set, get) => {
     restorePanes: {},
     hostLost: false,
     vpn: emptyVpn(DEFAULT_VPN),
+    screens: [],
+    mainBounds: undefined,
+    arrangements: {},
+    windowFocus: null,
 
     async flushPersist() {
       await persist(true);
@@ -1114,6 +1214,9 @@ export const useKeel = create<KeelState>((set, get) => {
 
       const restorePanes = paneIdsOf(projects);
       const paneCount = Object.keys(restorePanes).length;
+      // Screens open once the main window knows which monitors are attached;
+      // see `startScreenHost`.
+      const screens = readScreens(document?.screens, projects);
       set({
         agents,
         accounts,
@@ -1121,6 +1224,9 @@ export const useKeel = create<KeelState>((set, get) => {
         workspaces,
         sidebar,
         activeProjectId,
+        screens,
+        mainBounds: readBounds(document?.mainBounds),
+        arrangements: readArrangements(document?.arrangements, projects),
         ready: true,
         restoreStatus: paneCount > 0 ? "restoring" : "idle",
         restoreLeft: paneCount,
@@ -1652,6 +1758,19 @@ export const useKeel = create<KeelState>((set, get) => {
       const deck = project ? deckOfPane(project, paneId) : null;
       if (!project || !deck) return false;
       acknowledge(paneId);
+      const screen = screenOfDeck(get().screens, deck.id);
+      if (screen) {
+        // It is in a window of its own: go there, and leave the main window be.
+        updateDeck(project.id, deck.id, (current) => ({
+          ...current,
+          focused: paneId,
+          zoomed: current.zoomed === paneId ? current.zoomed : null,
+        }));
+        const label = screenLabel(screen.id);
+        void focusWindow(label).catch(() => {});
+        void focusPaneIn(label, paneId).catch(() => {});
+        return true;
+      }
       set({ activeProjectId: project.id });
       updateProject(project.id, (current) => ({
         ...current,
@@ -1895,6 +2014,9 @@ export const useKeel = create<KeelState>((set, get) => {
 
     removeProject(projectId) {
       const project = get().projects.find((item) => item.id === projectId);
+      for (const screen of get().screens) {
+        if (screen.projectId === projectId) get().closeScreen(screen.id);
+      }
       // The terminals only existed inside this project; take them with it.
       for (const deck of project?.decks ?? []) {
         for (const paneId of Object.keys(deck.panes)) {
@@ -2033,6 +2155,8 @@ export const useKeel = create<KeelState>((set, get) => {
       const project = get().projects.find((item) => item.id === projectId);
       const deck = project?.decks.find((item) => item.id === deckId);
       if (!project || !deck) return;
+      const screen = screenOfDeck(get().screens, deckId);
+      if (screen) get().closeScreen(screen.id);
 
       for (const paneId of Object.keys(deck.panes)) {
         get().settleRestore(paneId, true);
@@ -2045,12 +2169,14 @@ export const useKeel = create<KeelState>((set, get) => {
         // A project always has at least one deck to put terminals on.
         const remaining = current.decks.filter((item) => item.id !== deckId);
         const decks = remaining.length > 0 ? remaining : [emptyDeck("Deck 1")];
+        const away = new Set(get().screens.map((item) => item.deckId));
         return {
           ...current,
           decks,
           activeDeckId:
             current.activeDeckId === deckId
-              ? (decks[0]?.id ?? current.activeDeckId)
+              ? ((decks.find((item) => !away.has(item.id)) ?? decks[0])?.id ??
+                current.activeDeckId)
               : current.activeDeckId,
         };
       });
@@ -2064,6 +2190,12 @@ export const useKeel = create<KeelState>((set, get) => {
     },
 
     selectDeck(projectId, deckId) {
+      // A deck in a window of its own is gone to, not pulled into this one.
+      const screen = screenOfDeck(get().screens, deckId);
+      if (screen) {
+        void focusWindow(screenLabel(screen.id)).catch(() => {});
+        return;
+      }
       updateProject(projectId, (project) =>
         project.decks.some((deck) => deck.id === deckId)
           ? { ...project, activeDeckId: deckId }
@@ -2113,7 +2245,7 @@ export const useKeel = create<KeelState>((set, get) => {
 
     addPane(projectId, spec, placement = {}) {
       const project = get().projects.find((item) => item.id === projectId);
-      const deck = activeDeck(project);
+      const deck = targetDeck(project, placement.deck);
       if (!project || !deck) return null;
 
       const paneId = makeId("pane");
@@ -2147,10 +2279,10 @@ export const useKeel = create<KeelState>((set, get) => {
       return paneId;
     },
 
-    addPanes(projectId, specs) {
+    addPanes(projectId, specs, deckId) {
       if (specs.length === 0) return;
       const project = get().projects.find((item) => item.id === projectId);
-      const deck = activeDeck(project);
+      const deck = targetDeck(project, deckId);
       if (!project || !deck) return;
 
       const agents = get().agents;
@@ -2186,9 +2318,11 @@ export const useKeel = create<KeelState>((set, get) => {
       const source = deck?.panes[paneId];
       if (!project || !deck || !source) return;
 
-      // Splitting always lands on the deck the original is on.
-      const previous = project.activeDeckId;
-      if (previous !== deck.id) get().selectDeck(projectId, deck.id);
+      // Splitting always lands on the deck the original is on, and the main
+      // window follows it there unless that deck is in a window of its own.
+      if (project.activeDeckId !== deck.id && !screenOfDeck(get().screens, deck.id)) {
+        get().selectDeck(projectId, deck.id);
+      }
 
       // Splitting an editor opens what it is showing a second time beside it.
       if (source.editor) {
@@ -2218,7 +2352,7 @@ export const useKeel = create<KeelState>((set, get) => {
       get().addPane(
         projectId,
         { agentId: null, cwd: source.cwd },
-        { beside: paneId, direction },
+        { beside: paneId, direction, deck: deck.id },
       );
     },
 
@@ -2255,12 +2389,13 @@ export const useKeel = create<KeelState>((set, get) => {
       if (paneId in get().closing) return;
       const project = get().projects.find((item) => item.id === projectId);
       const deck = project ? deckOfPane(project, paneId) : null;
-      const onScreen =
+      const shown =
         project !== undefined &&
         deck !== null &&
-        get().activeProjectId === projectId &&
-        project.activeDeckId === deck.id &&
-        (deck.zoomed === null || deck.zoomed === paneId);
+        (screenOfDeck(get().screens, deck.id) !== null ||
+          (get().activeProjectId === projectId && project.activeDeckId === deck.id));
+      const onScreen =
+        shown && deck !== null && (deck.zoomed === null || deck.zoomed === paneId);
       if (!onScreen) {
         get().closePane(projectId, paneId);
         return;
@@ -2425,6 +2560,13 @@ export const useKeel = create<KeelState>((set, get) => {
       const deck = project ? deckOfPane(project, paneId) : null;
       if (!project || !deck) return;
       acknowledge(paneId);
+      if (screenOfDeck(get().screens, deck.id)) {
+        // Its own window shows it already; the main window stays where it is.
+        if (deck.focused !== paneId) {
+          updateDeck(projectId, deck.id, (current) => ({ ...current, focused: paneId }));
+        }
+        return;
+      }
       if (deck.focused === paneId && project.activeDeckId === deck.id) return;
 
       // Reaching for a terminal brings its deck forward with it.
@@ -2437,9 +2579,9 @@ export const useKeel = create<KeelState>((set, get) => {
       }));
     },
 
-    cyclePane(projectId, step) {
+    cyclePane(projectId, step, deckId) {
       const project = get().projects.find((item) => item.id === projectId);
-      const deck = activeDeck(project);
+      const deck = targetDeck(project, deckId);
       if (!project || !deck?.focused) return;
       const next = neighbourPane(deck.tree, deck.focused, step);
       if (next) get().focusPane(projectId, next);
@@ -2472,9 +2614,10 @@ export const useKeel = create<KeelState>((set, get) => {
       );
     },
 
-    balanceLayout(projectId) {
-      const deck = activeDeck(
+    balanceLayout(projectId, deckId) {
+      const deck = targetDeck(
         get().projects.find((item) => item.id === projectId),
+        deckId,
       );
       if (!deck) return;
       updateDeck(projectId, deck.id, (current) =>
@@ -2488,6 +2631,180 @@ export const useKeel = create<KeelState>((set, get) => {
         zoomed: deck.zoomed === paneId ? null : paneId,
         focused: paneId,
       }));
+    },
+
+    openScreen(projectId, deckId, placement = {}) {
+      const state = get();
+      const existing = screenOfDeck(state.screens, deckId);
+      if (existing) {
+        void openScreenWindow(existing.id, placement).catch(() => {});
+        return;
+      }
+      const project = state.projects.find((item) => item.id === projectId);
+      if (!project?.decks.some((deck) => deck.id === deckId)) return;
+      const screen: Screen = { id: makeId("scr"), projectId, deckId, bounds: placement.bounds };
+      const home = deckAfterLeaving(project, state.screens, deckId);
+      set({ screens: [...state.screens, screen] });
+      if (home && home !== project.activeDeckId) {
+        updateProject(projectId, (current) => ({ ...current, activeDeckId: home }));
+      } else {
+        persist();
+      }
+      void openScreenWindow(screen.id, placement).catch(() => {
+        get().noteScreenClosed(screen.id);
+      });
+    },
+
+    closeScreen(screenId) {
+      if (!get().screens.some((screen) => screen.id === screenId)) return;
+      set((state) => ({ screens: state.screens.filter((screen) => screen.id !== screenId) }));
+      persist();
+      void closeScreenWindow(screenId).catch(() => {});
+    },
+
+    noteScreenClosed(screenId) {
+      if (!get().screens.some((screen) => screen.id === screenId)) return;
+      set((state) => ({ screens: state.screens.filter((screen) => screen.id !== screenId) }));
+      persist();
+    },
+
+    showOnScreen(screenId, deckId) {
+      const state = get();
+      const screen = state.screens.find((item) => item.id === screenId);
+      const project = state.projects.find((item) => item.decks.some((deck) => deck.id === deckId));
+      if (!screen || !project || screen.deckId === deckId) return;
+      const elsewhere = screenOfDeck(state.screens, deckId);
+      if (elsewhere) {
+        void focusWindow(screenLabel(elsewhere.id)).catch(() => {});
+        return;
+      }
+      const others = state.screens.filter((item) => item.id !== screenId);
+      const home = deckAfterLeaving(project, others, deckId);
+      set({
+        screens: state.screens.map((item) =>
+          item.id === screenId ? { ...item, projectId: project.id, deckId } : item,
+        ),
+      });
+      if (home && home !== project.activeDeckId) {
+        updateProject(project.id, (current) => ({ ...current, activeDeckId: home }));
+      } else {
+        persist();
+      }
+    },
+
+    bringDeckHome(deckId) {
+      const screen = screenOfDeck(get().screens, deckId);
+      if (!screen) return;
+      get().closeScreen(screen.id);
+      const project = get().projects.find((item) => item.id === screen.projectId);
+      if (!project) return;
+      set({ activeProjectId: project.id });
+      updateProject(project.id, (current) => ({ ...current, activeDeckId: deckId }));
+      void focusWindow(MAIN_WINDOW).catch(() => {});
+    },
+
+    arrangeScreens(arrangement) {
+      const state = get();
+      const wanted = readScreens(arrangement.screens, state.projects);
+      const keep = new Set(wanted.map((screen) => screen.id));
+      for (const screen of state.screens) {
+        if (!keep.has(screen.id)) void closeScreenWindow(screen.id).catch(() => {});
+      }
+      set({ screens: wanted });
+      for (const project of get().projects) {
+        const home = mainDeckOf(project, wanted);
+        if (home && home.id !== project.activeDeckId) {
+          updateProject(project.id, (current) => ({ ...current, activeDeckId: home.id }));
+        }
+      }
+      persist();
+      for (const screen of wanted) {
+        void openScreenWindow(screen.id, { bounds: screen.bounds }).catch(() => {
+          get().noteScreenClosed(screen.id);
+        });
+      }
+    },
+
+    rememberArrangements(arrangements) {
+      set({ arrangements });
+      persist();
+    },
+
+    noteWindowBounds(label, bounds) {
+      if (label === MAIN_WINDOW) {
+        set({ mainBounds: bounds });
+        persist();
+        return;
+      }
+      const screenId = screenIdOf(label);
+      if (!screenId || !get().screens.some((screen) => screen.id === screenId)) return;
+      set((state) => ({
+        screens: state.screens.map((screen) =>
+          screen.id === screenId ? { ...screen, bounds } : screen,
+        ),
+      }));
+      persist();
+    },
+
+    noteWindowFocus(label, focused, paneId) {
+      const current = get().windowFocus;
+      if (focused) {
+        if (current?.label === label && current.paneId === paneId) return;
+        set({ windowFocus: { label, paneId } });
+      } else if (current?.label === label) {
+        set({ windowFocus: null });
+      }
+    },
+
+    focusToward(fromLabel, direction) {
+      void (async () => {
+        const places = await windowBounds();
+        const from = places.get(fromLabel);
+        if (!from) return;
+        const others = [...places]
+          .filter(([label]) => label !== fromLabel)
+          .map(([label, bounds]) => ({ label, ...bounds }));
+        const next = nearestToward(others, from, direction);
+        if (next) await focusWindow(next.label);
+      })().catch(() => {});
+    },
+
+    sendDeckToward(fromLabel, deckId, direction) {
+      void (async () => {
+        const [monitors, places] = await Promise.all([displays(), windowBounds()]);
+        const fromBounds = places.get(fromLabel);
+        const from = fromBounds ? displayAt(monitors, fromBounds) : null;
+        const target = from ? displayToward(monitors, from, direction) : null;
+        if (!target) return;
+        const state = get();
+        const project = state.projects.find((item) => item.decks.some((deck) => deck.id === deckId));
+        if (!project) return;
+        const there = [...places].filter(([, bounds]) => sameDisplay(displayAt(monitors, bounds), target));
+        const screenThere = there
+          .map(([label]) => state.screens.find((screen) => screenLabel(screen.id) === label))
+          .find((screen) => screen !== undefined);
+        const own = screenOfDeck(state.screens, deckId);
+        if (screenThere) {
+          get().showOnScreen(screenThere.id, deckId);
+          if (own && own.id !== screenThere.id) get().closeScreen(own.id);
+          await focusWindow(screenLabel(screenThere.id));
+          return;
+        }
+        if (there.some(([label]) => label === MAIN_WINDOW)) {
+          if (own) get().bringDeckHome(deckId);
+          return;
+        }
+        // Nothing of Keel's on that monitor yet: the deck's window goes there.
+        if (own) await openScreenWindow(own.id, { monitor: target.name });
+        else get().openScreen(project.id, deckId, { monitor: target.name });
+      })().catch(() => {});
+    },
+
+    createPaneAccount(projectId, paneId, agentId, name) {
+      const accountId = get().addAccount(agentId, name);
+      if (!accountId) return;
+      get().setPaneAccount(projectId, paneId, accountId);
+      get().restartPane(paneId);
     },
 
     noteAgentEvent(paneId, generation, event) {
@@ -2590,10 +2907,21 @@ export const useKeel = create<KeelState>((set, get) => {
 
 /** A selected pane behind a dialog or editor does not have terminal focus. */
 function watchedTerminal(state: KeelState): string | null {
-  if (typeof document === "undefined" || !document.hasFocus()) return null;
+  if (typeof document === "undefined") return null;
+  if (!document.hasFocus()) {
+    // Another Keel window may have the keyboard, with one of its terminals.
+    const elsewhere = state.windowFocus;
+    return elsewhere && elsewhere.label !== MAIN_WINDOW ? elsewhere.paneId : null;
+  }
   const paneId = document.activeElement?.closest("[data-terminal-pane]")
     ?.getAttribute("data-terminal-pane");
   return paneId && paneId === lookingAt(state.projects, state.activeProjectId) ? paneId : null;
+}
+
+/** Some Keel window has the keyboard: this one, or a screen. */
+export function keelFocused(state: KeelState = useKeel.getState()): boolean {
+  if (typeof document !== "undefined" && document.hasFocus()) return true;
+  return state.windowFocus !== null;
 }
 
 function paneAlert(
@@ -2608,7 +2936,7 @@ function paneAlert(
     title: pane.title,
     projectName,
     muted: pane.muted === true,
-    windowFocused: typeof document !== "undefined" && document.hasFocus(),
+    windowFocused: keelFocused(),
     paneFocused: watchedTerminal(useKeel.getState()) === pane.id,
     restoring,
     silentPane: Boolean(pane.editor) || !pane.agentId,

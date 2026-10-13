@@ -47,7 +47,7 @@ import { invoke } from "@/lib/invoke";
 import { buildUsageQueries, type UsageSnapshot } from "@/lib/usage";
 import { listPanes } from "@/lib/tree";
 import type { Pane, Project } from "@/lib/types";
-import { useKeel } from "@/state/store";
+import { keelFocused, useKeel } from "@/state/store";
 
 const LOG_LIMIT = 300;
 const TAIL_LINES = 40;
@@ -315,7 +315,7 @@ function watchPanes(): () => void {
           state.agents.find((item) => item.id === found.pane.agentId)?.name ?? found.pane.agentId,
         project: found.project.name,
         whose,
-        windowFocused: typeof document !== "undefined" && document.hasFocus(),
+        windowFocused: keelFocused(),
       };
       inOrder(change.paneId, async () => {
         await terminalQuiet(change.paneId, REPORT_SETTLE);

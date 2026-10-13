@@ -9,10 +9,13 @@
  *  - **Terminals.** A single flat list, keyed by pane id, positioned absolutely
  *    from those measurements.
  *
- * Because that list is flat and spans *every* deck of *every* project, a pane can
- * be split, moved, zoomed, or carried to another deck entirely without React ever
- * reparenting it. Reparenting unmounts, and unmounting an xterm throws away the
- * scrollback and kills the agent inside it.
+ * Because that list is flat and spans every deck this window owns, a pane can be
+ * split, moved, zoomed, or carried to another deck entirely without React ever
+ * reparenting it. Reparenting would remount the terminal and replay it.
+ *
+ * A window owns the decks it may show: the main window every deck no screen
+ * has, a screen its one deck. A deck that moves to another window unmounts here
+ * and mounts there; its process carries on in Rust and the new window attaches.
  *
  * Dragging a pane by its header works off the same measurements: where the
  * pointer is (see `dropTargetAt`) decides which pane or group it would land
@@ -47,7 +50,7 @@ import type {
   PaneActivity,
   Project,
 } from "@/lib/types";
-import { activeDeck, useKeel } from "@/state/store";
+import { useKeel } from "@/state/store";
 import { useWorkspace } from "@/state/workspace";
 
 /**
@@ -89,13 +92,17 @@ interface PaneDrag {
 
 export interface CanvasProps {
   projects: Project[];
-  activeProjectId: string | null;
+  /** The deck on screen in this window, or none. */
+  shown: { projectId: string; deckId: string } | null;
+  /** Decks whose terminals live in this window. */
+  owns: (deckId: string) => boolean;
   onAddTerminals: () => void;
 }
 
 export function Canvas({
   projects,
-  activeProjectId,
+  shown,
+  owns,
   onAddTerminals,
 }: CanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -114,8 +121,11 @@ export function Canvas({
   const accounts = useKeel((state) => state.accounts);
   const exited = useKeel((state) => state.exited);
 
-  const project = projects.find((item) => item.id === activeProjectId) ?? null;
-  const deck = activeDeck(project);
+  const project = projects.find((item) => item.id === shown?.projectId) ?? null;
+  const deck = project?.decks.find((item) => item.id === shown?.deckId) ?? null;
+  // The drag handlers outlive a render; they read the deck on screen here.
+  const shownRef = useRef(shown);
+  shownRef.current = shown;
 
   // Decided during render, not in an effect: a pane's own layout effect runs
   // before this component's, and it has to see the window already open.
@@ -186,7 +196,7 @@ export function Canvas({
   // geometry needs re-reading.
   useLayoutEffect(() => {
     measure();
-  }, [measure, projects, activeProjectId]);
+  }, [measure, projects, shown?.deckId]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -249,12 +259,9 @@ export function Canvas({
   const createAccount = useCallback(
     (paneId: string, agentId: string, name: string) => {
       if (!project) return;
-      const accountId = useKeel.getState().addAccount(agentId, name);
-      if (!accountId) return;
-      useKeel.getState().setPaneAccount(project.id, paneId, accountId);
-      restartPane(paneId);
+      useKeel.getState().createPaneAccount(project.id, paneId, agentId, name);
     },
-    [project, restartPane],
+    [project],
   );
 
   const onSpawnResult = useCallback(
@@ -291,10 +298,9 @@ export function Canvas({
     (paneId: string, event: React.PointerEvent) => {
       const container = containerRef.current;
       const state = useKeel.getState();
-      const owner = state.projects.find(
-        (item) => item.id === state.activeProjectId,
-      );
-      const current = activeDeck(owner);
+      const showing = shownRef.current;
+      const owner = state.projects.find((item) => item.id === showing?.projectId);
+      const current = owner?.decks.find((item) => item.id === showing?.deckId) ?? null;
       const tree = current?.tree;
       if (!container || !owner || !tree || current.zoomed) return;
       const onDeck = listPanes(tree);
@@ -379,15 +385,12 @@ export function Canvas({
        * clicks on the controls in a pane's top-right corner.
        */}
       {projects.map((item) =>
-        item.decks.map((candidate) => (
+        item.decks.filter((candidate) => owns(candidate.id)).map((candidate) => (
           <div
             key={candidate.id}
             className="pointer-events-none absolute inset-0 z-0 flex"
             style={{
-              visibility:
-                item.id === activeProjectId && candidate.id === deck?.id
-                  ? "visible"
-                  : "hidden",
+              visibility: candidate.id === deck?.id ? "visible" : "hidden",
             }}
             aria-hidden={candidate.id !== deck?.id}
           >
@@ -403,14 +406,13 @@ export function Canvas({
       )}
 
       {projects.flatMap((item) =>
-        item.decks.flatMap((candidate) =>
+        item.decks.filter((candidate) => owns(candidate.id)).flatMap((candidate) =>
           listPanes(candidate.tree).map((paneId) => {
             const pane = candidate.panes[paneId];
             if (!pane) return null;
             const agent =
               agents.find((entry) => entry.id === pane.agentId) ?? null;
-            const onScreen =
-              item.id === activeProjectId && candidate.id === deck?.id;
+            const onScreen = candidate.id === deck?.id;
             const isZoomed = candidate.zoomed === paneId;
 
             return (

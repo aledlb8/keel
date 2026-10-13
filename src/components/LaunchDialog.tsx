@@ -39,6 +39,7 @@ import { KEEL_AGENT_FALLBACK, agentAccent } from "@/lib/tokens";
 import { gridRows, listPanes } from "@/lib/tree";
 import { cn } from "@/lib/utils";
 import type { Agent, Pane, Project } from "@/lib/types";
+import { mainDeckOf } from "@/lib/screens";
 import { activeDeck, useKeel, type PaneSpec } from "@/state/store";
 
 /** Stands in for "no agent, just a shell" wherever an agent id is expected. */
@@ -74,13 +75,17 @@ export interface LaunchDialogProps {
   onOpenChange: (open: boolean) => void;
   /** The project the terminals will be opened in. */
   project: Project | null;
+  /** The deck they go on. Left out, the deck the main window shows. */
+  deckId?: string | undefined;
 }
 
 export function LaunchDialog({
   open,
   onOpenChange,
   project,
+  deckId,
 }: LaunchDialogProps) {
+  const screens = useKeel((state) => state.screens);
   const agents = useKeel((state) => state.agents);
 
   const [picks, setPicks] = useState<{ uid: number; keyId: string }[]>([]);
@@ -159,7 +164,9 @@ export function LaunchDialog({
     counts.set(key.id, (counts.get(key.id) ?? 0) + 1);
   }
 
-  const deck = activeDeck(project);
+  const deck = deckId
+    ? (project?.decks.find((item) => item.id === deckId) ?? null)
+    : (mainDeckOf(project, screens) ?? activeDeck(project));
   const existing = listPanes(deck?.tree ?? null).flatMap((paneId) => {
     const pane = deck?.panes[paneId];
     return pane ? [pane] : [];
@@ -199,7 +206,7 @@ export function LaunchDialog({
       agentId: key.agentId,
       cwd,
     }));
-    useKeel.getState().addPanes(project.id, specs);
+    useKeel.getState().addPanes(project.id, specs, deck?.id);
     onOpenChange(false);
   }
 

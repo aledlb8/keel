@@ -28,6 +28,7 @@ import { startChimeAudio } from "@/lib/chime";
 import { AgentSettingsDialog } from "@/components/AgentSettingsDialog";
 import { AssistantDialog } from "@/components/AssistantDialog";
 import { Canvas } from "@/components/Canvas";
+import { DecksAway } from "@/components/DecksAway";
 import { DockSeam, useDockWidth } from "@/components/Dock";
 import { focusTerminal, Island } from "@/components/Island";
 import { LaunchDialog } from "@/components/LaunchDialog";
@@ -59,7 +60,10 @@ import {
   matchesBinding,
   matchShortcut,
 } from "@/lib/keymap";
+import { startMirrorHost } from "@/lib/mirror";
 import { startPaneEvents } from "@/lib/paneEvents";
+import { startScreenHost } from "@/lib/screenHost";
+import { mainDeckOf, MAIN_WINDOW } from "@/lib/screens";
 import { pruneRecent } from "@/lib/recentFiles";
 import { startWindowFocusTracking } from "@/lib/windowFocus";
 import {
@@ -69,7 +73,6 @@ import {
 } from "@/lib/workspaceWatch";
 import { startAssistant, useAssistant } from "@/state/assistant";
 import {
-  activeDeck,
   deckOfPane,
   startAttentionTracking,
   useKeel,
@@ -201,7 +204,13 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    void useKeel.getState().init();
+    let alive = true;
+    let stopScreens: (() => void) | undefined;
+    // Screens need the saved state first: which decks they show, and where.
+    void useKeel.getState().init().then(() => {
+      if (alive) stopScreens = startScreenHost();
+    });
+    const stopMirror = startMirrorHost();
     const stopTracking = startAttentionTracking();
     const stopAudio = startChimeAudio();
     const stopFocus = startWindowFocusTracking();
@@ -214,6 +223,9 @@ export default function App() {
     const blockNativeMenu = (event: MouseEvent) => event.preventDefault();
     window.addEventListener("contextmenu", blockNativeMenu);
     return () => {
+      alive = false;
+      stopScreens?.();
+      stopMirror();
       stopTracking();
       stopAudio();
       stopFocus();
@@ -284,7 +296,7 @@ export default function App() {
         const project = state.projects.find(
           (item) => item.id === state.activeProjectId,
         );
-        const focused = activeDeck(project)?.focused;
+        const focused = mainDeckOf(project, state.screens)?.focused;
         if (fromTerminal && focused) {
           event.preventDefault();
           event.stopPropagation();
@@ -389,11 +401,16 @@ export default function App() {
           claim();
           state.setMenubar(state.menubar ? "" : "project");
           return;
+        case "focusWindow":
+          claim();
+          state.focusToward(MAIN_WINDOW, matched.direction);
+          return;
         default:
           break;
       }
 
       if (!project) return;
+      const shown = mainDeckOf(project, state.screens);
 
       switch (matched.action) {
         case "overview":
@@ -403,6 +420,14 @@ export default function App() {
         case "newDeck":
           claim();
           state.addDeck(project.id);
+          return;
+        case "deckToWindow":
+          claim();
+          if (shown) state.openScreen(project.id, shown.id);
+          return;
+        case "sendDeck":
+          claim();
+          if (shown) state.sendDeckToward(MAIN_WINDOW, shown.id, matched.direction);
           return;
         case "jumpDeck": {
           claim();
@@ -426,7 +451,7 @@ export default function App() {
           break;
       }
 
-      const focused = activeDeck(project)?.focused;
+      const focused = shown?.focused;
       if (!focused) return;
 
       switch (matched.action) {
@@ -454,7 +479,7 @@ export default function App() {
         case "prevTab": {
           // Only an editor pane has files to step through; in a terminal the
           // chord is left alone for whatever is running in it.
-          const pane = activeDeck(project)?.panes[focused];
+          const pane = shown?.panes[focused];
           if (!pane?.editor) break;
           claim();
           cycleEditorTab(project.id, pane, matched.action === "nextTab" ? 1 : -1);
@@ -469,8 +494,14 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKeyDown, true);
   }, []);
 
+  const screens = useKeel((state) => state.screens);
   const project = projects.find((item) => item.id === activeProjectId) ?? null;
-  const deck = activeDeck(project);
+  // Never a deck that is in a window of its own; `null` when they all are.
+  const deck = mainDeckOf(project, screens);
+  const ownsDeck = useCallback(
+    (deckId: string) => !screens.some((screen) => screen.deckId === deckId),
+    [screens],
+  );
 
   const focusedPane = deck?.focused ? (deck.panes[deck.focused] ?? null) : null;
   const statusCwd = focusedPane?.cwd ?? project?.path ?? null;
@@ -588,9 +619,12 @@ export default function App() {
           <div className="relative min-h-0 min-w-0 flex-1">
             <Canvas
               projects={projects}
-              activeProjectId={activeProjectId}
+              shown={project && deck ? { projectId: project.id, deckId: deck.id } : null}
+              owns={ownsDeck}
               onAddTerminals={() => setLaunching(true)}
             />
+
+            {project && !deck ? <DecksAway project={project} /> : null}
 
             <RestoreChrome />
 
