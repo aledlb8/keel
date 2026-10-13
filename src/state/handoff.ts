@@ -18,6 +18,7 @@ import { create } from "zustand";
 import { terminalSettled, terminalType } from "@/components/TerminalSurface";
 import { canHandOff, handoffTitle, targetLabel } from "@/lib/handoff";
 import { invoke } from "@/lib/invoke";
+import { askMain, inScreen, runsInMain } from "@/lib/mirror";
 import { deckOfPane, useKeel } from "@/state/store";
 
 const NOTES_KEY = "keel.handoff.notes";
@@ -145,6 +146,11 @@ export async function handOff(
   targetId: string,
   accountId?: string | null,
 ): Promise<void> {
+  // It opens a pane and then types into it; only the main window can.
+  if (inScreen()) {
+    askMain("handOff", [projectId, paneId, targetId, accountId ?? null]);
+    return;
+  }
   const keel = useKeel.getState();
   const project = keel.projects.find((item) => item.id === projectId);
   const deck = project ? deckOfPane(project, paneId) : null;
@@ -256,3 +262,6 @@ export async function handOff(
     setPhase(paneId, null);
   }
 }
+
+runsInMain("handOff", (projectId: string, paneId: string, targetId: string, accountId: string | null) =>
+  handOff(projectId, paneId, targetId, accountId));

@@ -18,6 +18,29 @@ import { setKeybindingOverrides, type KeybindingOverrides } from "./keymap.ts";
 import { MAIN_WINDOW } from "./screens.ts";
 import { useKeel, type KeelState } from "../state/store.ts";
 
+/**
+ * Work that only the main window can do — anything that adds a pane and then
+ * uses it, say, since a screen's actions return nothing. A screen asks for it
+ * by name; the main window runs it.
+ */
+const mainOnly = new Map<string, (...args: never[]) => unknown>();
+let mirroring = false;
+
+/** Name `run` so a screen can ask the main window to run it. */
+export function runsInMain<Args extends unknown[]>(name: string, run: (...args: Args) => unknown) {
+  mainOnly.set(name, run as (...args: never[]) => unknown);
+}
+
+/** This window is a screen, mirroring the main window. */
+export function inScreen(): boolean {
+  return mirroring;
+}
+
+/** From a screen: have the main window run what `runsInMain` named. */
+export function askMain(name: string, args: unknown[]): void {
+  void emitTo(MAIN_WINDOW, "keel:run", { name, args });
+}
+
 /** Open-or-shut UI that belongs to the window it is open in. */
 const WINDOW_STATE = new Set<string>(["launcher", "switcher", "menubar"]);
 const WINDOW_ACTIONS = new Set<string>(["setLauncher", "setSwitcher", "setMenubar"]);
@@ -66,16 +89,24 @@ export function startMirrorHost(): () => void {
     if (typeof action === "function") action(...args);
   });
 
+  const runs = listen<{ name: string; args: unknown[] }>("keel:run", (event) => {
+    const { name, args } = event.payload;
+    const run = mainOnly.get(name);
+    if (run && Array.isArray(args)) (run as (...values: unknown[]) => unknown)(...args);
+  });
+
   return () => {
     unsubscribe();
     clearTimeout(timer);
     void hello.then((stop) => stop());
     void calls.then((stop) => stop());
+    void runs.then((stop) => stop());
   };
 }
 
 /** In a screen window: take state from the main window and send it actions. */
 export function startMirror(label: string): () => void {
+  mirroring = true;
   const forwarded: Data = {};
   for (const [name, value] of Object.entries(useKeel.getState())) {
     if (typeof value !== "function" || WINDOW_ACTIONS.has(name)) continue;

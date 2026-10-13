@@ -31,6 +31,7 @@ import { bindingFor, isEditableTarget, matchesBinding, matchShortcut } from "@/l
 import { screenLabel, screenOfDeck } from "@/lib/screens";
 import { startWindowFocusTracking } from "@/lib/windowFocus";
 import { onAddTerminalsRequest, onFocusPaneRequest } from "@/lib/windows";
+import { onWorkspaceChanged } from "@/lib/workspaceWatch";
 import { cycleEditorTab } from "@/lib/editorTabs";
 import { useKeel } from "@/state/store";
 import { useWorkspace } from "@/state/workspace";
@@ -82,6 +83,27 @@ export default function ScreenApp({ screenId }: { screenId: string }) {
   useEffect(() => {
     if (project && deck) getCurrentWindow().setTitle(`${deck.name} · ${project.name} — Keel`).catch(() => {});
   }, [project, deck]);
+
+  // Editor panes read their files through the workspace of the folder they
+  // belong to, which is this deck's project here.
+  const projectPath = project?.path ?? null;
+  useEffect(() => {
+    useWorkspace.getState().setRoot(projectPath);
+  }, [projectPath]);
+  useEffect(() => {
+    let stop: (() => void) | undefined;
+    let alive = true;
+    void onWorkspaceChanged((event) => {
+      useWorkspace.getState().applyFsChange(event.root, event.rels, event.git);
+    }).then((unlisten) => {
+      if (alive) stop = unlisten;
+      else unlisten();
+    });
+    return () => {
+      alive = false;
+      stop?.();
+    };
+  }, []);
 
   useScreenShortcuts(label, screenId);
 
