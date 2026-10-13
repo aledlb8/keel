@@ -80,6 +80,7 @@ import type {
   Workspace,
   Arrangement,
   BoardSettings,
+  Display,
   Screen,
   WindowBounds,
 } from "../lib/types.ts";
@@ -532,6 +533,12 @@ export interface KeelState {
    * window filling that monitor.
    */
   sendDeckToward: (fromLabel: string, deckId: string, direction: MoveDirection) => void;
+  /**
+   * Show a deck on a monitor, by name: onto the screen there, home to the main
+   * window if that is there, or into a new window filling it. `null` brings it
+   * home to the main window wherever that is.
+   */
+  showDeckOn: (deckId: string, monitor: string | null) => void;
 
   noteOutput: (paneId: string) => void;
   noteActivity: (paneId: string, kind: PaneActivity, data?: string) => void;
@@ -1093,6 +1100,44 @@ export const useKeel = create<KeelState>((set, get) => {
       get().removeDeck(project.id, made.id);
     }
     return home.id;
+  }
+
+  /**
+   * Put a deck on monitor `target`: onto the screen there, home to the main
+   * window if that is there, or into a window of its own filling it.
+   */
+  async function deckToDisplay(
+    deckId: string,
+    target: Display,
+    monitors: Display[],
+    places: Map<string, WindowBounds>,
+  ) {
+    const state = get();
+    const project = state.projects.find((item) => item.decks.some((deck) => deck.id === deckId));
+    if (!project) return;
+    const there = [...places].filter(([, bounds]) => sameDisplay(displayAt(monitors, bounds), target));
+    const screenThere = there
+      .map(([label]) => state.screens.find((screen) => screenLabel(screen.id) === label))
+      .find((screen) => screen !== undefined);
+    const own = screenOfDeck(state.screens, deckId);
+    if (screenThere) {
+      if (own?.id === screenThere.id) return;
+      get().showOnScreen(screenThere.id, deckId);
+      if (own) get().closeScreen(own.id);
+      await focusWindow(screenLabel(screenThere.id));
+      return;
+    }
+    if (there.some(([label]) => label === MAIN_WINDOW)) {
+      if (own) get().bringDeckHome(deckId);
+      else {
+        get().selectProject(project.id);
+        get().selectDeck(project.id, deckId);
+      }
+      return;
+    }
+    // Nothing of Keel's on that monitor yet: the deck's window goes there.
+    if (own) await openScreenWindow(own.id, { monitor: target.name });
+    else get().openScreen(project.id, deckId, { monitor: target.name });
   }
 
   /** Add an empty deck at the end of a project, leaving which one is shown alone. */
@@ -2880,28 +2925,27 @@ export const useKeel = create<KeelState>((set, get) => {
         const fromBounds = places.get(fromLabel);
         const from = fromBounds ? displayAt(monitors, fromBounds) : null;
         const target = from ? displayToward(monitors, from, direction) : null;
-        if (!target) return;
-        const state = get();
-        const project = state.projects.find((item) => item.decks.some((deck) => deck.id === deckId));
-        if (!project) return;
-        const there = [...places].filter(([, bounds]) => sameDisplay(displayAt(monitors, bounds), target));
-        const screenThere = there
-          .map(([label]) => state.screens.find((screen) => screenLabel(screen.id) === label))
-          .find((screen) => screen !== undefined);
-        const own = screenOfDeck(state.screens, deckId);
-        if (screenThere) {
-          get().showOnScreen(screenThere.id, deckId);
-          if (own && own.id !== screenThere.id) get().closeScreen(own.id);
-          await focusWindow(screenLabel(screenThere.id));
-          return;
+        if (target) await deckToDisplay(deckId, target, monitors, places);
+      })().catch(() => {});
+    },
+
+    showDeckOn(deckId, monitor) {
+      if (monitor === null) {
+        if (screenOfDeck(get().screens, deckId)) {
+          get().bringDeckHome(deckId);
+        } else {
+          const project = get().projects.find((item) => item.decks.some((deck) => deck.id === deckId));
+          if (project) {
+            get().selectProject(project.id);
+            get().selectDeck(project.id, deckId);
+          }
         }
-        if (there.some(([label]) => label === MAIN_WINDOW)) {
-          if (own) get().bringDeckHome(deckId);
-          return;
-        }
-        // Nothing of Keel's on that monitor yet: the deck's window goes there.
-        if (own) await openScreenWindow(own.id, { monitor: target.name });
-        else get().openScreen(project.id, deckId, { monitor: target.name });
+        return;
+      }
+      void (async () => {
+        const [monitors, places] = await Promise.all([displays(), windowBounds()]);
+        const target = monitors.find((item) => item.name === monitor);
+        if (target) await deckToDisplay(deckId, target, monitors, places);
       })().catch(() => {});
     },
 

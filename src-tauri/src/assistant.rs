@@ -106,6 +106,7 @@ Keel's tools (the `keel` MCP server) let you see and drive the app:
 - press_key: press escape, ctrl_c, arrows, enter, tab or a number in a pane: interrupt an agent, or pick from a menu.
 - remind_me, list_reminders, cancel_reminder: wake yourself up later, once or on repeat.
 - check_usage: how much of each agent's plan limits is used, and when they reset.
+- list_windows, show_deck: which monitor each Keel window is on, and putting a deck on a monitor, when the user asks to arrange their screens.
 - focus_pane, open_project, close_pane.
 
 How to work:

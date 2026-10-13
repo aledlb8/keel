@@ -8,7 +8,17 @@
  */
 
 import { listPanes } from "./tree.ts";
-import type { Agent, AgentAccount, PaneStatus, Project, Workspace } from "./types.ts";
+import { displayAt, displaysInOrder, MAIN_WINDOW, screenIdOf, sameDisplay } from "./screens.ts";
+import type {
+  Agent,
+  AgentAccount,
+  Display,
+  PaneStatus,
+  Project,
+  Screen,
+  WindowBounds,
+  Workspace,
+} from "./types.ts";
 import { formatPercent, formatReset, profileLabel, windowName, type AgentUsage } from "./usage.ts";
 
 export interface WorkspaceView {
@@ -22,6 +32,8 @@ export interface WorkspaceView {
   delegated: ReadonlySet<string>;
   /** Panes the user opened that the main agent passed a request to. */
   handed: ReadonlySet<string>;
+  /** Decks in windows of their own. */
+  screens?: readonly Screen[] | undefined;
 }
 
 const STATUS_WORDS: Record<PaneStatus, string> = {
@@ -71,7 +83,10 @@ export function describeWorkspace(view: WorkspaceView): string {
       const ids = listPanes(deck.tree);
       if (ids.length === 0) continue;
       empty = false;
-      if (many) lines.push(`  Deck "${deck.name}"`);
+      const away = view.screens?.some((screen) => screen.deckId === deck.id) ?? false;
+      if (many || away) {
+        lines.push(`  Deck "${deck.name}" (id ${deck.id}${away ? ", in a window of its own" : ""})`);
+      }
       for (const id of ids) {
         const pane = deck.panes[id];
         if (!pane) continue;
@@ -103,6 +118,52 @@ export function describeWorkspace(view: WorkspaceView): string {
     }
     if (empty) lines.push("  (no panes)");
   }
+  return lines.join("\n");
+}
+
+export interface WindowsView {
+  monitors: readonly Display[];
+  /** Every Keel window's place, by label. Minimized windows are left out. */
+  places: ReadonlyMap<string, WindowBounds>;
+  screens: readonly Screen[];
+  projects: readonly Project[];
+  boardOpen: boolean;
+}
+
+/**
+ * The monitors, left to right, and what each Keel window on them shows. The
+ * numbers are what `show_deck` takes.
+ */
+export function describeWindows(view: WindowsView): string {
+  const ordered = displaysInOrder(view.monitors);
+  if (ordered.length === 0) return "Keel can't see any monitors.";
+  const deckName = (screen: Screen) => {
+    const project = view.projects.find((item) => item.id === screen.projectId);
+    const deck = project?.decks.find((item) => item.id === screen.deckId);
+    return project && deck ? `${project.name} / ${deck.name} (deck ${deck.id})` : "a deck";
+  };
+  const lines = ["Monitors, left to right:"];
+  ordered.forEach((monitor, index) => {
+    const here: string[] = [];
+    for (const [label, bounds] of view.places) {
+      if (!sameDisplay(displayAt(view.monitors, bounds), monitor)) continue;
+      if (label === MAIN_WINDOW) here.push("the main window");
+      else if (label === "board") here.push("the agent board");
+      else {
+        const screen = view.screens.find((item) => item.id === screenIdOf(label));
+        if (screen) here.push(`a window showing ${deckName(screen)}`);
+      }
+    }
+    lines.push(
+      `${index + 1}. ${monitor.width}x${monitor.height}${monitor.primary ? ", primary" : ""}: ${
+        here.length ? here.join("; ") : "nothing of Keel's"
+      }`,
+    );
+  });
+  const hidden = view.screens.filter((screen) => !view.places.has(`screen-${screen.id}`));
+  for (const screen of hidden) lines.push(`Minimized: a window showing ${deckName(screen)}.`);
+  if (!view.places.has(MAIN_WINDOW)) lines.push("The main window is minimized.");
+  if (!view.boardOpen) lines.push("The agent board is closed.");
   return lines.join("\n");
 }
 

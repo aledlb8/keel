@@ -483,6 +483,25 @@ fn tools() -> Vec<Value> {
             &["path"],
         ),
         tool(
+            "list_windows",
+            "The monitors, numbered left to right, and what each Keel window on them shows: the main window, decks in windows of their own, the agent board.",
+            json!({}),
+            &[],
+        ),
+        tool(
+            "show_deck",
+            "Put a deck on a monitor: in the Keel window already there, or a new window filling that monitor. Use monitor \"main\" to bring it back into the main window. Only when the user asks to arrange their screens.",
+            json!({
+                "project": { "type": "string", "description": "Project id, name or folder." },
+                "deck": { "type": "string", "description": "Deck id or name from list_projects. Leave out when the project has one deck." },
+                "monitor": {
+                    "description": "Monitor number from list_windows, 1 being the leftmost, or \"main\" for the main window.",
+                    "anyOf": [{ "type": "integer", "minimum": 1 }, { "type": "string", "enum": ["main"] }],
+                },
+            }),
+            &["project", "monitor"],
+        ),
+        tool(
             "focus_pane",
             "Bring a pane to the front in Keel's window, switching project and deck if needed.",
             json!({ "pane_id": pane }),

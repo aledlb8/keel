@@ -6,12 +6,13 @@ import {
   INTERRUPT_KEYS,
   PANE_KEYS,
   describeUsage,
+  describeWindows,
   describeWorkspace,
   findProject,
   paneChanges,
   type WorkspaceView,
 } from "./assistantView.ts";
-import type { Agent, Pane, Project } from "./types.ts";
+import type { Agent, Display, Pane, Project } from "./types.ts";
 import type { AgentUsage } from "./usage.ts";
 
 function agent(id: string, name: string, installed = true): Agent {
@@ -93,7 +94,59 @@ function view(overrides: Partial<WorkspaceView> = {}): WorkspaceView {
   };
 }
 
+function monitor(name: string, x: number, primary = false): Display {
+  return {
+    name,
+    x,
+    y: 0,
+    width: 1920,
+    height: 1080,
+    workX: x,
+    workY: 0,
+    workWidth: 1920,
+    workHeight: 1040,
+    scale: 1,
+    primary,
+  };
+}
+
+describe("describeWindows", () => {
+  it("numbers the monitors left to right and says what is on each", () => {
+    const text = describeWindows({
+      monitors: [monitor("B", 0, true), monitor("A", -1920)],
+      places: new Map([
+        ["main", { x: 100, y: 100, width: 1200, height: 800 }],
+        ["screen-s1", { x: -1900, y: 0, width: 1900, height: 1000 }],
+      ]),
+      screens: [{ id: "s1", projectId: "p1", deckId: "d1" }],
+      projects: [keel],
+      boardOpen: false,
+    });
+    assert.match(text, /1\. 1920x1080: a window showing keel \/ Deck 1 \(deck d1\)/);
+    assert.match(text, /2\. 1920x1080, primary: the main window/);
+    assert.match(text, /The agent board is closed\./);
+  });
+
+  it("says when a window is minimized", () => {
+    const text = describeWindows({
+      monitors: [monitor("A", 0, true)],
+      places: new Map(),
+      screens: [{ id: "s1", projectId: "p1", deckId: "d1" }],
+      projects: [keel],
+      boardOpen: true,
+    });
+    assert.match(text, /1\. 1920x1080, primary: nothing of Keel's/);
+    assert.match(text, /Minimized: a window showing keel \/ Deck 1/);
+    assert.match(text, /The main window is minimized\./);
+  });
+});
+
 describe("describeWorkspace", () => {
+  it("names a deck that is in a window of its own", () => {
+    const text = describeWorkspace(view({ screens: [{ id: "s1", projectId: "p1", deckId: "d1" }] }));
+    assert.match(text, /Deck "Deck 1" \(id d1, in a window of its own\)/);
+  });
+
   it("lists startable agents, projects and panes with what they are doing", () => {
     const text = describeWorkspace(view());
     assert.match(text, /^Agents you can start: claude \(Claude Code\), codex \(Codex\)$/m);

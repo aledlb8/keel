@@ -524,6 +524,8 @@ fn tool_label(name: &str, input: Option<&Value>) -> String {
         "send_to_pane" => Some("typing into a pane"),
         "open_project" => Some("opening a project"),
         "focus_pane" => Some("showing a pane"),
+        "list_windows" => Some("looking at your screens"),
+        "show_deck" => Some("moving a deck to a screen"),
         "close_pane" => Some("closing a pane"),
         "send_file" => Some("sending you a file"),
         "press_key" => Some("pressing a key in a pane"),

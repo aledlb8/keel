@@ -39,13 +39,16 @@ import {
   INTERRUPT_KEYS,
   PANE_KEYS,
   describeUsage,
+  describeWindows,
   describeWorkspace,
   findProject,
   paneChanges,
 } from "@/lib/assistantView";
 import { invoke } from "@/lib/invoke";
 import { buildUsageQueries, type UsageSnapshot } from "@/lib/usage";
+import { displaysInOrder } from "@/lib/screens";
 import { listPanes } from "@/lib/tree";
+import { displays, windowBounds } from "@/lib/windows";
 import type { Pane, Project } from "@/lib/types";
 import { keelFocused, useKeel } from "@/state/store";
 
@@ -162,7 +165,51 @@ async function runTool(call: AssistantToolCall): Promise<string> {
         exited: keel.exited,
         delegated: useAssistant.getState().delegated,
         handed: useAssistant.getState().handed,
+        screens: keel.screens,
       });
+
+    case "list_windows": {
+      const [monitors, places] = await Promise.all([displays(), windowBounds()]);
+      return describeWindows({
+        monitors,
+        places,
+        screens: keel.screens,
+        projects: keel.projects,
+        boardOpen: keel.board !== null,
+      });
+    }
+
+    case "show_deck": {
+      const project = findProject(keel.projects, text(args, "project"));
+      if (!project) throw new Error(`There is no project ${text(args, "project")}.`);
+      const wanted = typeof args.deck === "string" ? args.deck.trim() : "";
+      const deck = wanted
+        ? project.decks.find((item) => item.id === wanted) ??
+          project.decks.find((item) => item.name.toLowerCase() === wanted.toLowerCase())
+        : project.decks.length === 1
+          ? project.decks[0]
+          : undefined;
+      if (!deck) {
+        throw new Error(
+          wanted
+            ? `${project.name} has no deck ${wanted}.`
+            : `${project.name} has ${project.decks.length} decks; say which.`,
+        );
+      }
+      const where = args.monitor;
+      if (where === "main" || where === undefined) {
+        keel.showDeckOn(deck.id, null);
+        return `${project.name} / ${deck.name} is in the main window.`;
+      }
+      const index = Number(where);
+      const ordered = displaysInOrder(await displays());
+      const monitor = Number.isInteger(index) ? ordered[index - 1] : undefined;
+      if (!monitor) {
+        throw new Error(`There is no monitor ${String(where)}; there are ${ordered.length}. See list_windows.`);
+      }
+      keel.showDeckOn(deck.id, monitor.name);
+      return `${project.name} / ${deck.name} is going on monitor ${index}.`;
+    }
 
     case "read_pane": {
       const paneId = text(args, "pane_id");
