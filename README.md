@@ -20,7 +20,8 @@ Built with Tauri 2, React 19, TypeScript, Rust, Vite, CodeMirror, and xterm.js.
 
 - Launch multiple supported coding agents and plain shells side by side.
 - Group related projects into workspaces in the sidebar; each project keeps its own folders, decks, and terminals.
-- Keep processes running while you switch projects or deck layouts.
+- Keep processes running while you switch projects or deck layouts. Keel holds every terminal's screen and scrollback itself, so decks you are not looking at cost no webview memory.
+- Put any deck in a window of its own on any monitor, send it to the next monitor with a key, pop a single pane out into a small window kept on top, or open the agent board: every agent across every window, grouped by what needs you. Windows come back where they were on each set of monitors. See [docs/screens.md](docs/screens.md).
 - Restore saved projects, layouts, terminals, and resumable agent sessions.
 - Browse and edit project files with an integrated CodeMirror editor, and search file contents across the project.
 - Inspect Git status and diffs, then stage, commit, fetch, pull, push, and manage branches. The file tree and git status refresh from filesystem events, with a mark on files touched in the last few minutes.
@@ -97,6 +98,9 @@ Common shortcuts:
 | `Ctrl+1…9` | Jump to a deck |
 | `Ctrl+O` | Open deck overview |
 | `Ctrl+N` | Create a deck |
+| `Ctrl+Shift+N` | Open the deck in its own window |
+| `Ctrl+Alt+←/→` | Go to the Keel window on the next monitor |
+| `Ctrl+Alt+Shift+←/→` | Send the deck to the next monitor |
 | `Ctrl+Shift+D` / `Ctrl+Shift+S` | Split right / split down |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Focus next / previous pane |
 | `F8` | Focus the next waiting agent |

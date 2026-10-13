@@ -111,6 +111,9 @@ bearer token. Most calls are answered by the window, which owns the workspace:
   hook that reported the finish.
 - `check_usage` — plan limits per signed-in login, the same reading as the
   status bar's usage gauges.
+- `list_windows`, `show_deck` — the monitors left to right and what each Keel
+  window on them shows; put a deck on a monitor, or back in the main window.
+  See [screens](screens.md).
 
 The ones that touch the phone or need no window are answered in Rust
 (`LOCAL_TOOLS` in `assistant_mcp.rs`):
