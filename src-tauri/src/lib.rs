@@ -76,6 +76,7 @@ pub fn run() {
             screens::screen_close,
             screens::window_place,
             screens::window_focus,
+            screens::window_on_top,
             screens::window_bounds,
             agents::detect_agents,
             agents::agent_catalogue_path,

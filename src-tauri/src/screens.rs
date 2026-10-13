@@ -65,6 +65,9 @@ pub struct Placement {
     pub bounds: Option<Bounds>,
     #[serde(default)]
     pub monitor: Option<String>,
+    /// Keep the window above every other window, a pane popped out to watch.
+    #[serde(default)]
+    pub on_top: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -124,13 +127,19 @@ pub async fn displays(app: AppHandle) -> Vec<Display> {
 }
 
 /// Where a window is. A macro because `Window` and `WebviewWindow` answer the
-/// same questions without sharing a trait for them.
+/// same questions without sharing a trait for them. Nothing while it is
+/// minimized: Windows parks it far off the desktop, which is not a place to
+/// come back to.
 macro_rules! bounds_of {
     ($window:expr) => {{
         let window = $window;
         (|| {
+            if window.is_minimized().unwrap_or(false) {
+                return None;
+            }
             let position = window.outer_position().ok()?;
-            let size = window.outer_size().ok()?;
+            // Inner, because that is what `set_size` takes back.
+            let size = window.inner_size().ok()?;
             let maximized = window.is_maximized().unwrap_or(false);
             let monitor = window.current_monitor().ok().flatten().map(|monitor| {
                 let index = window
@@ -187,6 +196,9 @@ fn visible_bounds(bounds: &Bounds, displays: &[Display]) -> Option<Bounds> {
 /// an attached monitor; otherwise it fills the named monitor's work area, or
 /// failing that the primary one.
 fn place<R: Runtime>(window: &WebviewWindow<R>, placement: &Placement) {
+    if let Some(on_top) = placement.on_top {
+        let _ = window.set_always_on_top(on_top);
+    }
     let displays = displays_of(window.app_handle());
     if let Some(bounds) = placement
         .bounds
@@ -290,6 +302,20 @@ pub async fn window_place(
         .ok_or_else(|| format!("no window named {label}"))?;
     place(&window, &placement);
     Ok(())
+}
+
+/// Keep a Keel window above every other window, or stop.
+#[tauri::command(async)]
+pub async fn window_on_top(app: AppHandle, label: String, on_top: bool) -> Result<(), String> {
+    if !label.starts_with(SCREEN_PREFIX) {
+        return Err("only screens float".into());
+    }
+    let window = app
+        .get_webview_window(&label)
+        .ok_or_else(|| format!("no window named {label}"))?;
+    window
+        .set_always_on_top(on_top)
+        .map_err(|err| err.to_string())
 }
 
 /// Bring a Keel window forward and give it the keyboard.
