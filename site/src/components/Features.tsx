@@ -439,7 +439,7 @@ function TunnelVisual() {
 const FEATURES: { title: string; body: string; span: string; visual: ReactNode }[] = [
   {
     title: "Decks keep running",
-    body: "Split a project into decks of panes. Switch away and every process keeps going. The overview shows all of them at once and lets you move a running terminal to another deck.",
+    body: "Split a project into decks of panes. Switch away and every process keeps going, its screen and scrollback held by Keel itself. The overview shows all of them at once and lets you move a running terminal to another deck.",
     span: "md:col-span-2 lg:col-span-4",
     visual: <DecksVisual />,
   },

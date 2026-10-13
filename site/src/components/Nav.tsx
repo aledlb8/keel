@@ -13,6 +13,7 @@ const LINKS = [
   ["Layout", "layout"],
   ["Features", "features"],
   ["Handoff", "handoff"],
+  ["Screens", "screens"],
   ["Phone", "phone"],
   ["Keys", "keys"],
 ] as const;

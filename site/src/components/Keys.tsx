@@ -15,7 +15,16 @@ const SHORTCUTS: { action: string; combos: Combo[] }[] = [
   { action: "Add terminals", combos: [{ keys: ["Ctrl", "T"], match: (e) => mod(e) && key(e, "t") }] },
   { action: "Open the deck overview", combos: [{ keys: ["Ctrl", "O"], match: (e) => mod(e) && key(e, "o") }] },
   { action: "Jump to a deck", combos: [{ keys: ["Ctrl", "1…9"], match: (e) => mod(e) && /^[1-9]$/.test(e.key) }] },
-  { action: "Create a deck", combos: [{ keys: ["Ctrl", "N"], match: (e) => mod(e) && key(e, "n") }] },
+  { action: "Create a deck", combos: [{ keys: ["Ctrl", "N"], match: (e) => mod(e) && !e.shiftKey && key(e, "n") }] },
+  { action: "Open the deck in its own window", combos: [{ keys: ["Ctrl", "Shift", "N"], match: (e) => mod(e) && e.shiftKey && key(e, "n") }] },
+  {
+    action: "Go to the window on the next screen",
+    combos: [{ keys: ["Ctrl", "Alt", "←/→"], match: (e) => mod(e) && e.altKey && !e.shiftKey && /^Arrow/.test(e.key) }],
+  },
+  {
+    action: "Send the deck to the next screen",
+    combos: [{ keys: ["Ctrl", "Alt", "Shift", "←/→"], match: (e) => mod(e) && e.altKey && e.shiftKey && /^Arrow/.test(e.key) }],
+  },
   { action: "Find in files", combos: [{ keys: ["Ctrl", "Shift", "F"], match: (e) => mod(e) && e.shiftKey && key(e, "f") }] },
   {
     action: "Split right, split down",
