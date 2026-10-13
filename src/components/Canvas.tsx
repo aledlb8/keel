@@ -208,10 +208,6 @@ export function Canvas({
       project && useKeel.getState().focusPane(project.id, paneId),
     [project],
   );
-  const noteOutput = useCallback(
-    (paneId: string) => useKeel.getState().noteOutput(paneId),
-    [],
-  );
   const noteActivity = useCallback(
     (paneId: string, kind: PaneActivity, data?: string) =>
       useKeel.getState().noteActivity(paneId, kind, data),
@@ -220,10 +216,6 @@ export function Canvas({
   const titlePane = useCallback(
     (paneId: string, title: string, source: TitleSource) =>
       useKeel.getState().autoTitlePane(paneId, title, source),
-    [],
-  );
-  const cwdPane = useCallback(
-    (paneId: string, dir: string) => useKeel.getState().notePaneCwd(paneId, dir),
     [],
   );
   const splitPane = useCallback(
@@ -442,10 +434,8 @@ export function Canvas({
                   (candidate.zoomed !== null && !isZoomed)
                 }
                 onFocus={focusPane}
-                onOutput={noteOutput}
                 onActivity={noteActivity}
                 onTitle={titlePane}
-                onCwd={cwdPane}
                 onSplit={splitPane}
                 onZoom={zoomPane}
                 onClose={closePane}

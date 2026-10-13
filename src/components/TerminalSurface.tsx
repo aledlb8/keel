@@ -21,10 +21,19 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal, type ITheme, type IWindowsPty } from "@xterm/xterm";
 
 import { TerminalSearch } from "@/components/TerminalSearch";
-import { readAgentScreen } from "@/lib/agentActivity";
-import { briefFromOsc, createPromptDraft, type TitleSource } from "@/lib/paneTitle";
-import { resizePty, spawnPty, writePty } from "@/lib/pty";
-import { cwdFromOsc7, cwdFromOsc99 } from "@/lib/terminalCwd";
+import { createPromptDraft, type TitleSource } from "@/lib/paneTitle";
+import {
+  attachPty,
+  detachPty,
+  ptyPaste,
+  ptyQuiet,
+  ptySample,
+  ptyText,
+  resizePty,
+  spawnPty,
+  writePty,
+  type OutputChannel,
+} from "@/lib/pty";
 import {
   isTerminalFindChord,
   TERMINAL_SEARCH_DECORATIONS,
@@ -194,18 +203,19 @@ function searchOptions(incremental: boolean, caseSensitive: boolean) {
 /**
  * The bottom of a pane's screen as plain text, trailing blank rows dropped.
  * `null` when the pane has no terminal. This is what the main agent reads.
+ * It comes from Rust's copy, so a pane in another window — or in none — reads
+ * the same as one drawn here.
  */
-export function terminalText(paneId: string, lines: number): string | null {
-  const term = terminals.get(paneId)?.term;
-  if (!term) return null;
-  const buffer = term.buffer.active;
-  const rows: string[] = [];
-  const from = Math.max(0, buffer.length - lines - term.rows);
-  for (let index = from; index < buffer.length; index++) {
-    rows.push(buffer.getLine(index)?.translateToString(true) ?? "");
-  }
-  while (rows.length && !rows[rows.length - 1]!.trim()) rows.pop();
-  return rows.slice(-lines).join("\n");
+export async function terminalText(paneId: string, lines: number): Promise<string | null> {
+  return ptyText(paneId, lines).catch(() => null);
+}
+
+const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** A pane this window is not drawing is typed into through Rust; the main
+ * window still has to hear the keystrokes, the way `onData` would tell it. */
+function noteRemoteInput(paneId: string, data: string) {
+  useKeel.getState().noteActivity(paneId, "input", data);
 }
 
 /**
@@ -220,11 +230,18 @@ export async function terminalType(
   submit: boolean,
 ): Promise<boolean> {
   const term = terminals.get(paneId)?.term;
-  if (!term) return false;
-  if (text) term.paste(capPaste(text));
+  if (term) {
+    if (text) term.paste(capPaste(text));
+  } else if (text) {
+    const sent = await ptyPaste(paneId, capPaste(text)).catch(() => null);
+    if (sent === null) return false;
+    noteRemoteInput(paneId, sent);
+  } else if ((await ptyQuiet(paneId).catch(() => null)) === null) {
+    return false;
+  }
   if (submit) {
-    await new Promise((resolve) => setTimeout(resolve, text ? 350 : 0));
-    terminals.get(paneId)?.term.input("\r");
+    await pause(text ? 350 : 0);
+    await terminalPress(paneId, "\r");
   }
   return true;
 }
@@ -233,10 +250,15 @@ export async function terminalType(
  * Send raw key bytes to a pane, as if pressed: Esc, Ctrl+C, arrows. They go
  * through `input`, not `paste`, so a TUI sees keys rather than text.
  */
-export function terminalPress(paneId: string, data: string): boolean {
+export async function terminalPress(paneId: string, data: string): Promise<boolean> {
   const term = terminals.get(paneId)?.term;
-  if (!term) return false;
-  term.input(data);
+  if (term) {
+    term.input(data);
+    return true;
+  }
+  if ((await ptyQuiet(paneId).catch(() => null)) === null) return false;
+  await writePty(paneId, data);
+  noteRemoteInput(paneId, data);
   return true;
 }
 
@@ -249,28 +271,15 @@ export async function terminalSettled(
   { minMs = 2500, quietMs = 1200, maxMs = 30_000 } = {},
 ): Promise<boolean> {
   const started = Date.now();
-  const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-  while (!terminals.get(paneId)) {
-    if (Date.now() - started > maxMs) return false;
-    await pause(100);
-  }
-  const term = terminals.get(paneId)!.term;
-  let last = Date.now();
-  let wrote = false;
-  const watch = term.onWriteParsed(() => {
-    last = Date.now();
-    wrote = true;
-  });
-  try {
-    for (;;) {
-      const now = Date.now();
-      if (now - started > maxMs) return false;
-      if (wrote && now - started >= minMs && now - last >= quietMs) return true;
-      if (!terminals.has(paneId)) return false;
-      await pause(150);
-    }
-  } finally {
-    watch.dispose();
+  for (;;) {
+    const now = Date.now();
+    if (now - started > maxMs) return false;
+    const quiet = await ptyQuiet(paneId).catch(() => null);
+    // It has printed since we started waiting (a pane that never printed
+    // reports an enormous number), and has been quiet long enough since.
+    const printed = quiet !== null && quiet < now - started;
+    if (printed && now - started >= minMs && quiet >= quietMs) return true;
+    await pause(quiet === null ? 100 : 150);
   }
 }
 
@@ -286,21 +295,11 @@ export async function terminalQuiet(
   paneId: string,
   { quietMs, maxMs }: { quietMs: number; maxMs: number },
 ): Promise<void> {
-  const term = terminals.get(paneId)?.term;
-  if (!term) return;
   const started = Date.now();
-  let last = started;
-  const watch = term.onWriteParsed(() => {
-    last = Date.now();
-  });
-  try {
-    for (;;) {
-      const now = Date.now();
-      if (now - last >= quietMs || now - started >= maxMs || !terminals.has(paneId)) return;
-      await new Promise((resolve) => setTimeout(resolve, Math.min(50, quietMs)));
-    }
-  } finally {
-    watch.dispose();
+  for (;;) {
+    const quiet = await ptyQuiet(paneId).catch(() => null);
+    if (quiet === null || quiet >= quietMs || Date.now() - started >= maxMs) return;
+    await pause(Math.min(50, quietMs));
   }
 }
 
@@ -438,15 +437,15 @@ export interface TerminalSurfaceProps {
   /** On the active deck of the active project — i.e. actually on screen. */
   visible: boolean;
   focused: boolean;
-  onOutput: (paneId: string) => void;
   /** Keystrokes, resizes and (re)starts — the things output is a reply to. */
   onActivity?: ((paneId: string, kind: PaneActivity, data?: string) => void) | undefined;
   onFocus: (paneId: string) => void;
-  /** Keel keeps a pane's cwd in step with the shell, so a restart lands here. */
-  onCwd?: ((paneId: string, dir: string) => void) | undefined;
   /** Spawn settled — ok or fail. Used for reopen chrome + spawn-fail UI. */
   onSpawnResult?: ((paneId: string, ok: boolean, reason?: string) => void) | undefined;
-  /** A prompt was submitted, or the process set the window title. */
+  /**
+   * A prompt was submitted. Titles and folders the shell reports come from
+   * Rust to the main window directly, whichever window is drawing the pane.
+   */
   onTitle?: ((paneId: string, title: string, source: TitleSource) => void) | undefined;
 }
 
@@ -464,10 +463,8 @@ export const TerminalSurface = memo(function TerminalSurface({
   generation,
   visible,
   focused,
-  onOutput,
   onActivity,
   onFocus,
-  onCwd,
   onSpawnResult,
   onTitle,
 }: TerminalSurfaceProps) {
@@ -524,19 +521,19 @@ export const TerminalSurface = memo(function TerminalSurface({
   });
   /** The size the PTY was last told about, and whether there is a PTY to tell. */
   const pty = useRef({ ready: false, cols: 0, rows: 0 });
+  /** The channel this window's output arrives on, so leaving can let it go. */
+  const output = useRef<OutputChannel | null>(null);
   /** Last command string sampled, so adopting a CLI can read the screen already painted. */
   const seenCommand = useRef(command);
   const promptDraft = useRef(createPromptDraft());
   // Latest callbacks without re-running the setup effect.
   const handlers = useRef({
-    onOutput,
     onActivity,
     onFocus,
-    onCwd,
     onSpawnResult,
     onTitle,
   });
-  handlers.current = { onOutput, onActivity, onFocus, onCwd, onSpawnResult, onTitle };
+  handlers.current = { onActivity, onFocus, onSpawnResult, onTitle };
 
   const runFind = (
     direction: "next" | "previous",
@@ -806,27 +803,6 @@ export const TerminalSurface = memo(function TerminalSurface({
       void writes;
     });
 
-    const titled = term.onTitleChange((title) => {
-      // briefFromOsc strips C0/C1, generic program names, and "Keel".
-      const brief = briefFromOsc(title, null);
-      if (brief) handlers.current.onTitle?.(paneId, brief, "osc");
-    });
-
-    // Shells announce their folder on every prompt (OSC 9;9 / OSC 7). The
-    // terminal hands the payload over reassembled, whatever chunking the
-    // bytes arrived in; deciding what is worth keeping happens in the store.
-    // An `ident 9` handler sees everything under OSC 9 — `9;9;…` here, with
-    // the sub-ident left on the front of the payload.
-    const reportedCwd = (data: string) => {
-      const dir = data.startsWith("9;")
-        ? cwdFromOsc99(data.slice(2))
-        : cwdFromOsc7(data);
-      if (dir) handlers.current.onCwd?.(paneId, dir);
-      return true;
-    };
-    const cwd9 = term.parser.registerOscHandler(9, reportedCwd);
-    const cwd7 = term.parser.registerOscHandler(7, reportedCwd);
-
     const textarea = term.textarea;
     const noteFocus = () => handlers.current.onFocus(paneId);
     textarea?.addEventListener("focus", noteFocus);
@@ -891,6 +867,11 @@ export const TerminalSurface = memo(function TerminalSurface({
 
     return () => {
       disposed = true;
+      // The process carries on; Rust keeps its screen until a window — this
+      // one later, or another — attaches again.
+      const leaving = output.current;
+      output.current = null;
+      if (leaving) void detachPty(paneId, leaving).catch(() => {});
       gpu.unregister(paneId);
       terminals.delete(paneId);
       searchAddonRef.current = null;
@@ -904,9 +885,6 @@ export const TerminalSurface = memo(function TerminalSurface({
       textarea?.removeEventListener("paste", pasteCap, true);
       textarea?.removeEventListener("paste", pasteImage, true);
       typed.dispose();
-      titled.dispose();
-      cwd9.dispose();
-      cwd7.dispose();
       term.dispose();
       termRef.current = null;
       actions.current = { refit: () => {}, syncPty: () => {}, show: () => {} };
@@ -928,34 +906,66 @@ export const TerminalSurface = memo(function TerminalSurface({
     actions.current.refit();
   }, [paneId, visible]);
 
-  // 3. Start the process. Re-runs only when the pane is explicitly restarted.
-  // Hold off while a private VPN tunnel is still coming up, so agent traffic
-  // does not leak out the PC's normal route.
+  // 3. Draw the process here. If Rust already runs this generation of the pane
+  // — another window drew it, or this one did before a remount — attach and
+  // replay it. Otherwise start it, holding off while a private VPN tunnel is
+  // still coming up so agent traffic does not leak out the PC's normal route.
+  //
+  // Re-runs only when the pane is explicitly restarted. A second run for the
+  // same generation would replay the screen twice, so the VPN hold waits on
+  // the store inside this run rather than re-running it.
   useEffect(() => {
     let cancelled = false;
-    let screenTimer: ReturnType<typeof setTimeout> | undefined;
-    let pendingWrites = 0;
+    let stopWaiting = () => {};
     const term = termRef.current;
     if (!term) return;
-    if (!canStart) return;
-    startedGeneration.current = generation;
-    const networkAtStart = useKeel.getState().vpn;
-    const startingProxyPort =
-      networkAtStart.phase === "connected" ? networkAtStart.proxyPort : null;
-    promptDraft.current.reset();
 
     const isCurrent = () => !cancelled &&
       (useKeel.getState().generations[paneId] ?? 0) === generation;
-    const sampleScreen = () => {
-      screenTimer = undefined;
-      if (!isCurrent() || pendingWrites !== 0) return;
-      if (!useKeel.getState().needsAgentScreen(paneId, generation)) return;
-      useKeel.getState().noteScreen(
-        paneId, generation, readAgentScreen(term.buffer.active, term.rows),
-      );
+    const write = (bytes: Uint8Array) => {
+      if (!isCurrent()) return;
+      try {
+        term.write(bytes);
+      } catch {
+        // xterm throws once its ~50 MB write buffer is full. Drop the chunk.
+      }
+    };
+
+    const attach = async (): Promise<boolean> => {
+      const attachment = await attachPty(paneId, generation, write).catch(() => null);
+      if (!attachment) return false;
+      if (!isCurrent()) {
+        void detachPty(paneId, attachment.channel).catch(() => {});
+        return true;
+      }
+      output.current = attachment.channel;
+      startedGeneration.current = generation;
+      const { cols, rows } = attachment.attached;
+      // The replay is drawn at the size Rust's grid is; only once it has been
+      // parsed does this window fit it, and that resize has the program repaint.
+      if (term.cols !== cols || term.rows !== rows) term.resize(cols, rows);
+      attachment.release();
+      term.write("", () => {
+        if (!isCurrent()) return;
+        pty.current = { ready: true, cols, rows };
+        actions.current.refit();
+        actions.current.syncPty();
+      });
+      setSettledGeneration(generation);
+      return true;
+    };
+
+    const networkReady = () => {
+      const vpn = useKeel.getState().vpn;
+      return vpn.spawnAllowed && !(vpn.autoConnect && vpn.phase === "connecting");
     };
 
     const start = async () => {
+      startedGeneration.current = generation;
+      const networkAtStart = useKeel.getState().vpn;
+      const startingProxyPort =
+        networkAtStart.phase === "connected" ? networkAtStart.proxyPort : null;
+      promptDraft.current.reset();
       pty.current.ready = false;
       useKeel.getState().noteShellSpawn(
         paneId,
@@ -968,7 +978,7 @@ export const TerminalSurface = memo(function TerminalSurface({
       const cols = term.cols || 80;
       const rows = term.rows || 24;
       try {
-        await spawnPty(
+        const channel = await spawnPty(
           {
             id: paneId,
             generation,
@@ -980,28 +990,10 @@ export const TerminalSurface = memo(function TerminalSurface({
             cols,
             rows,
           },
-          (bytes) => {
-            if (!isCurrent()) return;
-            handlers.current.onOutput(paneId);
-            pendingWrites++;
-            try {
-              term.write(bytes, () => {
-                pendingWrites--;
-                if (!isCurrent() || pendingWrites !== 0 || screenTimer !== undefined) return;
-                // Timers also run for hidden decks, unlike animation frames.
-                screenTimer = setTimeout(sampleScreen, 50);
-              });
-            } catch {
-              // xterm throws once its ~50 MB write buffer is full. Drop the
-              // chunk rather than leave activity sampling wedged.
-              pendingWrites = 0;
-            }
-          },
-          (event) => {
-            if (isCurrent()) useKeel.getState().noteAgentEvent(paneId, generation, event);
-          },
+          write,
         );
         if (!isCurrent()) return;
+        output.current = channel;
         setSpawnedProxyPort(startingProxyPort);
         pty.current = { ready: true, cols, rows };
         // The layout may have moved while the process was starting.
@@ -1018,31 +1010,40 @@ export const TerminalSurface = memo(function TerminalSurface({
       }
     };
 
-    void start();
+    void (async () => {
+      if (await attach() || cancelled) return;
+      if (!networkReady()) {
+        await new Promise<void>((resolve) => {
+          const unsubscribe = useKeel.subscribe(() => {
+            if (!networkReady()) return;
+            unsubscribe();
+            resolve();
+          });
+          stopWaiting = unsubscribe;
+        });
+        if (cancelled) return;
+      }
+      await start();
+    })();
     return () => {
       cancelled = true;
-      clearTimeout(screenTimer);
+      stopWaiting();
     };
     // Spawn inputs are read at restart time; generation is the explicit trigger.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [paneId, generation, canStart]);
+  }, [paneId, generation]);
 
   // A CLI typed into an already-open shell paints before the pane is bound to
-  // it. Output that arrived while this was still a shell was not sampled, so
-  // read the grid once when the command identity changes. A restart flips the
-  // generation and clears `pty.ready` first; that screen belongs to the old process.
+  // it. Output that arrived while this was still a shell was not read for agent
+  // status, so have Rust read the screen once when the command identity changes.
+  // A restart flips the generation and clears `pty.ready` first; that screen
+  // belongs to the old process.
   useEffect(() => {
     const previous = seenCommand.current;
     seenCommand.current = command;
     if (!command || command === previous) return;
     if (!pty.current.ready || startedGeneration.current !== generation) return;
-    const term = termRef.current;
-    if (!term) return;
-    useKeel.getState().noteScreen(
-      paneId,
-      generation,
-      readAgentScreen(term.buffer.active, term.rows),
-    );
+    void ptySample(paneId, generation).catch(() => {});
   }, [command, generation, paneId]);
 
   // 4. Focus follows the layout, so keystrokes land where the border says.

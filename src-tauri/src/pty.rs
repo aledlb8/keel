@@ -1,11 +1,20 @@
 //! PTY ownership. Every terminal pane in the UI is one entry in [`PtyManager`].
 //!
-//! Rust owns the process lifecycle; the frontend owns terminal rendering.
-//! We spawn the user's *shell* — never the agent directly — then type the agent
-//! command into it, so the pane outlives the agent exiting.
+//! Rust owns the process lifecycle and the terminal's state; a window only
+//! draws it. We spawn the user's *shell* — never the agent directly — then type
+//! the agent command into it, so the pane outlives the agent exiting.
+//!
+//! Every byte a shell writes is parsed into the pane's [`Vt`] first, and then
+//! goes to whichever window is showing the pane — at most one, possibly none.
+//! A window that starts showing a pane attaches to it and is sent a replay of
+//! its screen and scrollback before anything new. That is how a terminal moves
+//! between windows without its process noticing.
 //!
 //! Output leaves here as raw bytes on a `Channel`, never as JSON events. That is
 //! the difference between a terminal that feels native and one that feels laggy.
+//! What the main window needs to *know* about a pane — that it printed, what its
+//! screen says, a title or folder it reported, an agent hook — goes to the main
+//! window as events, whichever window is drawing it.
 //!
 //! What the shell *says* on the way up is also this file's problem, because it is
 //! the only place that knows how the shell was launched. A pane should open
@@ -26,6 +35,10 @@ use tauri::ipc::{Channel, Response};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::procs;
+use crate::vt::{AgentScreen, Effect, Vt};
+
+/// The window that holds Keel's state. Pane activity is reported here.
+pub const MAIN_WINDOW: &str = "main";
 
 /// Read buffer per pane. A blocking `read` returns whatever is available up to
 /// this size — which from ConPTY is usually a few hundred bytes, not this.
@@ -46,15 +59,42 @@ const MAX_PTY_WRITE: usize = 1_048_576;
 const WRITE_CHUNK: usize = 64 * 1024;
 /// ConPTY / xterm still work at this size; anything larger is a hostile resize.
 const PTY_MAX_DIM: u16 = 512;
+/// How long output must pause before the screen is read for agent status. A
+/// screen read mid-repaint mixes two frames.
+const SCREEN_QUIET: Duration = Duration::from_millis(50);
+/// Least time between two "it printed" notes to the main window. The first
+/// output after a screen read is always noted.
+const OUTPUT_NOTE: Duration = Duration::from_millis(100);
 
 type PtyWriter = Arc<Mutex<Box<dyn Write + Send>>>;
 type PtyWriterGuard<'a> = std::sync::MutexGuard<'a, Box<dyn Write + Send>>;
+
+/// A pane's terminal, and the one view its bytes go to.
+struct Output {
+    vt: Vt,
+    view: Option<Channel<Response>>,
+    /// The main window still reads this pane's screen for agent status.
+    screen_wanted: bool,
+    last_screen: Option<AgentScreen>,
+    noted_at: Option<Instant>,
+    printed_at: Option<Instant>,
+}
+
+type SharedOutput = Arc<Mutex<Output>>;
+
+fn lock_output(output: &SharedOutput) -> std::sync::MutexGuard<'_, Output> {
+    output
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 pub struct PtySession {
     master: Box<dyn MasterPty + Send>,
     writer: PtyWriter,
     child: Box<dyn Child + Send + Sync>,
     alive: Arc<AtomicBool>,
+    generation: u64,
+    output: SharedOutput,
     /// Dropping the process revokes its hook capability, including delayed calls.
     _hooks: Option<crate::agent_hooks::HookLease>,
     /// Windows job so the shell tree dies with the pane. Held for `Drop`.
@@ -149,6 +189,56 @@ pub struct PtyExit {
     pub id: String,
     pub generation: u64,
     pub process_id: Option<String>,
+}
+
+/// Output arrived, or the screen settled after it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PtyActivity {
+    pub id: String,
+    pub generation: u64,
+    /// `output` or `screen`.
+    pub kind: &'static str,
+    /// For `screen`: what it shows, or `None` when that is what it showed last.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub screen: Option<AgentScreen>,
+}
+
+/// OSC 0 / OSC 2 from a pane.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PtyTitle {
+    pub id: String,
+    pub generation: u64,
+    pub title: String,
+}
+
+/// OSC 7 / OSC 9 from a pane: the shell reporting its folder.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PtyOsc {
+    pub id: String,
+    pub generation: u64,
+    pub ident: u8,
+    pub data: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PtyAgentEvent {
+    pub id: String,
+    pub generation: u64,
+    pub event: crate::agent_hooks::AgentEvent,
+}
+
+/// What a window that attached is drawing: the grid size the replay is for.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Attached {
+    pub cols: u16,
+    pub rows: u16,
+    /// False once the shell has exited. The replay is all there will be.
+    pub alive: bool,
 }
 
 /// A catalogue CLI appeared in a shell that was idle, or replaced another one.
@@ -368,8 +458,34 @@ fn clamp_pty_dims(cols: u16, rows: u16) -> (u16, u16) {
 /// Forward PTY output in batches: the first chunk opens a window of
 /// [`COALESCE_WINDOW`], and everything that arrives inside it goes in one send.
 /// Returns when the reader hangs up (after sending what it left) or a send fails.
-fn forward_coalesced(chunks: &mpsc::Receiver<Vec<u8>>, mut send: impl FnMut(Vec<u8>) -> bool) {
-    while let Ok(mut batch) = chunks.recv() {
+/// Gather reads into batches for `send`, and call `quiet` once output has
+/// paused for `SCREEN_QUIET` after a batch — or the pane closed straight after.
+fn forward_output(
+    chunks: &mpsc::Receiver<Vec<u8>>,
+    mut send: impl FnMut(Vec<u8>),
+    mut quiet: impl FnMut(),
+) {
+    let mut unsettled = false;
+    loop {
+        let mut batch = if unsettled {
+            match chunks.recv_timeout(SCREEN_QUIET) {
+                Ok(chunk) => chunk,
+                Err(RecvTimeoutError::Timeout) => {
+                    unsettled = false;
+                    quiet();
+                    continue;
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    quiet();
+                    return;
+                }
+            }
+        } else {
+            match chunks.recv() {
+                Ok(chunk) => chunk,
+                Err(_) => return,
+            }
+        };
         let deadline = Instant::now() + COALESCE_WINDOW;
         let mut hung_up = false;
         while batch.len() < COALESCE_MAX {
@@ -382,10 +498,128 @@ fn forward_coalesced(chunks: &mpsc::Receiver<Vec<u8>>, mut send: impl FnMut(Vec<
                 }
             }
         }
-        if !send(batch) || hung_up {
+        send(batch);
+        unsettled = true;
+        if hung_up {
+            quiet();
             return;
         }
     }
+}
+
+/// Feed one batch to the pane's terminal and on to its view. With no view the
+/// terminal's own replies go back to the shell, so a program asking where its
+/// cursor is does not hang because no window is drawing it.
+fn take_batch(
+    app: &AppHandle,
+    id: &str,
+    generation: u64,
+    output: &SharedOutput,
+    writer: &PtyWriter,
+    bytes: Vec<u8>,
+) {
+    let mut out = lock_output(output);
+    let effects = out.vt.feed(&bytes);
+    let now = Instant::now();
+    out.printed_at = Some(now);
+    let note = out
+        .noted_at
+        .is_none_or(|at| now.duration_since(at) >= OUTPUT_NOTE);
+    if note {
+        out.noted_at = Some(now);
+    }
+    if let Some(view) = &out.view {
+        if view.send(Response::new(bytes)).is_err() {
+            out.view = None;
+        }
+    }
+    let answer = out.view.is_none();
+    drop(out);
+
+    let mut replies = String::new();
+    for effect in effects {
+        match effect {
+            Effect::Reply(reply) => {
+                if answer {
+                    replies.push_str(&reply);
+                }
+            }
+            Effect::Title(title) => {
+                let _ = app.emit_to(
+                    MAIN_WINDOW,
+                    "pty:title",
+                    PtyTitle {
+                        id: id.to_string(),
+                        generation,
+                        title,
+                    },
+                );
+            }
+            Effect::Osc { ident, data } => {
+                let _ = app.emit_to(
+                    MAIN_WINDOW,
+                    "pty:osc",
+                    PtyOsc {
+                        id: id.to_string(),
+                        generation,
+                        ident,
+                        data,
+                    },
+                );
+            }
+        }
+    }
+    if !replies.is_empty() {
+        // Off this thread: a shell that is not reading its input must not stop
+        // us reading its output.
+        let writer = Arc::clone(writer);
+        let _ = std::thread::Builder::new()
+            .name("keel-pty-reply".into())
+            .spawn(move || {
+                if let Ok(mut guard) = lock_writer(&writer) {
+                    let _ = write_pty_bytes(&mut **guard, replies.as_bytes());
+                }
+            });
+    }
+    if note {
+        let _ = app.emit_to(
+            MAIN_WINDOW,
+            "pty:activity",
+            PtyActivity {
+                id: id.to_string(),
+                generation,
+                kind: "output",
+                screen: None,
+            },
+        );
+    }
+}
+
+/// Output has paused: read the screen for agent status, if it is still wanted.
+/// An unchanged screen is reported as unchanged — the main window still has to
+/// hear that the repaint it was told about has finished.
+fn settle_screen(app: &AppHandle, id: &str, generation: u64, output: &SharedOutput, force: bool) {
+    let mut out = lock_output(output);
+    out.noted_at = None;
+    if !out.screen_wanted && !force {
+        return;
+    }
+    let screen = out.vt.agent_screen();
+    let unchanged = !force && out.last_screen.as_ref() == Some(&screen);
+    if !unchanged {
+        out.last_screen = Some(screen.clone());
+    }
+    drop(out);
+    let _ = app.emit_to(
+        MAIN_WINDOW,
+        "pty:activity",
+        PtyActivity {
+            id: id.to_string(),
+            generation,
+            kind: "screen",
+            screen: (!unchanged).then_some(screen),
+        },
+    );
 }
 
 fn write_pty_bytes(writer: &mut dyn Write, data: &[u8]) -> Result<(), String> {
@@ -422,8 +656,20 @@ pub fn pty_spawn(
     manager: State<'_, PtyManager>,
     options: SpawnOptions,
     on_data: Channel<Response>,
-    on_agent_event: Channel<crate::agent_hooks::AgentEvent>,
 ) -> Result<(), String> {
+    // Two windows can both believe they own a pane for a moment while it moves
+    // between them. The second to ask for this generation gets the running
+    // process, not a replacement that kills it.
+    if let Some((output, generation, true)) = session_output(&app, &options.id)? {
+        if generation == options.generation {
+            let mut out = lock_output(&output);
+            on_data
+                .send(Response::new(out.vt.replay()))
+                .map_err(|err| format!("could not replay the terminal: {err}"))?;
+            out.view = Some(on_data);
+            return Ok(());
+        }
+    }
     let pty_system = portable_pty::native_pty_system();
     let (cols, rows) = clamp_pty_dims(options.cols, options.rows);
     let size = PtySize {
@@ -521,7 +767,24 @@ pub fn pty_spawn(
         cmd.env(key, &account_dir);
         account_home = Some(account_dir);
     }
-    let hooks = crate::agent_hooks::register(on_agent_event.clone())?;
+    let on_agent_event: crate::agent_hooks::EventSink = {
+        let app = app.clone();
+        let id = options.id.clone();
+        let generation = options.generation;
+        Arc::new(move |event| {
+            app.emit_to(
+                MAIN_WINDOW,
+                "pty:agent-event",
+                PtyAgentEvent {
+                    id: id.clone(),
+                    generation,
+                    event,
+                },
+            )
+            .is_ok()
+        })
+    };
+    let hooks = crate::agent_hooks::register(Arc::clone(&on_agent_event))?;
     cmd.env("KEEL_HOOK_PORT", hooks.port.to_string());
     cmd.env("KEEL_HOOK_TOKEN", hooks.token());
     if let Some(agent) = options
@@ -533,7 +796,7 @@ pub fn pty_spawn(
         if let Err(error) = &installed {
             eprintln!("Keel {agent} activity integration: {error}");
         }
-        let _ = on_agent_event.send(crate::agent_hooks::AgentEvent {
+        on_agent_event(crate::agent_hooks::AgentEvent {
             agent_id: agent.into(),
             session_id: String::new(),
             kind: if installed.is_ok() {
@@ -575,6 +838,14 @@ pub fn pty_spawn(
     let writer: PtyWriter = Arc::new(Mutex::new(writer));
 
     let alive = hooks.alive.clone();
+    let output: SharedOutput = Arc::new(Mutex::new(Output {
+        vt: Vt::new(cols, rows),
+        view: Some(on_data),
+        screen_wanted: true,
+        last_screen: None,
+        noted_at: None,
+        printed_at: None,
+    }));
     if let Some(shell_pid) = child.process_id() {
         // Bind before typing the launch command; hooks can beat the watcher.
         hooks.bind_process(shell_pid, crate::agents::agent_needles(&app));
@@ -587,12 +858,22 @@ pub fn pty_spawn(
         let alive = Arc::clone(&alive);
         let app = app.clone();
         let (chunks, batches) = mpsc::sync_channel::<Vec<u8>>(COALESCE_QUEUE);
-        let forwarder = std::thread::Builder::new()
-            .name(format!("keel-pty-out-{id}"))
-            .spawn(move || {
-                forward_coalesced(&batches, |bytes| on_data.send(Response::new(bytes)).is_ok());
-            })
-            .map_err(|err| format!("could not start the output thread: {err}"))?;
+        let forwarder = {
+            let app = app.clone();
+            let id = id.clone();
+            let output = Arc::clone(&output);
+            let writer = Arc::clone(&writer);
+            std::thread::Builder::new()
+                .name(format!("keel-pty-out-{id}"))
+                .spawn(move || {
+                    forward_output(
+                        &batches,
+                        |bytes| take_batch(&app, &id, generation, &output, &writer, bytes),
+                        || settle_screen(&app, &id, generation, &output, false),
+                    );
+                })
+                .map_err(|err| format!("could not start the output thread: {err}"))?
+        };
         std::thread::Builder::new()
             .name(format!("keel-pty-{id}"))
             .spawn(move || {
@@ -631,7 +912,8 @@ pub fn pty_spawn(
                     })
                     .unwrap_or(false);
                 if still_current {
-                    let _ = app.emit(
+                    let _ = app.emit_to(
+                        MAIN_WINDOW,
                         "pty:exit",
                         PtyExit {
                             id,
@@ -649,6 +931,8 @@ pub fn pty_spawn(
         writer: Arc::clone(&writer),
         child,
         alive: Arc::clone(&alive),
+        generation: options.generation,
+        output,
         _hooks: Some(hooks),
         _job: job,
     };
@@ -790,7 +1074,7 @@ fn start_agent_watcher(app: AppHandle) {
                     for event in collect_agent_events(&app, &needles) {
                         match event {
                             AgentChange::Started(start) => {
-                                let _ = app.emit("pty:agent-start", start);
+                                let _ = app.emit_to(MAIN_WINDOW, "pty:agent-start", start);
                             }
                             AgentChange::Stopped(exit) => {
                                 // A restart under the same pane id replaces the watch
@@ -805,7 +1089,7 @@ fn start_agent_watcher(app: AppHandle) {
                                 if current.is_some_and(|generation| generation != exit.generation) {
                                     continue;
                                 }
-                                let _ = app.emit("pty:agent-exit", exit);
+                                let _ = app.emit_to(MAIN_WINDOW, "pty:agent-exit", exit);
                             }
                         }
                     }
@@ -920,6 +1204,7 @@ pub async fn pty_resize(app: AppHandle, id: String, cols: u16, rows: u16) -> Res
         };
         // MasterPty is not cloneable, so resize holds the map lock. It is
         // usually fast; never hold this lock across a write.
+        lock_output(&session.output).vt.resize(cols, rows);
         session
             .master
             .resize(PtySize {
@@ -929,6 +1214,161 @@ pub async fn pty_resize(app: AppHandle, id: String, cols: u16, rows: u16) -> Res
                 pixel_height: 0,
             })
             .map_err(|err| err.to_string())
+    })
+    .await
+}
+
+/// A pane's terminal, its generation, and whether its shell is still running.
+fn session_output(app: &AppHandle, id: &str) -> Result<Option<(SharedOutput, u64, bool)>, String> {
+    let manager = app.state::<PtyManager>();
+    let sessions = manager
+        .sessions
+        .lock()
+        .map_err(|_| "pty state is poisoned".to_string())?;
+    Ok(sessions.get(id).map(|session| {
+        (
+            Arc::clone(&session.output),
+            session.generation,
+            session.alive.load(Ordering::SeqCst),
+        )
+    }))
+}
+
+/// Start drawing a pane in the window that owns `on_data`. A replay of its
+/// screen and scrollback is the first message on that channel, ahead of any new
+/// output, and whichever window was drawing it before is sent nothing more.
+/// `None` when this generation of the pane has no terminal: start one instead.
+#[tauri::command(async)]
+pub async fn pty_attach(
+    app: AppHandle,
+    id: String,
+    generation: u64,
+    on_data: Channel<Response>,
+) -> Result<Option<Attached>, String> {
+    crate::blocking::run(move || {
+        let Some((output, current, alive)) = session_output(&app, &id)? else {
+            return Ok(None);
+        };
+        if current != generation {
+            return Ok(None);
+        }
+        let mut out = lock_output(&output);
+        let (cols, rows) = out.vt.size();
+        on_data
+            .send(Response::new(out.vt.replay()))
+            .map_err(|err| format!("could not replay the terminal: {err}"))?;
+        out.view = Some(on_data);
+        Ok(Some(Attached { cols, rows, alive }))
+    })
+    .await
+}
+
+/// Stop sending a pane's output to `channel`. A window that has attached since
+/// is left alone.
+#[tauri::command(async)]
+pub async fn pty_detach(app: AppHandle, id: String, channel: u32) -> Result<(), String> {
+    crate::blocking::run(move || {
+        if let Some((output, _, _)) = session_output(&app, &id)? {
+            let mut out = lock_output(&output);
+            if out.view.as_ref().is_some_and(|view| view.id() == channel) {
+                out.view = None;
+            }
+        }
+        Ok(())
+    })
+    .await
+}
+
+/// The bottom `lines` rows of a pane as plain text, whichever window has it.
+#[tauri::command(async)]
+pub async fn pty_text(app: AppHandle, id: String, lines: usize) -> Result<Option<String>, String> {
+    crate::blocking::run(move || {
+        Ok(session_output(&app, &id)?.map(|(output, _, _)| {
+            lock_output(&output)
+                .vt
+                .text(lines.min(crate::vt::SCROLLBACK))
+        }))
+    })
+    .await
+}
+
+/// Paste into a pane the way xterm would — bracketed if the program asked — for
+/// a pane this window is not drawing. Returns exactly what was sent.
+#[tauri::command(async)]
+pub async fn pty_paste(app: AppHandle, id: String, text: String) -> Result<Option<String>, String> {
+    if pty_write_too_large(text.len()) {
+        return Err(format!(
+            "terminal write is limited to {MAX_PTY_WRITE} bytes"
+        ));
+    }
+    crate::blocking::run(move || {
+        let (writer, data) = {
+            let manager = app.state::<PtyManager>();
+            let sessions = manager
+                .sessions
+                .lock()
+                .map_err(|_| "pty state is poisoned".to_string())?;
+            let Some(session) = sessions.get(&id) else {
+                return Ok(None);
+            };
+            let data = lock_output(&session.output).vt.paste_bytes(&text);
+            (Arc::clone(&session.writer), data)
+        };
+        let mut guard = lock_writer(&writer)?;
+        write_pty_bytes(&mut **guard, data.as_bytes())?;
+        Ok(Some(data))
+    })
+    .await
+}
+
+/// Read a pane's screen for agent status now, whatever it said last time.
+#[tauri::command(async)]
+pub async fn pty_sample(app: AppHandle, id: String, generation: u64) -> Result<(), String> {
+    crate::blocking::run(move || {
+        if let Some((output, current, _)) = session_output(&app, &id)? {
+            if current == generation {
+                settle_screen(&app, &id, generation, &output, true);
+            }
+        }
+        Ok(())
+    })
+    .await
+}
+
+/// Whether the main window still reads this pane's screen for agent status.
+/// Agents that report through hooks stop needing it.
+#[tauri::command(async)]
+pub async fn pty_screen_wanted(
+    app: AppHandle,
+    id: String,
+    generation: u64,
+    wanted: bool,
+) -> Result<(), String> {
+    crate::blocking::run(move || {
+        if let Some((output, current, _)) = session_output(&app, &id)? {
+            if current == generation {
+                let mut out = lock_output(&output);
+                out.screen_wanted = wanted;
+                if wanted {
+                    out.last_screen = None;
+                }
+            }
+        }
+        Ok(())
+    })
+    .await
+}
+
+/// Milliseconds since a pane last printed. `None` with no terminal, `u64::MAX`
+/// when it has printed nothing yet.
+#[tauri::command(async)]
+pub async fn pty_quiet(app: AppHandle, id: String) -> Result<Option<u64>, String> {
+    crate::blocking::run(move || {
+        Ok(session_output(&app, &id)?.map(|(output, _, _)| {
+            lock_output(&output).printed_at.map_or(u64::MAX, |at| {
+                u64::try_from(at.elapsed().as_millis()).unwrap_or(u64::MAX - 1)
+            })
+        }))
     })
     .await
 }
@@ -965,10 +1405,7 @@ mod tests {
         }
         drop(chunks);
         let mut sent = Vec::new();
-        forward_coalesced(&batches, |bytes| {
-            sent.push(bytes);
-            true
-        });
+        forward_output(&batches, |bytes| sent.push(bytes), || {});
         assert_eq!(sent, vec![b"one two three".to_vec()]);
     }
 
@@ -981,10 +1418,7 @@ mod tests {
             chunks.send(b"second".to_vec()).unwrap();
         });
         let mut sent = Vec::new();
-        forward_coalesced(&batches, |bytes| {
-            sent.push(bytes);
-            true
-        });
+        forward_output(&batches, |bytes| sent.push(bytes), || {});
         writer.join().unwrap();
         assert_eq!(sent, vec![b"first".to_vec(), b"second".to_vec()]);
     }
@@ -996,24 +1430,36 @@ mod tests {
         chunks.send(b"rest".to_vec()).unwrap();
         drop(chunks);
         let mut sizes = Vec::new();
-        forward_coalesced(&batches, |bytes| {
-            sizes.push(bytes.len());
-            true
-        });
+        forward_output(&batches, |bytes| sizes.push(bytes.len()), || {});
         assert_eq!(sizes, vec![COALESCE_MAX, 4]);
     }
 
     #[test]
-    fn a_failed_send_stops_forwarding() {
+    fn the_screen_is_read_once_output_pauses() {
         let (chunks, batches) = mpsc::sync_channel(COALESCE_QUEUE);
-        chunks.send(vec![b'a'; COALESCE_MAX]).unwrap();
-        chunks.send(b"rest".to_vec()).unwrap();
-        let mut sends = 0;
-        forward_coalesced(&batches, |_| {
-            sends += 1;
-            false
+        let writer = std::thread::spawn(move || {
+            chunks.send(b"a".to_vec()).unwrap();
+            std::thread::sleep(SCREEN_QUIET * 3);
+            chunks.send(b"b".to_vec()).unwrap();
+            std::thread::sleep(SCREEN_QUIET * 3);
         });
-        assert_eq!(sends, 1);
+        let events = std::cell::RefCell::new(Vec::<String>::new());
+        forward_output(
+            &batches,
+            |bytes| events.borrow_mut().push(String::from_utf8(bytes).unwrap()),
+            || events.borrow_mut().push("quiet".into()),
+        );
+        writer.join().unwrap();
+        assert_eq!(events.into_inner(), ["a", "quiet", "b", "quiet"]);
+    }
+
+    #[test]
+    fn a_pane_that_never_printed_is_never_read() {
+        let (chunks, batches) = mpsc::sync_channel::<Vec<u8>>(COALESCE_QUEUE);
+        drop(chunks);
+        let mut quiet = 0;
+        forward_output(&batches, |_| {}, || quiet += 1);
+        assert_eq!(quiet, 0);
     }
 
     #[test]

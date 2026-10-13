@@ -169,7 +169,7 @@ async function runTool(call: AssistantToolCall): Promise<string> {
       terminalPane(paneId);
       const lines = Math.min(400, Math.max(5, Number(args.lines) || 60));
       await terminalQuiet(paneId, READ_SETTLE);
-      const screen = terminalText(paneId, lines);
+      const screen = await terminalText(paneId, lines);
       if (screen === null) throw new Error(`${paneId} has no terminal yet.`);
       return screen.trim() ? screen : "(the screen is empty)";
     }
@@ -231,7 +231,7 @@ async function runTool(call: AssistantToolCall): Promise<string> {
       const bytes = PANE_KEYS[key];
       if (!bytes) throw new Error(`Unknown key "${key}". Keys: ${Object.keys(PANE_KEYS).join(", ")}.`);
       const times = Math.min(10, Math.max(1, Number(args.times) || 1));
-      if (!terminalPress(paneId, bytes.repeat(times))) throw new Error(`${paneId} has no terminal yet.`);
+      if (!(await terminalPress(paneId, bytes.repeat(times)))) throw new Error(`${paneId} has no terminal yet.`);
       if (ANSWER_KEYS.has(key)) markHanded(paneId);
       else if (INTERRUPT_KEYS.has(key)) mark("handed", paneId, false);
       return `Pressed ${key}${times > 1 ? ` ${times} times` : ""} in ${paneId}. Check the result with read_pane.`;
@@ -321,7 +321,7 @@ function watchPanes(): () => void {
         await terminalQuiet(change.paneId, REPORT_SETTLE);
         await assistantIpc.paneEvent({
           ...event,
-          tail: terminalText(change.paneId, TAIL_LINES) ?? "",
+          tail: (await terminalText(change.paneId, TAIL_LINES)) ?? "",
         });
       });
     }

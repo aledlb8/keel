@@ -55,7 +55,6 @@ export interface PaneViewProps {
   rect: PaneRect | null;
   hidden: boolean;
   onFocus: (paneId: string) => void;
-  onOutput: (paneId: string) => void;
   onActivity: (paneId: string, kind: PaneActivity, data?: string) => void;
   onSplit: (paneId: string, direction: "row" | "column") => void;
   onZoom: (paneId: string) => void;
@@ -65,8 +64,6 @@ export interface PaneViewProps {
   onCreateAccount: (paneId: string, agentId: string, name: string) => void;
   onSpawnResult?: ((paneId: string, ok: boolean, reason?: string) => void) | undefined;
   onTitle: (paneId: string, title: string, source: TitleSource) => void;
-  /** The shell's folder changed; kept on the pane for the next spawn. */
-  onCwd?: ((paneId: string, dir: string) => void) | undefined;
   /** A press on the header that may become a drag. Must be stable: this is memoised. */
   onDragStart: (paneId: string, event: React.PointerEvent) => void;
 }
@@ -130,7 +127,6 @@ export const PaneView = memo(function PaneView({
   rect,
   hidden,
   onFocus,
-  onOutput,
   onActivity,
   onSplit,
   onZoom,
@@ -140,7 +136,6 @@ export const PaneView = memo(function PaneView({
   onCreateAccount,
   onSpawnResult,
   onTitle,
-  onCwd,
   onDragStart,
 }: PaneViewProps) {
   const renaming = useKeel(
@@ -310,12 +305,10 @@ export const PaneView = memo(function PaneView({
                 generation={generation}
                 visible={!hidden}
                 focused={focused}
-                onOutput={onOutput}
                 onActivity={onActivity}
                 onFocus={onFocus}
                 onSpawnResult={onSpawnResult}
                 onTitle={onTitle}
-                onCwd={onCwd}
               />
               )}
             </div>

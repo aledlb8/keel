@@ -8,7 +8,6 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::ipc::Channel;
 
 const MAX_BODY: usize = 1024 * 1024;
 type Routes = Arc<Mutex<HashMap<String, Route>>>;
@@ -26,8 +25,11 @@ pub struct AgentEvent {
     pub turn_id: Option<String>,
 }
 
+/// Where a pane's events go. Returns false once nobody is listening.
+pub type EventSink = Arc<dyn Fn(AgentEvent) -> bool + Send + Sync>;
+
 struct Route {
-    channel: Channel<AgentEvent>,
+    sink: EventSink,
     sequence: u64,
     alive: Arc<AtomicBool>,
     origin: Option<HookOrigin>,
@@ -74,7 +76,7 @@ struct Server {
     routes: Routes,
 }
 
-pub fn register(channel: Channel<AgentEvent>) -> Result<HookLease, String> {
+pub fn register(sink: EventSink) -> Result<HookLease, String> {
     static SERVER: OnceLock<Result<Server, String>> = OnceLock::new();
     let server = SERVER
         .get_or_init(start_server)
@@ -85,7 +87,7 @@ pub fn register(channel: Channel<AgentEvent>) -> Result<HookLease, String> {
     server.routes.lock().map_err(|e| e.to_string())?.insert(
         token.clone(),
         Route {
-            channel,
+            sink,
             sequence: 0,
             alive: alive.clone(),
             origin: None,
@@ -190,7 +192,9 @@ fn receive(stream: &mut TcpStream, routes: &Routes) -> Option<()> {
         }
         route.sequence += 1;
         event.sequence = route.sequence;
-        route.channel.send(event).ok()?;
+        if !(route.sink)(event) {
+            return None;
+        }
     }
     Some(())
 }
@@ -359,12 +363,9 @@ mod tests {
         for source in ["claude", "codex", "grok"] {
             let events = Arc::new(Mutex::new(Vec::<AgentEvent>::new()));
             let received = events.clone();
-            let lease = register(Channel::new(move |event| {
-                received
-                    .lock()
-                    .unwrap()
-                    .push(event.deserialize::<AgentEvent>().unwrap());
-                Ok(())
+            let lease = register(Arc::new(move |event| {
+                received.lock().unwrap().push(event);
+                true
             }))
             .unwrap();
             lease.bind_process(
@@ -516,11 +517,11 @@ mod tests {
     fn listener_isolates_panes_and_revokes_dead_generations() {
         let events = Arc::new(Mutex::new(Vec::new()));
         let received = events.clone();
-        let channel = Channel::new(move |event| {
+        let lease = register(Arc::new(move |event| {
             received.lock().unwrap().push(event);
-            Ok(())
-        });
-        let lease = register(channel).unwrap();
+            true
+        }))
+        .unwrap();
         let rows = crate::procs::process_snapshot();
         let this_process = rows
             .iter()

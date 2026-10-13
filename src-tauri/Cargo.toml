@@ -42,6 +42,7 @@ time = { version = "0.3", default-features = false, features = ["parsing"] }
 rusqlite = { version = "0.40", features = ["bundled", "limits", "hooks"] }
 # Query strings on the keel-file scheme. Already in the tree through tauri.
 url = "2"
+alacritty_terminal = { version = "0.26", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 # Same version tauri/wry already selected; needed for ICoreWebView2Settings3.

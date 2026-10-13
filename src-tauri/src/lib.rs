@@ -26,6 +26,7 @@ mod vpn;
 mod vpn_profile;
 mod vpn_proxy;
 mod vpn_service;
+mod vt;
 mod watch;
 mod workspace;
 
@@ -60,6 +61,13 @@ pub fn run() {
             pty::pty_write,
             pty::pty_resize,
             pty::pty_kill,
+            pty::pty_attach,
+            pty::pty_detach,
+            pty::pty_text,
+            pty::pty_paste,
+            pty::pty_sample,
+            pty::pty_screen_wanted,
+            pty::pty_quiet,
             agents::detect_agents,
             agents::agent_catalogue_path,
             agents::agent_catalogue_defaults,

@@ -59,7 +59,7 @@ import {
   matchesBinding,
   matchShortcut,
 } from "@/lib/keymap";
-import { onPtyAgentExit, onPtyAgentStart, onPtyExit } from "@/lib/pty";
+import { startPaneEvents } from "@/lib/paneEvents";
 import { pruneRecent } from "@/lib/recentFiles";
 import { startWindowFocusTracking } from "@/lib/windowFocus";
 import {
@@ -206,15 +206,7 @@ export default function App() {
     const stopAudio = startChimeAudio();
     const stopFocus = startWindowFocusTracking();
     const stopAssistant = startAssistant();
-    const unlisten = onPtyExit((paneId, generation) => {
-      useKeel.getState().notePaneExit(paneId, generation);
-    });
-    const unlistenAgent = onPtyAgentExit((paneId, generation, processId) => {
-      useKeel.getState().releaseAgent(paneId, generation, processId);
-    });
-    const unlistenStart = onPtyAgentStart((paneId, generation, agentId, processId) => {
-      useKeel.getState().noteRunningAgent(paneId, generation, agentId, processId);
-    });
+    const stopPanes = startPaneEvents();
     const stopHost = onHostLost(() => useKeel.getState().noteHostLost());
     const stopClose = startCloseGuard();
     // No browser context menu anywhere: "Reload" and "Inspect" have no business
@@ -226,12 +218,10 @@ export default function App() {
       stopAudio();
       stopFocus();
       stopAssistant();
+      stopPanes();
       stopHost();
       stopClose();
       window.removeEventListener("contextmenu", blockNativeMenu);
-      void unlisten.then((stop) => stop());
-      void unlistenAgent.then((stop) => stop());
-      void unlistenStart.then((stop) => stop());
     };
   }, []);
 
