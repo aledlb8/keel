@@ -17,6 +17,7 @@ mod preview;
 mod procs;
 mod pty;
 mod roots;
+mod screens;
 mod sessions;
 mod sqlite;
 mod store;
@@ -51,7 +52,9 @@ pub fn run() {
             app.manage(AssistantManager::start(app.handle().clone()));
             // Tauri 2 does not wrap wry's with_browser_accelerator_keys.
             #[cfg(windows)]
-            disable_browser_accelerator_keys(app);
+            if let Some(window) = app.get_webview_window(pty::MAIN_WINDOW) {
+                disable_browser_accelerator_keys(&window);
+            }
             Ok(())
         })
         .manage(PtyManager::default())
@@ -68,6 +71,12 @@ pub fn run() {
             pty::pty_sample,
             pty::pty_screen_wanted,
             pty::pty_quiet,
+            screens::displays,
+            screens::screen_open,
+            screens::screen_close,
+            screens::window_place,
+            screens::window_focus,
+            screens::window_bounds,
             agents::detect_agents,
             agents::agent_catalogue_path,
             agents::agent_catalogue_defaults,
@@ -159,6 +168,7 @@ pub fn run() {
             handoff::handoff_write,
         ])
         .on_window_event(|window, event| {
+            screens::on_window_event(window, event);
             // CloseRequested is a *request*. Killing PTYs here would destroy
             // unsaved work before the UI can ask. The frontend confirms, then
             // destroys the window; the main window's Destroyed is what tears
@@ -173,6 +183,9 @@ pub fn run() {
                 }
                 tauri::WindowEvent::Destroyed => {
                     shutdown_managed(window.app_handle());
+                    // Screens only draw what the main window owns; without it
+                    // they have nothing to show and nobody to report to.
+                    window.app_handle().exit(0);
                 }
                 _ => {}
             }
@@ -191,10 +204,9 @@ pub fn run() {
 
 /// Turn off WebView2's F5 / Ctrl+R / zoom chords so they cannot reload this webview.
 #[cfg(windows)]
-fn disable_browser_accelerator_keys(app: &tauri::App) {
-    let Some(window) = app.get_webview_window("main") else {
-        return;
-    };
+pub(crate) fn disable_browser_accelerator_keys<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+) {
     let _ = window.with_webview(|webview| {
         let _ = disable_webview2_accelerator_keys(webview);
     });
