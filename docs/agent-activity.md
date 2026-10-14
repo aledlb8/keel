@@ -60,10 +60,13 @@ Reproduce with `cargo build --manifest-path src-tauri/Cargo.toml` then
 model request, and does not modify the user's provider configuration.
 
 Hook installation precedes launch and preserves user groups and explicit Codex
-hook disabling. PreToolUse/PostToolUse provide continuation and permission-response
-evidence. Hooks receive a pane-scoped loopback capability. Process ancestry rejects
-imported hooks from the wrong provider and nested CLIs. The helper reads one JSON
-value without waiting for EOF and returns neutral JSON. Prompts, tool arguments,
+hook disabling. PostToolUse provides continuation and permission-response evidence.
+Claude waits for every hook, so its PreToolUse group matches only AskUserQuestion,
+the one tool that changes a pane's state before it runs. Hooks receive a pane-scoped
+loopback capability. Process ancestry rejects imported hooks from the wrong provider
+and nested CLIs. The helper reads one JSON value without waiting for EOF, posts it
+over a plain loopback socket (no HTTP client, TLS roots or async runtime per hook)
+and returns neutral JSON. Prompts, tool arguments,
 transcripts and credentials are not forwarded. OpenCode and Grok use separate
 Keel-owned files; Claude and Codex merge Keel's groups into settings.
 

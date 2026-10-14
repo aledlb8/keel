@@ -108,10 +108,11 @@ fn start_server() -> Result<Server, String> {
     let worker_routes = routes.clone();
     std::thread::Builder::new().name("keel-agent-hooks".into()).spawn(move || {
         // One FIFO keeps event delivery ordered, with no thread or queue per token.
+        let mut snapshots = Snapshots::default();
         for mut stream in listener.incoming().flatten() {
             let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
             let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
-            let accepted = receive(&mut stream, &worker_routes).is_some();
+            let accepted = receive(&mut stream, &worker_routes, &mut snapshots).is_some();
             let status = if accepted { "200 OK" } else { "400 Bad Request" };
             // Observation only: never allow/deny a tool or add model context.
             let _ = write!(stream, "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}");
@@ -120,7 +121,31 @@ fn start_server() -> Result<Server, String> {
     Ok(Server { port, routes })
 }
 
-fn receive(stream: &mut TcpStream, routes: &Routes) -> Option<()> {
+/// How long a process snapshot may stand in for a new one.
+const SNAPSHOT_REUSE: Duration = Duration::from_millis(250);
+
+/// The last process snapshot. Taking one costs milliseconds, events are handled
+/// one at a time, and an agent running tools side by side fires its hooks
+/// together. A snapshot that already shows the sender was taken after it
+/// started, so it shows the whole line of processes above it too.
+#[derive(Default)]
+struct Snapshots {
+    taken: Option<Instant>,
+    rows: Vec<crate::procs::ProcessRow>,
+}
+
+impl Snapshots {
+    fn showing(&mut self, sender: u32) -> &[crate::procs::ProcessRow] {
+        let fresh = self.taken.is_some_and(|at| at.elapsed() < SNAPSHOT_REUSE);
+        if !fresh || !self.rows.iter().any(|row| row.pid == sender) {
+            self.rows = crate::procs::process_snapshot();
+            self.taken = Some(Instant::now());
+        }
+        &self.rows
+    }
+}
+
+fn receive(stream: &mut TcpStream, routes: &Routes, snapshots: &mut Snapshots) -> Option<()> {
     let started = Instant::now();
     let mut header = Vec::new();
     while !header.ends_with(b"\r\n\r\n") {
@@ -175,7 +200,7 @@ fn receive(stream: &mut TcpStream, routes: &Routes) -> Option<()> {
             .as_u64()
             .and_then(|pid| u32::try_from(pid).ok())?;
         let Some(owner_pid) = crate::procs::hook_source_owner(
-            &crate::procs::process_snapshot(),
+            snapshots.showing(sender),
             origin.shell_pid,
             sender,
             source,
@@ -323,18 +348,36 @@ fn forward_hook(source: &str) -> Option<()> {
             "ended" => "SessionEnd", _ => "PostCompact",
         }
     });
-    reqwest::blocking::Client::builder()
-        .no_proxy()
-        .timeout(Duration::from_secs(2))
-        .build()
-        .ok()?
-        .post(format!("http://127.0.0.1:{port}/{token}/{source}"))
-        .json(&normalized)
-        .send()
-        .ok()?
-        .error_for_status()
+    post_loopback(port, &format!("/{token}/{source}"), &normalized.to_string())
+}
+
+/// One HTTP POST to Keel's listener, by hand. An HTTP client would load the
+/// system's TLS roots and start an async runtime on every hook, and the agent
+/// waits for each one. The reply is awaited: Keel checks this process's place
+/// in the process tree while it answers, so it must still be running.
+fn post_loopback(port: u16, path: &str, body: &str) -> Option<()> {
+    let address = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(2)).ok()?;
+    stream.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(2)))
         .ok()?;
-    Some(())
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(request.as_bytes()).ok()?;
+    let mut reply = [0u8; 16];
+    let mut read = 0;
+    while read < reply.len() {
+        match stream.read(&mut reply[read..]) {
+            Ok(0) => break,
+            Ok(n) => read += n,
+            Err(_) => return None,
+        }
+    }
+    reply[..read].starts_with(b"HTTP/1.1 200").then_some(())
 }
 
 fn imported_grok_hook(source: &str, grok_event: Option<&std::ffi::OsStr>) -> bool {
