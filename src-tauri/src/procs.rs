@@ -487,45 +487,115 @@ fn platform_snapshot() -> Vec<ProcessRow> {
     Vec::new()
 }
 
+/// Every process, read straight from the kernel's process list. Toolhelp reads
+/// the same list and then copies it into a snapshot object, which took twice as
+/// long; with a few hundred processes that was 20–40 ms, every 400 ms, and once
+/// more for every agent hook.
 #[cfg(windows)]
 fn windows_snapshot() -> Vec<ProcessRow> {
-    use std::mem::{size_of, zeroed};
+    use std::cell::RefCell;
+    use std::mem::size_of;
 
-    use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
-    use winapi::um::tlhelp32::{
-        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
-        TH32CS_SNAPPROCESS,
-    };
+    use winapi::shared::ntdef::UNICODE_STRING;
 
-    let mut rows = Vec::new();
-    unsafe {
-        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-        if snap.is_null() || snap == INVALID_HANDLE_VALUE {
-            return rows;
-        }
-        let mut entry: PROCESSENTRY32W = zeroed();
-        entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
-        if Process32FirstW(snap, &mut entry) != 0 {
-            loop {
-                rows.push(ProcessRow {
-                    pid: entry.th32ProcessID,
-                    parent: entry.th32ParentProcessID,
-                    image: utf16_z(&entry.szExeFile),
-                });
-                if Process32NextW(snap, &mut entry) == 0 {
-                    break;
-                }
-            }
-        }
-        CloseHandle(snap);
+    const SYSTEM_PROCESS_INFORMATION: u32 = 5;
+    const STATUS_INFO_LENGTH_MISMATCH: i32 = 0xC000_0004_u32 as i32;
+
+    /// The head of `SYSTEM_PROCESS_INFORMATION`, as far as the parent's id.
+    #[repr(C)]
+    struct ProcessEntry {
+        next_entry_offset: u32,
+        number_of_threads: u32,
+        working_set_private_size: i64,
+        hard_fault_count: u32,
+        number_of_threads_high_watermark: u32,
+        cycle_time: u64,
+        create_time: i64,
+        user_time: i64,
+        kernel_time: i64,
+        image_name: UNICODE_STRING,
+        base_priority: i32,
+        unique_process_id: usize,
+        inherited_from_unique_process_id: usize,
     }
-    rows
-}
 
-#[cfg(windows)]
-fn utf16_z(buf: &[u16]) -> String {
-    let len = buf.iter().position(|&unit| unit == 0).unwrap_or(buf.len());
-    String::from_utf16_lossy(&buf[..len])
+    #[link(name = "ntdll")]
+    extern "system" {
+        fn NtQuerySystemInformation(
+            class: u32,
+            info: *mut std::ffi::c_void,
+            length: u32,
+            returned: *mut u32,
+        ) -> i32;
+    }
+
+    thread_local! {
+        // Kept between calls: the list is about the same size every time.
+        static BUFFER: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
+    }
+
+    BUFFER.with(|buffer| {
+        let mut buffer = buffer.borrow_mut();
+        let mut filled = 0u32;
+        let mut status = STATUS_INFO_LENGTH_MISMATCH;
+        for _ in 0..8 {
+            if buffer.is_empty() {
+                buffer.resize(64 * 1024, 0);
+            }
+            let bytes = u32::try_from(buffer.len() * size_of::<u64>()).unwrap_or(u32::MAX);
+            status = unsafe {
+                NtQuerySystemInformation(
+                    SYSTEM_PROCESS_INFORMATION,
+                    buffer.as_mut_ptr().cast(),
+                    bytes,
+                    &mut filled,
+                )
+            };
+            if status != STATUS_INFO_LENGTH_MISMATCH {
+                break;
+            }
+            // Processes start between the two calls, so leave room for more.
+            let wanted = (filled as usize).max(bytes as usize) * 3 / 2;
+            buffer.resize(wanted.div_ceil(size_of::<u64>()), 0);
+        }
+        if status != 0 {
+            return Vec::new();
+        }
+        let len = (filled as usize).min(buffer.len() * size_of::<u64>());
+        let base = buffer.as_ptr().cast::<u8>();
+        let mut rows = Vec::new();
+        let mut offset = 0usize;
+        while offset + size_of::<ProcessEntry>() <= len {
+            let entry = unsafe { base.add(offset).cast::<ProcessEntry>().read_unaligned() };
+            let name = entry.image_name;
+            let start = name.Buffer as usize;
+            let bytes = name.Length as usize;
+            // The name lives in this same buffer; anything else is not trusted.
+            let image = if !name.Buffer.is_null()
+                && bytes.is_multiple_of(2)
+                && start >= base as usize
+                && start + bytes <= base as usize + len
+            {
+                let units = unsafe { std::slice::from_raw_parts(start as *const u8, bytes) }
+                    .chunks_exact(2)
+                    .map(|pair| u16::from_ne_bytes([pair[0], pair[1]]))
+                    .collect::<Vec<_>>();
+                String::from_utf16_lossy(&units)
+            } else {
+                String::new()
+            };
+            rows.push(ProcessRow {
+                pid: entry.unique_process_id as u32,
+                parent: entry.inherited_from_unique_process_id as u32,
+                image,
+            });
+            if entry.next_entry_offset == 0 {
+                break;
+            }
+            offset += entry.next_entry_offset as usize;
+        }
+        rows
+    })
 }
 
 #[cfg(target_os = "linux")]
@@ -1144,6 +1214,34 @@ mod tests {
             ])
         });
         assert_eq!(found.unwrap().id, "gemini");
+    }
+
+    #[test]
+    fn snapshot_shows_this_process_under_its_parent() {
+        let rows = process_snapshot();
+        let me = rows
+            .iter()
+            .find(|row| row.pid == std::process::id())
+            .expect("this process is listed");
+        let exe = std::env::current_exe().unwrap();
+        assert_eq!(
+            executable_stem(&me.image),
+            executable_stem(&exe.file_name().unwrap().to_string_lossy())
+        );
+        assert!(rows.iter().any(|row| row.pid == me.parent));
+        // A child started now is in the next snapshot, beneath this process.
+        let mut child = std::process::Command::new(&exe)
+            .arg("--list")
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let listed = process_snapshot()
+            .into_iter()
+            .find(|row| row.pid == child.id())
+            .map(|row| row.parent);
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(listed, Some(std::process::id()));
     }
 
     #[cfg(windows)]
