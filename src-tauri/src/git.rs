@@ -6,9 +6,9 @@ use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -72,6 +72,9 @@ pub struct GitStatus {
     pub last_fetch: Option<i64>,
     /// There is somewhere to push to and pull from.
     pub has_remote: bool,
+    /// HEAD's full commit id from `# branch.oid`; `Some("")` before the first commit.
+    #[serde(skip)]
+    oid: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -397,6 +400,7 @@ fn empty_status(git: bool, repo: bool) -> GitStatus {
         stashes: 0,
         last_fetch: None,
         has_remote: false,
+        oid: None,
     }
 }
 
@@ -498,6 +502,15 @@ pub fn parse_status(raw: &[u8]) -> GitStatus {
             } else {
                 status.branch = Some(rest.to_string());
             }
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("# branch.oid ") {
+            let initial = rest == "(initial)";
+            status.oid = Some(if initial {
+                String::new()
+            } else {
+                rest.to_string()
+            });
             continue;
         }
         if let Some(rest) = line.strip_prefix("# branch.upstream ") {
@@ -827,44 +840,128 @@ fn run_status(root: &Path, untracked: &str) -> Result<GitStatus, String> {
 const MAX_COUNTED_BYTES: u64 = 512 * 1024;
 const MAX_COUNTED_FILES: usize = 300;
 
+/// What one status refresh can hand the next for the same project: where its
+/// git folders are, HEAD's short name for a commit, and whether it has a remote
+/// as of its config files' last writes. Starting a git process costs tens of
+/// milliseconds on Windows, and agents editing files ask for a status about once
+/// a second, so a refresh only runs git for what may have changed.
+#[derive(Clone, Default)]
+struct RepoFacts {
+    dirs: Option<(PathBuf, PathBuf)>,
+    /// Commit id and its short name.
+    head: Option<(String, Option<String>)>,
+    /// Config modification times, and whether a remote was configured then.
+    remote: Option<(ConfigStamp, bool)>,
+}
+
+type ConfigStamp = (Option<SystemTime>, Option<SystemTime>);
+
+fn repo_facts() -> &'static Mutex<HashMap<PathBuf, RepoFacts>> {
+    static FACTS: OnceLock<Mutex<HashMap<PathBuf, RepoFacts>>> = OnceLock::new();
+    FACTS.get_or_init(Default::default)
+}
+
+/// Remotes live in the shared config, or in a worktree's own.
+fn config_stamp(git_dir: &Path, common_dir: &Path) -> ConfigStamp {
+    let modified = |path: PathBuf| {
+        std::fs::metadata(path)
+            .and_then(|meta| meta.modified())
+            .ok()
+    };
+    (
+        modified(common_dir.join("config")),
+        modified(git_dir.join("config.worktree")),
+    )
+}
+
 /// The extras around a status: HEAD, an operation in progress, stashes, the
 /// last fetch, and how many lines each change touches.
 fn enrich_status(root: &Path, status: &mut GitStatus) {
+    let mut facts = repo_facts()
+        .lock()
+        .ok()
+        .and_then(|cache| cache.get(root).cloned())
+        .unwrap_or_default();
+    // A repository moved or re-created under the same folder starts over.
+    if facts
+        .dirs
+        .as_ref()
+        .is_some_and(|(git_dir, _)| !git_dir.is_dir())
+    {
+        facts = RepoFacts::default();
+    }
+    if facts.dirs.is_none() {
+        facts.dirs = git_dirs(root);
+    }
+    // Read before `git remote` runs, so a config written meanwhile is asked again.
+    let stamp = facts
+        .dirs
+        .as_ref()
+        .map(|(git_dir, common_dir)| config_stamp(git_dir, common_dir));
+    let known_remote = match (&facts.remote, &stamp) {
+        (Some((seen, remote)), Some(now)) if seen == now => Some(*remote),
+        _ => None,
+    };
+    let known_head = match (&status.oid, &facts.head) {
+        // `(initial)`: no commit yet, so no HEAD to name.
+        (Some(oid), _) if oid.is_empty() => Some(None),
+        (Some(oid), Some((seen, short))) if seen == oid => Some(short.clone()),
+        _ => None,
+    };
     let tracked = status.files.iter().filter(|file| !file.untracked).count();
     let diff = tracked <= MAX_NUMSTAT_FILES;
+    let diff_unstaged = diff
+        && status
+            .files
+            .iter()
+            .any(|file| !file.untracked && file.unstaged);
+    let diff_staged = diff && status.files.iter().any(|file| file.staged);
     // Independent git calls, so they run side by side: a refresh waits for
     // the slowest one instead of all of them in turn.
-    let (head, has_remote, dirs, unstaged, staged) = thread::scope(|scope| {
+    let (head, has_remote, unstaged, staged) = thread::scope(|scope| {
         let head = scope.spawn(|| {
-            git_ok(root, &["rev-parse", "--verify", "-q", "--short", "HEAD"])
-                .ok()
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
+            known_head.unwrap_or_else(|| {
+                git_ok(root, &["rev-parse", "--verify", "-q", "--short", "HEAD"])
+                    .ok()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+            })
         });
+        // `None` when git failed: reported as no remote, and asked again next time.
         let remote = scope.spawn(|| {
-            git_ok(root, &["remote"])
-                .map(|out| !out.trim().is_empty())
-                .unwrap_or(false)
+            known_remote.or_else(|| {
+                git_ok(root, &["remote"])
+                    .ok()
+                    .map(|out| !out.trim().is_empty())
+            })
         });
-        let dirs = scope.spawn(|| git_dirs(root));
-        let unstaged = scope.spawn(|| numstat_map_if(diff, root, false));
-        let staged = numstat_map_if(diff, root, true);
+        let unstaged = scope.spawn(|| numstat_map_if(diff_unstaged, root, false));
+        let staged = numstat_map_if(diff_staged, root, true);
         (
             head.join().unwrap_or_default(),
             remote.join().unwrap_or_default(),
-            dirs.join().unwrap_or_default(),
             unstaged.join().unwrap_or_default(),
             staged,
         )
     });
-    status.head = head;
-    status.has_remote = has_remote;
-    if let Some((git_dir, common_dir)) = dirs {
-        status.operation = repo_operation(&git_dir);
-        status.stashes = count_stashes(&common_dir);
+    status.head = head.clone();
+    status.has_remote = has_remote.unwrap_or(false);
+    if let Some((git_dir, common_dir)) = &facts.dirs {
+        status.operation = repo_operation(git_dir);
+        status.stashes = count_stashes(common_dir);
         status.last_fetch = modified_secs(&common_dir.join("FETCH_HEAD"));
     }
     apply_numstat(root, status, &unstaged, &staged);
+
+    if let (Some(oid), Some(short)) = (status.oid.as_ref().filter(|oid| !oid.is_empty()), head) {
+        facts.head = Some((oid.clone(), Some(short)));
+    }
+    if let (Some(stamp), Some(remote)) = (stamp, has_remote) {
+        facts.remote = Some((stamp, remote));
+    }
+    if let Ok(mut cache) = repo_facts().lock() {
+        cache.insert(root.to_path_buf(), facts);
+    }
 }
 
 fn numstat_map_if(diff: bool, root: &Path, cached: bool) -> HashMap<String, LineStat> {
@@ -2299,6 +2396,65 @@ mod tests {
             git_base_blocking(nested.to_string_lossy().into_owned(), "kept.txt".into()).unwrap(),
             Some("one\ntwo\n".into())
         );
+    }
+
+    #[test]
+    fn a_remembered_head_and_remote_follow_commits_and_config() {
+        let scratch = Scratch::new("facts");
+        crate::roots::register(&scratch.0).expect("register");
+        let root = scratch.0.to_string_lossy().into_owned();
+        let run = |args: &[&str]| {
+            let out = git(&scratch.0, args).expect("git");
+            assert!(out.status.success(), "{}", user_err(&out.stderr));
+        };
+        let commit = |message: &str| {
+            run(&[
+                "-c",
+                "user.name=Keel",
+                "-c",
+                "user.email=keel@example.com",
+                "commit",
+                "--quiet",
+                "-m",
+                message,
+            ])
+        };
+        let short_head = || {
+            git_ok(&scratch.0, &["rev-parse", "--short", "HEAD"])
+                .unwrap()
+                .trim()
+                .to_string()
+        };
+        run(&["init", "--quiet"]);
+
+        let unborn = git_status_blocking(root.clone()).unwrap();
+        assert_eq!(unborn.head, None);
+        assert!(!unborn.has_remote);
+
+        std::fs::write(scratch.0.join("a.txt"), "one\n").unwrap();
+        run(&["add", "."]);
+        commit("first");
+        let first = git_status_blocking(root.clone()).unwrap();
+        assert_eq!(first.head.as_deref(), Some(short_head().as_str()));
+        assert!(first.files.is_empty());
+
+        std::fs::write(scratch.0.join("a.txt"), "one\ntwo\n").unwrap();
+        run(&["add", "."]);
+        std::fs::write(scratch.0.join("a.txt"), "one\ntwo\nthree\n").unwrap();
+        let dirty = git_status_blocking(root.clone()).unwrap();
+        let file = &dirty.files[0];
+        assert_eq!(file.staged_stat.map(|stat| stat.added), Some(1));
+        assert_eq!(file.stat.map(|stat| stat.added), Some(1));
+
+        commit("second");
+        let second = git_status_blocking(root.clone()).unwrap();
+        assert_ne!(second.head, first.head);
+        assert_eq!(second.head.as_deref(), Some(short_head().as_str()));
+
+        run(&["remote", "add", "origin", "https://example.com/keel.git"]);
+        assert!(git_status_blocking(root.clone()).unwrap().has_remote);
+        run(&["remote", "remove", "origin"]);
+        assert!(!git_status_blocking(root).unwrap().has_remote);
     }
 
     #[test]
