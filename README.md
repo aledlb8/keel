@@ -24,7 +24,7 @@ Built with Tauri 2, React 19, TypeScript, Rust, Vite, CodeMirror, and xterm.js.
 - Put any deck in a window of its own on any monitor, send it to the next monitor with a key, pop a single pane out into a small window kept on top, or open the agent board: every agent across every window, grouped by what needs you. Windows come back where they were on each set of monitors. See [docs/screens.md](docs/screens.md).
 - Restore saved projects, layouts, terminals, and resumable agent sessions.
 - Browse and edit project files with an integrated CodeMirror editor, and search file contents across the project.
-- Inspect Git status and diffs, then stage, commit, fetch, pull, push, and manage branches. The file tree and git status refresh from filesystem events, with a mark on files touched in the last few minutes.
+- Inspect Git status and diffs, then stage, commit, fetch, pull, push, and manage branches. The file tree and git status refresh from filesystem events (git status at most every two seconds while agents keep writing), with a mark on files touched in the last few minutes.
 - Surface agent activity and supported subscription-usage windows in the workspace UI. An agent that finishes or exits chimes unless its specific terminal has focus, including when you are in another deck, project, workspace, or dialog. Background OS notifications can be muted per pane; sounds still play for muted panes.
 - Fade the window while Keel is not focused — enough to see the desktop and other apps behind it, while agents left running stay readable.
 - Configure agent commands, profiles, colors, and discovery paths from the app.

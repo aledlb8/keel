@@ -4,7 +4,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { EditorState, type TransactionSpec } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import { registerEditorView } from "./editorViews.ts";
-import { diffTabId, fileTabId, unsavedFiles, unsavedFilesAll, useWorkspace } from "../state/workspace.ts";
+import { diffTabId, FS_GIT_GAP_MS, fileTabId, unsavedFiles, unsavedFilesAll, useWorkspace } from "../state/workspace.ts";
 import type { GitDiff, GitStatus, PrList, WorkspaceEntry } from "./workspace.ts";
 
 const state = useWorkspace.getState;
@@ -311,6 +311,29 @@ it("queues one fresh git read for changes received during an older read", async 
   await tick();
   assert.equal(calls, 2);
   assert.equal(state().git?.branch, "fresh");
+});
+
+it("reads git once for a burst of file changes, and once more after it", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000_000 });
+  let calls = 0;
+  ipc({ git_status: () => { calls++; return status; } });
+  state().applyFsChange("project-a", ["a.ts"], true);
+  await tick();
+  assert.equal(calls, 1);
+  for (let i = 0; i < 20; i++) {
+    t.mock.timers.tick(50);
+    state().applyFsChange("project-a", ["a.ts"], true);
+  }
+  await tick();
+  assert.equal(calls, 1);
+  t.mock.timers.tick(FS_GIT_GAP_MS);
+  await tick();
+  assert.equal(calls, 2);
+  // Quiet since: the next change is read at once.
+  t.mock.timers.tick(FS_GIT_GAP_MS);
+  state().applyFsChange("project-a", ["a.ts"], true);
+  await tick();
+  assert.equal(calls, 3);
 });
 
 it("queues a final editor reload for changes arriving during the first reload", async () => {

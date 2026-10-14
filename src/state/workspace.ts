@@ -398,6 +398,35 @@ let editorNavigation = 0;
 const editorLoads = new WeakMap<EditorTab, Promise<void>>();
 const editorReloads = new WeakMap<EditorTab, Promise<void>>();
 
+/**
+ * Least time between two git status reads asked for by file changes. Agents
+ * write files the whole time they work, and every read starts several git
+ * processes, so changes in a burst share a read. The last change is always
+ * read, at most this late. Your own git actions still read at once.
+ */
+export const FS_GIT_GAP_MS = 2_000;
+let fsGitAt = 0;
+let fsGitTimer: ReturnType<typeof setTimeout> | null = null;
+
+function refreshGitForFs(refresh: () => void) {
+  // A read is already due, and it will see this change too.
+  if (fsGitTimer !== null) return;
+  const run = () => {
+    fsGitTimer = null;
+    fsGitAt = Date.now();
+    refresh();
+  };
+  const wait = fsGitAt + FS_GIT_GAP_MS - Date.now();
+  if (wait <= 0) run();
+  else fsGitTimer = setTimeout(run, wait);
+}
+
+function resetFsGit() {
+  if (fsGitTimer !== null) clearTimeout(fsGitTimer);
+  fsGitTimer = null;
+  fsGitAt = 0;
+}
+
 type EditorDocs = Pick<
   WorkspaceState,
   | "editors"
@@ -960,6 +989,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     grepGeneration += 1;
     searchGeneration += 1;
     reads.reset();
+    resetFsGit();
     if (previous) {
       stashedDocs.set(previous, settledDocs(get()));
       const { expanded, selectedRel, commitMessage, commitOptions } = get();
@@ -1073,7 +1103,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     // write kept the tree busy the whole time an agent was editing.
     if (full) void get().refreshTree();
     else if (rels.length > 0) void get().refreshTree(rels);
-    if (git || full) void get().refreshGit(true);
+    if (git || full) refreshGitForFs(() => void get().refreshGit(true));
     const open = get();
     for (const tab of open.editors) {
       if (tab.kind !== "file") continue;
