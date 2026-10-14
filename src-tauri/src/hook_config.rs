@@ -227,8 +227,14 @@ fn merge_hooks(
                 })
             })
             .unwrap_or(groups.len());
-        let definition = json!({"hooks": [{"type": "command", "command": command,
+        let mut definition = json!({"hooks": [{"type": "command", "command": command,
             "timeout": 3, "statusMessage": "Keel activity"}]});
+        // Claude waits for every hook, and each one starts a shell and Keel.
+        // Before a tool, only a question to you changes a pane's state: the
+        // turn is already working, and a permission prompt has its own event.
+        if agent == "claude" && event == "PreToolUse" {
+            definition["matcher"] = json!("AskUserQuestion");
+        }
         if position == groups.len() {
             groups.push(definition);
         } else {
@@ -388,6 +394,22 @@ mod tests {
         );
         assert!(config["hooks"].get("Stop").is_none());
         assert!(!strip_keel_hooks(&mut config));
+    }
+
+    #[test]
+    fn claude_runs_its_pre_tool_hook_only_for_questions() {
+        let mut config = json!({"hooks": {"PreToolUse": [
+            {"hooks": [{"type": "command", "command": "keel-v1", "statusMessage": "Keel activity"}]}
+        ]}});
+        merge_hooks(&mut config, "claude", "keel-v2").unwrap();
+        let groups = config["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0]["matcher"], "AskUserQuestion");
+        assert_eq!(groups[0]["hooks"][0]["command"], "keel-v2");
+        assert!(config["hooks"]["PostToolUse"][0].get("matcher").is_none());
+        let mut codex = json!({});
+        merge_hooks(&mut codex, "codex", "keel").unwrap();
+        assert!(codex["hooks"]["PreToolUse"][0].get("matcher").is_none());
     }
 
     #[test]
