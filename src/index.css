@@ -2743,3 +2743,22 @@
         opacity: 0.6;
     }
 }
+
+/*
+ * Nothing loops while you are away (see `windowFocus`). A running animation
+ * has the window redrawn every frame, and the faded shell is redrawn with it.
+ * Each carries on from where it stopped when you come back. Outside the layers
+ * so the utilities' own `animation` cannot switch it back on.
+ */
+html[data-window-inactive]
+    :is(
+        .k-shimmer-text,
+        .k-search-pulse,
+        .k-caret,
+        [class*="animate-ping"],
+        [class*="animate-spin"],
+        [class*="animate-pulse"]
+    ),
+html[data-window-inactive] .k-island-scan::after {
+    animation-play-state: paused;
+}

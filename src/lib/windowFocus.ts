@@ -8,7 +8,8 @@
  *
  * The fade waits `AWAY_DELAY_MS` after focus leaves, so a quick glance at
  * another window does not flicker the shell — only actually being away does.
- * Coming back clears it at once.
+ * Coming back clears it at once. The same attribute pauses every looping
+ * animation, so a window nobody is looking at stops redrawing for them.
  *
  * `document.hasFocus()` is deliberately the source of truth. It is the same
  * reading the chime and the OS toasts use to decide whether you are watching,
