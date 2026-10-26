@@ -2439,7 +2439,10 @@
         animation: k-island-glow 1800ms var(--keel-ease-settle) both;
     }
 
-    /* Agents still working: a quiet light moving along the bottom edge. */
+    /*
+     * Agents still working: a quiet light passing along the bottom edge. One
+     * pass per mount; the island remounts it after a rest (see `WorkingScan`).
+     */
     .k-island-scan {
         position: absolute;
         left: 14px;
@@ -2461,7 +2464,7 @@
             color-mix(in srgb, var(--keel-working) 85%, transparent),
             transparent
         );
-        animation: k-island-scan 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+        animation: k-island-scan 2.6s cubic-bezier(0.45, 0, 0.55, 1) both;
     }
 
     /* Asked for something that is not there: a short shake of the head. */

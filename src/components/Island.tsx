@@ -80,6 +80,9 @@ const HOLD_MS = { arrival: 6_000, "vpn-connected": 2_600, nudge: 1_600 };
 
 type News = { kind: keyof typeof HOLD_MS; at: number };
 
+/** How long the light along the island's edge rests between passes. */
+const SCAN_REST_MS = 4_000;
+
 /**
  * Put the caret in a pane's terminal once its deck is on screen. A terminal on a
  * hidden deck cannot take focus, so this waits for the switch to paint.
@@ -498,11 +501,7 @@ export function Island({ actions, onNavigate }: IslandProps) {
           ) : null}
 
           {moment === "rest" && working.length > 0 ? (
-            <span
-              aria-hidden
-              title={`${working.length} working`}
-              className="k-island-scan"
-            />
+            <WorkingScan count={working.length} />
           ) : null}
 
           {restoreShare !== null ? (
@@ -551,6 +550,29 @@ export function Island({ actions, onNavigate }: IslandProps) {
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>
+  );
+}
+
+/**
+ * Agents still working: a light passes along the island's bottom edge, rests,
+ * and passes again. A light that never stopped moving would have the window
+ * redraw every frame for as long as any agent works.
+ */
+function WorkingScan({ count }: { count: number }) {
+  const [pass, setPass] = useState(0);
+  const rest = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(rest.current), []);
+  return (
+    <span
+      key={pass}
+      aria-hidden
+      title={`${count} working`}
+      className="k-island-scan"
+      onAnimationEnd={() => {
+        clearTimeout(rest.current);
+        rest.current = setTimeout(() => setPass((n) => n + 1), SCAN_REST_MS);
+      }}
+    />
   );
 }
 
