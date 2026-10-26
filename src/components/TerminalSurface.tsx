@@ -21,6 +21,12 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal, type ITheme, type IWindowsPty } from "@xterm/xterm";
 
 import { TerminalSearch } from "@/components/TerminalSearch";
+import {
+  backgroundBeat,
+  pacePainting,
+  type PacedPainting,
+  type RowRefresher,
+} from "@/lib/paintPace";
 import { createPromptDraft, type TitleSource } from "@/lib/paneTitle";
 import {
   attachPty,
@@ -122,6 +128,22 @@ function paintSwitch(term: Terminal): ((on: boolean) => void) | null {
   service!._observerDisposable?.clear?.();
   return (on) =>
     handle.call(service, { isIntersecting: on, intersectionRatio: on ? 1 : 0 });
+}
+
+/**
+ * Put a terminal's repaints on the shared background beat while you are not
+ * using it (see `paintPace`). Private API, like `paintSwitch`: if a release
+ * renames the debouncer this returns null, and every repaint goes out on the
+ * next frame as before.
+ */
+function pacedPainting(term: Terminal): PacedPainting | null {
+  const debouncer = (
+    term as unknown as {
+      _core: { _renderService?: { _renderDebouncer?: RowRefresher } };
+    }
+  )._core._renderService?._renderDebouncer;
+  if (typeof debouncer?.refresh !== "function") return null;
+  return pacePainting(debouncer, backgroundBeat);
 }
 
 const isWindows = /Windows/i.test(navigator.userAgent);
@@ -503,6 +525,7 @@ export const TerminalSurface = memo(function TerminalSurface({
     refit: () => {},
     syncPty: () => {},
     show: (_visible: boolean) => {},
+    flushPaint: () => {},
   });
   /** The size the PTY was last told about, and whether there is a PTY to tell. */
   const pty = useRef({ ready: false, cols: 0, rows: 0 });
@@ -635,6 +658,34 @@ export const TerminalSurface = memo(function TerminalSurface({
 
     term.open(host);
     const paint = paintSwitch(term);
+
+    // In use — the keyboard is in this pane, or the pointer is over it — it
+    // repaints every frame. Otherwise on the background beat.
+    const paced = pacedPainting(term);
+    const pane = host.closest<HTMLElement>("[data-terminal-pane]") ?? host;
+    let pointed = false;
+    const syncUse = () =>
+      paced?.setUsed(
+        pointed || (document.hasFocus() && pane.contains(document.activeElement)),
+      );
+    const pointIn = () => {
+      pointed = true;
+      syncUse();
+    };
+    const pointOut = () => {
+      pointed = false;
+      syncUse();
+    };
+    pane.addEventListener("pointerenter", pointIn);
+    pane.addEventListener("pointerleave", pointOut);
+    pane.addEventListener("focusin", syncUse);
+    pane.addEventListener("focusout", syncUse);
+    window.addEventListener("focus", syncUse);
+    window.addEventListener("blur", syncUse);
+    syncUse();
+    // A resize blanks the canvas before it repaints; do not leave it blank
+    // until the next beat. (Registered after xterm's own resize handling.)
+    const resized = term.onResize(() => paced?.flush());
     termRef.current = term;
     searchAddonRef.current = search;
     terminals.set(paneId, { term, search, find: findApi });
@@ -734,6 +785,7 @@ export const TerminalSurface = memo(function TerminalSurface({
         shown = visible;
         paint?.(visible);
       },
+      flushPaint: () => paced?.flush(),
     };
 
     let webgl: WebglAddon | null = null;
@@ -757,6 +809,8 @@ export const TerminalSurface = memo(function TerminalSurface({
         // The renderers measure cells slightly differently, so every swap is
         // followed by a refit. Skipping that is how the grid ends up a column off.
         refit();
+        // The new renderer starts blank.
+        paced?.flush();
       },
       detach() {
         const addon = webgl;
@@ -764,6 +818,7 @@ export const TerminalSurface = memo(function TerminalSurface({
         slot.attached = false;
         addon?.dispose();
         refit();
+        paced?.flush();
       },
     };
     gpu.register(paneId, slot);
@@ -863,13 +918,26 @@ export const TerminalSurface = memo(function TerminalSurface({
       clearPreviewScale();
       layout.disconnect();
       palette.disconnect();
+      pane.removeEventListener("pointerenter", pointIn);
+      pane.removeEventListener("pointerleave", pointOut);
+      pane.removeEventListener("focusin", syncUse);
+      pane.removeEventListener("focusout", syncUse);
+      window.removeEventListener("focus", syncUse);
+      window.removeEventListener("blur", syncUse);
+      resized.dispose();
+      paced?.dispose();
       textarea?.removeEventListener("focus", noteFocus);
       textarea?.removeEventListener("paste", pasteCap, true);
       textarea?.removeEventListener("paste", pasteImage, true);
       typed.dispose();
       term.dispose();
       termRef.current = null;
-      actions.current = { refit: () => {}, syncPty: () => {}, show: () => {} };
+      actions.current = {
+        refit: () => {},
+        syncPty: () => {},
+        show: () => {},
+        flushPaint: () => {},
+      };
     };
   }, [paneId]);
 
@@ -886,6 +954,7 @@ export const TerminalSurface = memo(function TerminalSurface({
     const term = termRef.current;
     if (term) term.refresh(0, term.rows - 1);
     actions.current.refit();
+    actions.current.flushPaint();
   }, [paneId, visible]);
 
   // 3. Draw the pane's process. The supervisor starts it; this attaches, as
