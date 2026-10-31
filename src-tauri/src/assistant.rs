@@ -382,11 +382,28 @@ impl TurnState {
 /// An album's photos arrive as separate messages a moment apart.
 const ALBUM_WAIT: Duration = Duration::from_millis(1500);
 
+/// How long a CLI may take to show it started: a line of output, or listing
+/// Keel's tools. Every supported one does either within a few seconds.
+const START_LIMIT: Duration = Duration::from_secs(45);
+
 struct Running {
     child: Arc<Mutex<Option<Child>>>,
     stopped: Arc<AtomicBool>,
+    /// Held only so dropping it ends the process tree.
     #[allow(dead_code)]
     job: Option<crate::procs::KillOnCloseJob>,
+}
+
+impl Running {
+    fn end(&mut self) {
+        // Dropping the job ends the whole tree on Windows; kill covers the rest.
+        self.job = None;
+        if let Ok(mut child) = self.child.lock() {
+            if let Some(child) = child.as_mut() {
+                let _ = child.kill();
+            }
+        }
+    }
 }
 
 struct Inner {
@@ -679,13 +696,7 @@ impl Inner {
             return false;
         };
         current.stopped.store(true, Ordering::SeqCst);
-        // Dropping the job ends the whole tree on Windows; kill covers the rest.
-        current.job = None;
-        if let Ok(mut child) = current.child.lock() {
-            if let Some(child) = child.as_mut() {
-                let _ = child.kill();
-            }
-        }
+        current.end();
         true
     }
 
@@ -1308,6 +1319,31 @@ fn run_turn(inner: &Arc<Inner>, prompt: &str, images: &[PathBuf], retry_fresh: b
         }
         // Whoever stopped it already said so.
         Outcome::Stopped => {}
+        Outcome::Stuck { detail } => {
+            let name = agent_name(inner, &agent_id);
+            // Grok hangs before printing anything on a conversation it can't
+            // reopen. A fresh one, once, gets the user an answer.
+            if retry_fresh && session.is_some() {
+                inner.log(
+                    "event",
+                    format!("{name} got stuck reopening the conversation; starting a new one"),
+                );
+                let _ = inner.update(|s| {
+                    s.sessions.remove(&session_key);
+                });
+                run_turn(inner, prompt, images, false);
+                return;
+            }
+            let mut error = format!(
+                "{name} didn't start: nothing from it in {} seconds.",
+                START_LIMIT.as_secs()
+            );
+            if !detail.is_empty() {
+                error = format!("{error}\n{detail}");
+            }
+            inner.log("error", error.clone());
+            let _ = bot.send(chat, &error, false);
+        }
         Outcome::Failed { error, session: id } => {
             // A conversation the CLI no longer has would fail every turn.
             // Start a fresh one once, quietly.
@@ -1334,7 +1370,7 @@ fn run_turn(inner: &Arc<Inner>, prompt: &str, images: &[PathBuf], retry_fresh: b
 }
 
 fn deliver(inner: &Arc<Inner>, bot: &Bot, chat: i64, reply: String) {
-    if reply.trim() == QUIET_REPLY {
+    if is_quiet(&reply) {
         inner.log("event", "Nothing to report");
         return;
     }
@@ -1368,6 +1404,11 @@ enum Outcome {
         sent: bool,
     },
     Stopped,
+    /// Ended by Keel after `START_LIMIT` without a sign that it started.
+    Stuck {
+        /// The end of its stderr, if it said anything.
+        detail: String,
+    },
     Failed {
         error: String,
         session: Option<String>,
@@ -1501,6 +1542,38 @@ fn execute(
             let _ = stdin.write_all(text.as_bytes());
         });
     }
+    // Set by the first line of output, or once the output closes.
+    let heard = Arc::new(AtomicBool::new(false));
+    let stuck = Arc::new(AtomicBool::new(false));
+    {
+        let inner = inner.clone();
+        let child = child.clone();
+        let heard = heard.clone();
+        let stuck = stuck.clone();
+        std::thread::spawn(move || {
+            let deadline = Instant::now() + START_LIMIT;
+            loop {
+                let listed = inner.mcp.as_ref().map_or(0, McpServer::listings);
+                if heard.load(Ordering::SeqCst) || listed > listed_before {
+                    return;
+                }
+                if Instant::now() >= deadline {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(250));
+            }
+            // Only this turn's process: the next turn may already be running.
+            if let Ok(mut running) = inner.running.lock() {
+                if let Some(current) = running
+                    .as_mut()
+                    .filter(|current| Arc::ptr_eq(&current.child, &child))
+                {
+                    stuck.store(true, Ordering::SeqCst);
+                    current.end();
+                }
+            }
+        });
+    }
     let stderr_tail = Arc::new(Mutex::new(String::new()));
     if let Some(mut stderr) = stderr {
         let tail = stderr_tail.clone();
@@ -1551,6 +1624,7 @@ fn execute(
             let Ok(line) = line else {
                 break;
             };
+            heard.store(true, Ordering::SeqCst);
             if let Some(label) = agents::read_line(agent_id, &line, &mut reading) {
                 inner.log("tool", label.clone());
                 if let Ok(mut live) = inner.live.lock() {
@@ -1568,6 +1642,7 @@ fn execute(
             }
         }
     }
+    heard.store(true, Ordering::SeqCst);
     typing.store(false, Ordering::SeqCst);
     if !sent && !stopped.load(Ordering::SeqCst) {
         if let Some(reply) = ready_reply(&reading, true) {
@@ -1588,11 +1663,16 @@ fn execute(
     if stopped.load(Ordering::SeqCst) {
         return Outcome::Stopped;
     }
-    let reply = reading.reply();
     let tail = stderr_tail
         .lock()
         .map(|tail| tail.clone())
         .unwrap_or_default();
+    if stuck.load(Ordering::SeqCst) {
+        return Outcome::Stuck {
+            detail: last_lines(&tail, 3),
+        };
+    }
+    let reply = reading.reply();
     let succeeded = status.is_some_and(|status| status.success());
     let failure = if let Some(error) = reading.error.clone() {
         // Some CLIs report only an error kind on stdout and the reason on stderr.
@@ -1699,8 +1779,19 @@ fn strip_ansi(text: &str) -> String {
 
 // ---------------------------------------------------------------- local tools
 
-/// A check-in with nothing new answers with this, and the phone hears nothing.
+/// The answer to a check-in or a pane report with nothing worth telling: the
+/// phone hears nothing.
 const QUIET_REPLY: &str = "NO_REPLY";
+
+/// The agent chose to say nothing, even if it dressed the word up as
+/// `NO_REPLY`, **NO_REPLY** or "NO_REPLY.".
+fn is_quiet(reply: &str) -> bool {
+    reply
+        .trim()
+        .trim_matches(|ch: char| matches!(ch, '`' | '*' | '"' | '\'' | '.') || ch.is_whitespace())
+        .eq_ignore_ascii_case(QUIET_REPLY)
+}
+
 const REMINDER_LIMIT: usize = 20;
 
 /// The tools Keel answers itself: the phone, and reminders.
@@ -1987,7 +2078,11 @@ fn pane_report(event: &PaneEvent) -> String {
     };
     let next = match (event.whose, event.kind.as_str()) {
         (Whose::User, _) => {
-            "Tell the user in one short sentence what it did or said, going by its screen, and if it's asking something, what. \
+            "Message the user only if it's worth interrupting them for: it's asking them something or waiting on a permission, \
+it failed or hit an error, or it finished a piece of work they'd want to know is done (a fix, a feature, tests, a build, a commit). \
+Go by what USER.md says they care about. Otherwise (a quick answer, a small step, a pause partway through, \
+nothing new since you last told them, or a pane they closed) reply with exactly NO_REPLY and nothing is sent. \
+When it is worth it, one short sentence going by its screen: what it did or said, and if it's asking something, what. \
 Name the agent and project. Don't act on it or touch the pane unless they ask."
         }
         (_, "waiting") => {
@@ -1996,7 +2091,8 @@ Otherwise ask the user."
         }
         _ => {
             "Tell the user how it went in a sentence or two. If their request still needs a step from you, \
-such as sending a file they asked for, do it."
+such as sending a file they asked for, do it. If there's nothing new since you last told them, \
+reply with exactly NO_REPLY and nothing is sent."
         }
     };
     format!(
@@ -2380,6 +2476,9 @@ mod tests {
         let theirs = pane_report(&event(Whose::User, "done"));
         assert!(theirs.starts_with("[Keel] An agent the user started themselves has finished."));
         assert!(theirs.contains("Don't act on it"));
+        // The user's own panes reach the phone only when they're worth it.
+        assert!(theirs.contains("only if it's worth interrupting them"));
+        assert!(theirs.contains(QUIET_REPLY));
         assert_eq!(
             pane_notice(&event(Whose::User, "done")),
             "Codex finished in keel (Fix login)."
@@ -2391,6 +2490,28 @@ mod tests {
         )
         .unwrap();
         assert_eq!(bare.whose, Whose::User);
+    }
+
+    #[test]
+    fn a_dressed_up_no_reply_still_sends_nothing() {
+        for reply in [
+            "NO_REPLY",
+            " NO_REPLY\n",
+            "`NO_REPLY`",
+            "**NO_REPLY**",
+            "\"NO_REPLY.\"",
+            "no_reply",
+        ] {
+            assert!(is_quiet(reply), "{reply:?} was sent");
+        }
+        for reply in [
+            "",
+            "Done.",
+            "Codex finished. NO_REPLY",
+            "NO_REPLY, but the build failed",
+        ] {
+            assert!(!is_quiet(reply), "{reply:?} was dropped");
+        }
     }
 
     #[test]

@@ -84,7 +84,11 @@ they do ("typing into a pane"), Grok's `use_tool` calls included. The agent is t
 a sentence or two unless asked for detail, such as console output. The reply
 goes out as soon as the CLI reports the turn finished (Claude, Codex, Grok) or
 closes its output (opencode, Pi), without waiting for the process to exit. A conversation the CLI no longer has is
-replaced once, automatically.
+replaced once, automatically. So is one the CLI hangs on: every supported
+CLI prints a line or lists Keel's tools within seconds of starting, so one
+that has done neither after 45 seconds is ended. If it was reopening a
+conversation, Keel starts a fresh one once; otherwise the phone hears that
+it didn't start.
 
 Claude runs with `--strict-mcp-config`, so it loads only Keel's MCP server and
 not the ones in `~/.claude.json`: it connects them all before the turn starts,
@@ -138,10 +142,15 @@ request (`send_to_pane`, or a menu choice with `press_key`), until it finishes:
 setting. Files and recordings go out only when you asked for them; when one
 would help, the agent asks you first instead of adding it to the request.
 Other agents can be forwarded to the phone never, while Keel is in
-the background, or always. A forwarded one also goes to the agent with
-its screen, to sum up in a sentence without acting on it, so the phone says
-what the agent did rather than only that it finished. Nothing Keel sends
-itself uses emojis.
+the background, or always. A forwarded one goes to the agent with its
+screen, and the agent decides whether it is worth a message: one that asks
+something, waits on a permission, fails, or finishes a piece of work (a fix,
+tests, a build, a commit) gets a sentence saying what it did, without the
+agent acting on it; a quick answer, a small step, or nothing new since the
+last message gets `NO_REPLY`, and the phone stays quiet. What the user told
+it they care about, in `USER.md`, settles the close calls. Panes the agent
+started or passed a request to always report their outcome, once. Nothing
+Keel sends itself uses emojis.
 
 ## Security
 
@@ -178,4 +187,15 @@ Claude and Cursor switches off, `grok inspect` lists the `~/.claude.json`
 servers as disabled, and a live turn ran none of the imported Keel.exe hooks
 (a Telegram session's log had them at 23 turns and 62 tool calls). Every
 supported CLI lists Keel's tools as it starts, so when a turn ends without that,
-Keel logs it and warns on the phone once per run. Gemini CLI is not supported.
+Keel logs it and warns on the phone once per run.
+
+Grok also runs without `monitor`, `workflow` and the `scheduler_*` tools
+(`--disallowed-tools`), because their work outlives the turn. With a monitor
+running, a headless Grok stayed up after its answer, started turns of its own
+that nobody read, and held up the next message. Ended with the monitor still
+running, its conversation could not be reopened: every later `--resume` stopped
+after `session.reconcile_stale_tasks` (in `~/.grok/logs/unified.jsonl`) and
+printed nothing, which the 45-second start limit now catches. `remind_me` and
+Keel's pane reports cover what those tools were for.
+
+Gemini CLI is not supported.

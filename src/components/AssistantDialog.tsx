@@ -690,7 +690,10 @@ function Rail({ snapshot }: { snapshot: AssistantSnapshot }) {
       <div className="-mt-2 flex min-h-0 flex-1 flex-col overflow-y-auto">
         <AgentChoice snapshot={snapshot} />
         <VoiceChoice snapshot={snapshot} />
-        <RailSection title="Text me when an agent finishes">
+        <RailSection
+          title="Text me when an agent finishes"
+          hint="Only when it's worth it: a question, an error, or finished work."
+        >
           <div className="k-seg">
             {FORWARD.map((option) => (
               <button

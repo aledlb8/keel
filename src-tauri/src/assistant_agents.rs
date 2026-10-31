@@ -223,6 +223,8 @@ pub fn prepare(agent_id: &str, turn: &Turn) -> Result<Launch, String> {
                 "--rules",
             ]));
             launch.args.push(turn.rules.into());
+            launch.args.push("--disallowed-tools".into());
+            launch.args.push(GROK_LINGERING_TOOLS.join(","));
             match turn.session {
                 Some(id) => launch.args.extend(["--resume".to_string(), id.to_string()]),
                 None => {
@@ -252,6 +254,19 @@ const GROK_FOREIGN_CONFIG: &[&str] = &[
     "GROK_CLAUDE_HOOKS_ENABLED",
     "GROK_CURSOR_MCPS_ENABLED",
     "GROK_CURSOR_HOOKS_ENABLED",
+];
+
+/// Grok tools whose work outlives the turn. With one running, a headless Grok
+/// stays up after its answer and starts turns of its own that nobody reads,
+/// holding up the next message; and a conversation whose Grok was ended with a
+/// monitor still running hung on every later `--resume` (1.0.70). Keel's
+/// `remind_me` and its pane reports do these jobs for the main agent.
+const GROK_LINGERING_TOOLS: &[&str] = &[
+    "monitor",
+    "scheduler_create",
+    "scheduler_list",
+    "scheduler_delete",
+    "workflow",
 ];
 
 fn toml_string(value: &str) -> String {
@@ -787,6 +802,11 @@ mod tests {
 
         let grok = prepare("grok", &turn(None)).unwrap();
         assert!(grok.args.contains(&"--trust".to_string()));
+        assert!(grok
+            .args
+            .windows(2)
+            .any(|pair| pair[0] == "--disallowed-tools"
+                && pair[1] == "monitor,scheduler_create,scheduler_list,scheduler_delete,workflow"));
         for key in GROK_FOREIGN_CONFIG {
             assert!(
                 grok.env
