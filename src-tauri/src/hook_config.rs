@@ -162,22 +162,69 @@ fn strip_keel_hooks(config: &mut Value) -> bool {
 }
 
 fn hook_command(executable: &Path, agent: &str) -> String {
-    let path = executable.to_string_lossy();
+    // Claude on Windows runs hooks with Git Bash, or with PowerShell when Git
+    // Bash is missing. Each one rejects the other's quoting (`& 'path'` is a
+    // syntax error in bash). A forward-slash path with no spaces or shell
+    // characters is a command in both. Installed under C:\Program Files it
+    // has a space, so use its 8.3 short name, and quote for bash only if the
+    // drive keeps no short names.
     #[cfg(windows)]
-    {
-        // Claude runs this with Git Bash. `& 'path'` is a syntax error there,
-        // and a failing UserPromptSubmit hook blocks the prompt. Codex and Grok
-        // run the same string with `pwsh -Command`. A forward-slash path with
-        // no shell metacharacters is a native command in both. powershell.exe
-        // is a console program, so Windows Terminal opens a window for it.
-        let path = path.replace('\\', "/");
-        format!("{path} --keel-agent-hook {agent}")
-    }
+    let program = {
+        let path = forward_slashes(executable);
+        if bare_word(&path) {
+            path
+        } else {
+            short_path(executable)
+                .map(|short| forward_slashes(&short))
+                .filter(|short| bare_word(short))
+                .unwrap_or_else(|| sh_quote(&path))
+        }
+    };
     #[cfg(not(windows))]
-    format!(
-        "'{}' --keel-agent-hook {agent}",
-        path.replace('\'', "'\\''")
-    )
+    let program = sh_quote(&executable.to_string_lossy());
+    format!("{program} --keel-agent-hook {agent}")
+}
+
+fn sh_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "'\\''"))
+}
+
+/// Whether bash and PowerShell both read `path` as one plain word.
+#[cfg(windows)]
+fn bare_word(path: &str) -> bool {
+    !path.is_empty()
+        && path
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '/' | ':' | '.' | '_' | '-' | '~'))
+}
+
+#[cfg(windows)]
+fn forward_slashes(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+/// The 8.3 form of an existing path, e.g. C:\PROGRA~1\Keel\keel.exe.
+#[cfg(windows)]
+fn short_path(path: &Path) -> Option<PathBuf> {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use winapi::um::fileapi::GetShortPathNameW;
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut buffer = vec![0u16; 260];
+    for _ in 0..2 {
+        // Returns the length without the terminator, or the size it needs.
+        let length =
+            unsafe { GetShortPathNameW(wide.as_ptr(), buffer.as_mut_ptr(), buffer.len() as u32) }
+                as usize;
+        if length == 0 {
+            return None;
+        }
+        if length < buffer.len() {
+            buffer.truncate(length);
+            return Some(PathBuf::from(std::ffi::OsString::from_wide(&buffer)));
+        }
+        buffer.resize(length, 0);
+    }
+    None
 }
 
 fn merge_hooks(
@@ -410,6 +457,33 @@ mod tests {
         let mut codex = json!({});
         merge_hooks(&mut codex, "codex", "keel").unwrap();
         assert!(codex["hooks"]["PreToolUse"][0].get("matcher").is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_hook_command_survives_spaces_in_the_install_path() {
+        let plain = Path::new(r"C:\Users\me\AppData\Local\Keel\keel.exe");
+        assert_eq!(
+            hook_command(plain, "claude"),
+            "C:/Users/me/AppData/Local/Keel/keel.exe --keel-agent-hook claude"
+        );
+        // A path that does not exist has no short name: quote it for bash.
+        let missing = Path::new(r"C:\Program Files\Keel missing\O'Neil\keel.exe");
+        assert_eq!(
+            hook_command(missing, "claude"),
+            r"'C:/Program Files/Keel missing/O'\''Neil/keel.exe' --keel-agent-hook claude"
+        );
+        let folder = std::env::temp_dir().join(format!("keel hook test {}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let installed = folder.join("keel.exe");
+        std::fs::write(&installed, b"").unwrap();
+        let command = hook_command(&installed, "claude");
+        std::fs::remove_dir_all(&folder).unwrap();
+        let program = command.strip_suffix(" --keel-agent-hook claude").unwrap();
+        assert!(
+            bare_word(program) || program == sh_quote(&forward_slashes(&installed)),
+            "{command}"
+        );
     }
 
     #[test]

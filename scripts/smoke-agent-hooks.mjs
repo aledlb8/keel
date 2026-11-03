@@ -37,9 +37,11 @@ try {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", resolve);
   });
-  const command = process.platform === "win32"
-    ? `${executable.replaceAll("\\", "/")} --keel-agent-hook claude`
-    : `'${executable.replaceAll("'", "'\\''")}' --keel-agent-hook claude`;
+  // Mirrors hook_command: a plain forward-slash path on Windows, else quoted for bash.
+  const program = process.platform === "win32" ? executable.replaceAll("\\", "/") : executable;
+  const command = process.platform === "win32" && /^[\p{L}\p{N}/:._~-]+$/u.test(program)
+    ? `${program} --keel-agent-hook claude`
+    : `'${program.replaceAll("'", "'\\''")}' --keel-agent-hook claude`;
   const settings = path.join(directory, "settings.json");
   await writeFile(settings, JSON.stringify({ hooks: { SessionStart: [{ hooks: [{
     type: "command", command, timeout: 3, statusMessage: "Keel activity",

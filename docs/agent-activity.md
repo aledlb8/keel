@@ -69,6 +69,11 @@ over a plain loopback socket (no HTTP client, TLS roots or async runtime per hoo
 and returns neutral JSON. Prompts, tool arguments,
 transcripts and credentials are not forwarded. OpenCode and Grok use separate
 Keel-owned files; Claude and Codex merge Keel's groups into settings.
+On Windows, Claude runs the hook command with Git Bash, or with PowerShell when Git
+Bash is missing, and neither accepts the other's quoting. Keel therefore writes its
+path as a plain forward-slash word. When the install path has a space (as under
+`C:\Program Files`), Keel uses its 8.3 short name. If the drive keeps no short
+names, it quotes the path for bash.
 
 ## Activity
 
