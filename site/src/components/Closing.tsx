@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Check, Copy } from "lucide-react";
 
+import { FooterCrew } from "./crew/FooterCrew";
 import { KeelMark } from "./marks";
 import { LiquidMetal } from "./rare/LiquidMetal";
 import { ScatterText } from "./rare/ScatterText";
@@ -60,8 +61,8 @@ export function Closing() {
       <Container>
         <div className="grid gap-14 lg:grid-cols-12 lg:items-end">
           <div className="min-w-0 lg:col-span-7">
-            <h2 className="display text-[clamp(2.4rem,7vw,6.5rem)] text-balance">
-              <ScatterText text="Put every agent where you can see it." />
+            <h2 className="display relative text-[clamp(2.4rem,7vw,6.5rem)] text-balance">
+              <ScatterText text="Put every agent where you can see it." crew />
             </h2>
             <p className="mt-8 max-w-[32rem] text-[18px] leading-[1.65] text-dim">
               Keel is free and open source under the MIT license. Download a
@@ -83,7 +84,7 @@ export function Closing() {
           </div>
         </div>
 
-        <footer className="mt-32 flex flex-col gap-4 border-t border-white/[0.07] pt-8 text-[14px] text-faint sm:flex-row sm:items-center">
+        <footer className="relative mt-32 flex flex-col gap-4 border-t border-white/[0.07] pt-8 text-[14px] text-faint sm:flex-row sm:items-center">
           <span className="flex items-center gap-2 text-dim">
             <KeelMark size={14} />
             Keel
@@ -94,6 +95,7 @@ export function Closing() {
             <a className="hover:text-ink" href={`${REPO}/blob/main/LICENSE`}>MIT license</a>
             <a className="hover:text-ink" href={`${REPO}/blob/main/SECURITY.md`}>Security</a>
           </span>
+          <FooterCrew />
         </footer>
       </Container>
 

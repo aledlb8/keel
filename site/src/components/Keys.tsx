@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
+import { KeyHopper, type Held } from "./crew/KeyHopper";
 import { Container, Heading, Kbd } from "./ui";
 
 type Combo = { keys: string[]; match: (e: KeyboardEvent) => boolean };
@@ -39,8 +40,15 @@ const SHORTCUTS: { action: string; combos: Combo[] }[] = [
   { action: "Rename the focused item", combos: [{ keys: ["F2"], match: (e) => e.key === "F2" }] },
 ];
 
+const CHORDS = SHORTCUTS.map((s) => s.combos.map((c) => c.keys.length));
+
 export function Keys() {
   const [lit, setLit] = useState<string | null>(null);
+  // A mini Claude presses chords too, and steps back whenever you press one.
+  const [held, setHeld] = useState<Held | null>(null);
+  const list = useRef<HTMLDivElement>(null);
+  const quietUntil = useRef(0);
+  const onHold = useCallback((h: Held | null) => setHeld(h), []);
 
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -50,6 +58,8 @@ export function Keys() {
       for (const s of SHORTCUTS) {
         s.combos.forEach((c, i) => {
           if (c.match(e)) {
+            quietUntil.current = Date.now() + 2600;
+            setHeld(null);
             setLit(`${s.action}:${i}`);
             clearTimeout(timer);
             timer = setTimeout(() => setLit(null), 700);
@@ -76,9 +86,13 @@ export function Keys() {
           </p>
         </div>
 
-        <div className="mt-16 grid gap-x-16 md:grid-cols-2 lg:mt-24">
-          {SHORTCUTS.map((s) => {
-            const active = lit?.startsWith(`${s.action}:`);
+        <div ref={list} className="relative mt-16 grid gap-x-16 md:grid-cols-2 lg:mt-24">
+          {SHORTCUTS.map((s, row) => {
+            const pressed = (i: number, k: number) =>
+              lit === `${s.action}:${i}` || (held?.row === row && held.combo === i && k < held.count);
+            const active =
+              lit?.startsWith(`${s.action}:`) ||
+              (held?.row === row && held.count === s.combos[held.combo]!.keys.length);
             return (
               <div
                 key={s.action}
@@ -88,10 +102,10 @@ export function Keys() {
                 <span className="flex shrink-0 items-center gap-3">
                   {s.combos.map((c, i) => (
                     <span key={i} className="flex items-center gap-1.5">
-                      {c.keys.map((k) => (
-                        <Kbd key={k} lit={lit === `${s.action}:${i}`}>
-                          {k}
-                        </Kbd>
+                      {c.keys.map((k, j) => (
+                        <span key={k} data-key={`${row}:${i}:${j}`} className="inline-flex">
+                          <Kbd lit={pressed(i, j)}>{k}</Kbd>
+                        </span>
                       ))}
                     </span>
                   ))}
@@ -99,6 +113,7 @@ export function Keys() {
               </div>
             );
           })}
+          <KeyHopper container={list} chords={CHORDS} onHold={onHold} quietUntil={quietUntil} />
         </div>
       </Container>
     </section>

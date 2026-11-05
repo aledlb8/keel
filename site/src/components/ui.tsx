@@ -38,8 +38,8 @@ export function Container({
 }
 
 /**
- * Section headings: the display face, one step down from the hero. The letters
- * pull together the first time a heading scrolls into view.
+ * Section headings: the display face, one step down from the hero. The first
+ * time a heading scrolls into view, a mini Claude sets it letter by letter.
  */
 export function Heading({
   children,
@@ -53,9 +53,9 @@ export function Heading({
   return (
     <h2
       id={id}
-      className={`text-balance text-[clamp(2.25rem,5.2vw,4.5rem)] leading-[0.95] font-[800] tracking-[-0.035em] [font-stretch:118%] ${className}`}
+      className={`relative text-balance text-[clamp(2.25rem,5.2vw,4.5rem)] leading-[0.95] font-[800] tracking-[-0.035em] [font-stretch:118%] ${className}`}
     >
-      <ScatterText text={children} />
+      <ScatterText text={children} crew />
     </h2>
   );
 }

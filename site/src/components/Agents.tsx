@@ -1,8 +1,9 @@
 "use client";
 
 import { useInView } from "motion/react";
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 
+import { Painter } from "./crew/Painter";
 import { AGENTS, AGENT_ORDER, AgentMark, StatusDot, type AgentId } from "./marks";
 import { Container, Heading } from "./ui";
 
@@ -26,6 +27,7 @@ const STATES = [
 
 export function Agents() {
   const ref = useRef<HTMLDivElement>(null);
+  const names = useRef<HTMLParagraphElement>(null);
   const inView = useInView(ref, { amount: 0.4 });
   const [auto, setAuto] = useState(0);
   const [hover, setHover] = useState<AgentId | null>(null);
@@ -36,7 +38,12 @@ export function Agents() {
     return () => clearInterval(id);
   }, [inView, hover]);
 
-  const lit = hover ?? (inView ? AGENT_ORDER[auto] : null);
+  // A mini Claude paints each name in turn; the colour comes with its brush.
+  // Hovering a name lights it at once, and the painter runs after.
+  const target = hover ?? (inView ? AGENT_ORDER[auto]! : null);
+  const [painted, setPainted] = useState<AgentId | null>(null);
+  const onPainted = useCallback((id: string) => setPainted(id as AgentId), []);
+  const lit = hover ?? (inView ? painted : null);
 
   return (
     <section id="agents" className="relative py-24 sm:py-36">
@@ -55,7 +62,8 @@ export function Agents() {
             Which agent. Keel runs the CLIs you already have installed:
           </p>
           <p
-            className="text-[clamp(2rem,5.4vw,5.25rem)] leading-[1.08] font-[800] tracking-[-0.035em] [font-stretch:112%]"
+            ref={names}
+            className="relative text-[clamp(2rem,5.4vw,5.25rem)] leading-[1.08] font-[800] tracking-[-0.035em] [font-stretch:112%]"
             onPointerLeave={() => setHover(null)}
           >
             {AGENT_ORDER.map((id, i) => {
@@ -63,6 +71,7 @@ export function Agents() {
               return (
                 <Fragment key={id}>
                   <span
+                    data-agent={id}
                     onPointerEnter={() => setHover(id)}
                     className="inline-flex cursor-default items-center gap-[0.22em] whitespace-nowrap transition-[color,text-shadow] duration-500"
                     style={{
@@ -73,12 +82,21 @@ export function Agents() {
                     }}
                   >
                     <AgentMark agent={id} variant="glyph" fluid />
-                    {AGENTS[id].name}
+                    <span>
+                      <span data-cap>{AGENTS[id].name[0]}</span>
+                      {AGENTS[id].name.slice(1)}
+                    </span>
                   </span>
                   {i < AGENT_ORDER.length - 1 && <span className="text-[#1f1f1f]"> / </span>}
                 </Fragment>
               );
             })}
+            <Painter
+              container={names}
+              target={target}
+              paint={target ? AGENTS[target].accent : AGENTS.claude.accent}
+              onPainted={onPainted}
+            />
           </p>
           <p className="mt-6 max-w-[36rem] text-[15px] leading-[1.6] text-faint">
             Anything else goes in the catalogue with its own command, profiles,

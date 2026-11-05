@@ -9,6 +9,7 @@ import {
 } from "motion/react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
+import { DemoCrew, Rigger } from "./crew/HeroCrew";
 import { Workspace } from "./demo/Workspace";
 import { FeatureBadge } from "./rare/FeatureBadge";
 import { ShimmerLink } from "./rare/ShimmerLink";
@@ -94,7 +95,13 @@ export function Hero() {
           </FeatureBadge>
         </div>
         <h1 className="text-[clamp(2rem,9.3vw,9.4rem)]">
-          <span className="display mass-in block whitespace-nowrap">Run ten agents.</span>
+          <span className="display mass-in block whitespace-nowrap">
+            Run ten agents
+            <span className="relative">
+              .
+              <Rigger />
+            </span>
+          </span>
           <span
             className="light-in block whitespace-nowrap leading-[1] tracking-[-0.045em] text-ink/90"
             style={{ fontWeight: 200, fontStretch: "100%", animationDelay: "0.35s" }}
@@ -148,6 +155,7 @@ export function Hero() {
             <div className="relative rounded-[18px] p-[3px] shadow-[0_60px_140px_-30px_rgba(0,0,0,1),0_30px_60px_-30px_rgba(0,0,0,0.9)] [background:linear-gradient(180deg,rgba(255,255,255,0.14),rgba(255,255,255,0.02)_40%)]">
               <DemoFrame />
             </div>
+            <DemoCrew progress={eased} flat={reduce} />
           </motion.div>
 
           <div className="mt-8 flex flex-col gap-4 text-[15px] text-dim sm:flex-row sm:flex-wrap sm:items-center sm:justify-center sm:gap-x-10">
