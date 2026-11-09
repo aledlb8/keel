@@ -565,6 +565,12 @@ fn wait_for_tunnel(
             if let Some(msg) = vpn_service::diagnose_log(&text) {
                 return Err(msg);
             }
+            if text.contains("Initialization Sequence Completed") {
+                return Err(
+                    "The tunnel came up, but Windows did not finish setting up its address within 30 seconds. Try again."
+                        .into(),
+                );
+            }
             return Err(
                 "The VPN server did not establish a tunnel within 30 seconds. Check your connection or try another profile."
                     .into(),
@@ -619,10 +625,18 @@ fn windows_tunnel_from_log(log: &str) -> Option<TunnelUp> {
         }
         // OpenVPN DCO is IPv4-only: Ipv6IfIndex is 0. IP_UNICAST_IF with 0
         // does not pin, so CONNECT traffic would use the default route.
-        let Some(if_index) = ipv4_if_index(ip) else {
+        let Some(if_index) = adapter_if_index(adapter.adapter_name()) else {
             continue;
         };
-        let isolated = default_route_if_index().is_some_and(|index| index != if_index);
+        // Servers that don't push `route-delay` report the tunnel ready while
+        // its address is still in duplicate-address detection. Until then a
+        // lookup for the tunnel address lands on the normal adapter, which
+        // would look like the tunnel had taken over the default route.
+        let Some(isolated) =
+            tunnel_route_state(if_index, ipv4_if_index(ip), default_route_if_index())
+        else {
+            continue;
+        };
         let candidate = TunnelUp {
             adapter: adapter.friendly_name().to_string(),
             tunnel_ip: ip.to_string(),
@@ -665,8 +679,56 @@ fn default_route_if_index() -> Option<u32> {
     }
 }
 
-/// IPv4 interface index that owns `ip`. `ipconfig` only exposes IPv6 ifIndex,
-/// which is 0 on IPv4-only OpenVPN DCO adapters.
+/// `None` while Windows still routes the tunnel address away from its own
+/// adapter (the address is not usable yet). Then `Some(isolated)`: whether the
+/// normal default route stays off the tunnel.
+#[cfg(any(windows, test))]
+fn tunnel_route_state(
+    adapter: u32,
+    tunnel_ip_route: Option<u32>,
+    default_route: Option<u32>,
+) -> Option<bool> {
+    if tunnel_ip_route != Some(adapter) {
+        return None;
+    }
+    Some(default_route.is_some_and(|index| index != adapter))
+}
+
+/// IPv4 interface index of an adapter, from its `{GUID}` name. `ipconfig` only
+/// exposes the IPv6 index, which is 0 on IPv4-only OpenVPN DCO adapters.
+#[cfg(windows)]
+fn adapter_if_index(adapter_name: &str) -> Option<u32> {
+    use winapi::shared::winerror::NO_ERROR;
+    use winapi::um::iphlpapi::GetAdapterIndex;
+
+    let mut name: Vec<u16> = format!("\\DEVICE\\TCPIP_{adapter_name}")
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut index = 0u32;
+    unsafe {
+        if GetAdapterIndex(name.as_mut_ptr(), &mut index) == NO_ERROR && index != 0 {
+            Some(index)
+        } else {
+            None
+        }
+    }
+}
+
+/// The OpenVPN adapter carrying this PC's default route, if one is.
+#[cfg(windows)]
+fn default_route_vpn_adapter() -> Option<String> {
+    let index = default_route_if_index()?;
+    ipconfig::get_adapters()
+        .ok()?
+        .into_iter()
+        .find(|adapter| adapter_if_index(adapter.adapter_name()) == Some(index))
+        .filter(|adapter| is_openvpn_adapter(adapter.description(), adapter.friendly_name()))
+        .map(|adapter| adapter.description().to_string())
+}
+
+/// Interface index Windows would use to reach `ip`. For the tunnel address
+/// this is the tunnel adapter only once that address is usable.
 #[cfg(windows)]
 fn ipv4_if_index(ip: Ipv4Addr) -> Option<u32> {
     use winapi::shared::winerror::NO_ERROR;
@@ -783,6 +845,11 @@ fn verify_pinned_egress(port: u16) -> Result<(), String> {
     let via_vpn = public_ipv4(Some(&format!("http://127.0.0.1:{port}")))?;
     let via_normal = public_ipv4(None)?;
     if via_vpn == via_normal {
+        if let Some(adapter) = default_route_vpn_adapter() {
+            return Err(format!(
+                "Another VPN ({adapter}) is already carrying this whole PC's traffic, so Keel can't keep its tunnel separate. Disconnect it (for example in OpenVPN Connect) and try again."
+            ));
+        }
         return Err(format!(
             "The tunnel is up, but Keel's traffic is still leaving from {via_normal} (your normal connection) instead of the VPN. Claude and Codex need the VPN address. Try reconnecting."
         ));
@@ -1073,6 +1140,55 @@ mod tests {
         assert_eq!(stopped.phase, "error");
         assert_eq!(stopped.proxy_port, None);
         println!("Exited VPN process detected and stale proxy closed.");
+    }
+
+    #[test]
+    fn tunnel_address_still_settling_is_not_an_isolation_failure() {
+        use super::tunnel_route_state;
+        // Address still in duplicate-address detection: the lookup lands on
+        // the normal adapter (10), which is also the default route.
+        assert_eq!(tunnel_route_state(9, Some(10), Some(10)), None);
+        assert_eq!(tunnel_route_state(9, None, Some(10)), None);
+        // Address live and the normal route still preferred.
+        assert_eq!(tunnel_route_state(9, Some(9), Some(10)), Some(true));
+        // Address live but the tunnel is the default route.
+        assert_eq!(tunnel_route_state(9, Some(9), Some(9)), Some(false));
+        assert_eq!(tunnel_route_state(9, Some(9), None), Some(false));
+    }
+
+    #[test]
+    fn completed_tunnel_whose_address_never_settles_says_so() {
+        let log = TempLog::new("Initialization Sequence Completed\n");
+        let error = super::wait_for_tunnel(
+            &log.0,
+            std::time::Instant::now() - std::time::Duration::from_millis(1),
+            || true,
+        )
+        .err()
+        .expect("deadline elapsed");
+        assert!(error.contains("setting up its address"), "{error}");
+    }
+
+    /// GetAdapterIndex must land in the same index space as GetBestRoute.
+    #[cfg(windows)]
+    #[test]
+    fn adapter_if_index_matches_windows_interface_index() {
+        let mut matched = 0;
+        for adapter in ipconfig::get_adapters().unwrap() {
+            let Some(index) = super::adapter_if_index(adapter.adapter_name()) else {
+                continue;
+            };
+            if adapter.ipv6_if_index() != 0 {
+                assert_eq!(
+                    index,
+                    adapter.ipv6_if_index(),
+                    "{}",
+                    adapter.friendly_name()
+                );
+                matched += 1;
+            }
+        }
+        assert!(matched > 0, "no adapter reported both indices");
     }
 
     #[cfg(windows)]

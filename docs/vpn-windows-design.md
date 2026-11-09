@@ -41,7 +41,9 @@ The app records the engine PID under its own application-data directory and uses
 
 The local CONNECT proxy binds upstream IPv4 sockets to the tunnel address and sets the Windows `IP_UNICAST_IF` option to the tunnel's IPv4 interface index. DNS A queries use the same interface selection before any system-resolver fallback.
 
-Connection finalization compares the public IPv4 observed through the proxy with the public IPv4 on the normal route. A matching result is treated as a failed isolated connection rather than a successful VPN connection.
+Keel reads that index from the tunnel adapter itself, then waits until Windows routes the tunnel address to that adapter before checking that the normal default route is still preferred. OpenVPN reports the tunnel ready as soon as the address is assigned unless the server pushes `route-delay` (Access Server does; a typical community server does not), and Windows keeps a new address in duplicate-address detection for a few seconds. During that window a route lookup for the tunnel address answers with the normal adapter, which would otherwise read as the tunnel having taken over the default route.
+
+Connection finalization compares the public IPv4 observed through the proxy with the public IPv4 on the normal route. A matching result is treated as a failed isolated connection rather than a successful VPN connection. When another OpenVPN adapter (for example a full-tunnel OpenVPN Connect session) already carries the default route, the error names that adapter and asks the user to disconnect it.
 
 While connected, Keel monitors the preferred normal route and the OpenVPN process. Losing either causes Keel to close its proxy and transition the VPN state out of connected mode.
 
